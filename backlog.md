@@ -129,6 +129,22 @@ Acceptance criteria:
 - Контейнер стартует с local test options.
 - `/data` используется как persisted root для state/workspace paths.
 
+### HAAG-008: Настроить Home Assistant add-on UI options
+
+Цель: секреты и базовые параметры должны задаваться через UI Home Assistant add-on, а env aliases использовать только как удобство для local dev/CI.
+
+- Описать options schema в `addon/config.yaml`.
+- Добавить UI-configurable поля для Telegram token, allowlisted Telegram users, Moonshot/OpenAI-compatible LLM settings, Home Assistant MCP endpoint и workspace/state paths.
+- Проверить, что значения из add-on UI попадают в `/data/options.json` и корректно мапятся в `TelegramOptions`, `LlmOptions`, `HomeAssistantOptions` и `AgentOptions`.
+- Для секретов использовать Home Assistant add-on secrets, где это возможно.
+- Сохранить env aliases `MOONSHOT_API_KEY`, `TELEGRAM_BOT_TOKEN`, `HOME_ASSISTANT_LONG_LIVED_ACCESS_TOKEN` только как override/fallback для локального запуска и CI.
+
+Acceptance criteria:
+
+- Основной production path настройки работает через Home Assistant add-on UI.
+- Пользователь может настроить Moonshot API key и Telegram bot token без редактирования файлов внутри контейнера.
+- `/status` показывает только boolean-флаги configured/not configured и не раскрывает значения из UI.
+
 ## Backlog Later
 
 - Home Assistant MCP discovery и read-only tools.
