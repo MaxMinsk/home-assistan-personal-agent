@@ -1,0 +1,37 @@
+configuration:
+  telegram_bot_token:
+    name: Telegram bot token
+    description: Bot token from BotFather.
+  allowed_telegram_user_ids:
+    name: Allowed Telegram user IDs
+    description: Telegram user IDs that can talk to the assistant.
+  ha_url:
+    name: Home Assistant URL
+    description: Home Assistant Core API proxy URL.
+  ha_long_lived_access_token:
+    name: Home Assistant long-lived access token
+    description: Token for Home Assistant MCP access.
+  mcp_endpoint:
+    name: MCP endpoint
+    description: Home Assistant MCP endpoint path.
+  llm_provider:
+    name: LLM provider
+    description: OpenAI-compatible provider to use.
+  llm_base_url:
+    name: LLM base URL
+    description: Base URL for the OpenAI-compatible API.
+  llm_model:
+    name: LLM model
+    description: Model name to use for agent calls.
+  llm_api_key:
+    name: LLM API key
+    description: API key for the configured LLM provider.
+  state_database_path:
+    name: State database path
+    description: SQLite database path for persistent agent state.
+  workspace_path:
+    name: Workspace path
+    description: Directory for files generated or read by the assistant.
+  workspace_max_mb:
+    name: Workspace size limit
+    description: Maximum workspace size in MB.

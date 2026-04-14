@@ -1,0 +1,47 @@
+name: Bump Add-on Version
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: New semantic version, for example 0.2.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    name: Bump version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump add-on version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: ./scripts/bump-addon-version.sh "$VERSION"
+
+      - name: Commit and tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if git diff --quiet -- addon/config.yaml addon/CHANGELOG.md; then
+            echo "No version changes to commit."
+            exit 0
+          fi
+
+          git add addon/config.yaml addon/CHANGELOG.md
+          git commit -m "Release v${VERSION}"
+          git tag "v${VERSION}"
+          git push origin main
+          git push origin "v${VERSION}"

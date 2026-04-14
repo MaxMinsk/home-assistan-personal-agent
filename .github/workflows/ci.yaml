@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/ci.yaml"
+      - "Directory.Packages.props"
+      - "HomeAssistantPersonalAgent.sln"
+      - "src/**"
+      - "tests/**"
+
+permissions:
+  contents: read
+
+jobs:
+  dotnet:
+    name: .NET
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6.0.2
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore HomeAssistantPersonalAgent.sln
+
+      - name: Check formatting
+        run: dotnet format HomeAssistantPersonalAgent.sln --verify-no-changes --no-restore
+
+      - name: Build
+        run: dotnet build HomeAssistantPersonalAgent.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test HomeAssistantPersonalAgent.sln --configuration Release --no-build --verbosity normal
+
+      - name: Check vulnerable packages
+        run: dotnet list HomeAssistantPersonalAgent.sln package --vulnerable --include-transitive

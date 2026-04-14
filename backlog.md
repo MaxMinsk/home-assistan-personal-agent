@@ -8,6 +8,60 @@
 
 ## Done
 
+### HAAG-009: Настроить CI, image build и version bump workflow
+
+Цель: автоматизировать проверку .NET проекта, сборку Home Assistant app image и обновление версии add-on.
+
+- Добавить CI workflow для restore, format, build, test и vulnerability check.
+- Добавить workflow сборки Home Assistant app/add-on image через Docker BuildKit и актуальные `home-assistant/builder/actions/*`.
+- Публиковать image в GHCR на push в `main`.
+- На pull request собирать image без публикации.
+- Добавить ручной workflow для bump версии `addon/config.yaml`, обновления changelog и создания git tag.
+
+Acceptance criteria:
+
+- CI workflow запускается на изменениях `.NET` проекта.
+- Build workflow отслеживает изменения `addon/**`, `src/**`, solution и workflow-файлов.
+- Версия add-on хранится в `addon/config.yaml`.
+- Ручной bump версии создает commit и tag `vX.Y.Z`.
+
+Status: done. Docker build is verified by GitHub Actions because Docker is not available in the local environment.
+
+### HAAG-008: Настроить Home Assistant add-on UI options
+
+Цель: секреты и базовые параметры должны задаваться через UI Home Assistant add-on, а env aliases использовать только как удобство для local dev/CI.
+
+- Описать options schema в `addon/config.yaml`.
+- Добавить UI-configurable поля для Telegram token, allowlisted Telegram users, Moonshot/OpenAI-compatible LLM settings, Home Assistant MCP endpoint и workspace/state paths.
+- Проверить, что значения из add-on UI попадают в `/data/options.json` и корректно мапятся в `TelegramOptions`, `LlmOptions`, `HomeAssistantOptions` и `AgentOptions`.
+- Для секретов использовать Home Assistant add-on secrets, где это возможно.
+- Сохранить env aliases `MOONSHOT_API_KEY`, `TELEGRAM_BOT_TOKEN`, `HOME_ASSISTANT_LONG_LIVED_ACCESS_TOKEN` только как override/fallback для локального запуска и CI.
+
+Acceptance criteria:
+
+- Основной production path настройки работает через Home Assistant add-on UI.
+- Пользователь может настроить Moonshot API key и Telegram bot token без редактирования файлов внутри контейнера.
+- `/status` показывает только boolean-флаги configured/not configured и не раскрывает значения из UI.
+
+Status: done. Add-on UI options and schema are in `addon/config.yaml`.
+
+### HAAG-007: Минимальный Docker/add-on skeleton
+
+Цель: проверить, что выбранный .NET подход совместим с контейнерной упаковкой для Home Assistant.
+
+- Добавить `addon/Dockerfile`.
+- Добавить `addon/config.yaml` с минимальными options.
+- Добавить `addon/run.sh`.
+- Собрать контейнер локально без реального Home Assistant окружения.
+
+Acceptance criteria:
+
+- Docker image собирается.
+- Контейнер стартует с local test options.
+- `/data` используется как persisted root для state/workspace paths.
+
+Status: done with local limitation. Add-on skeleton is present, .NET self-contained publish for `linux-musl-x64` passes locally, and Docker image build is delegated to GitHub Actions because Docker is not installed in the local environment.
+
 ### HAAG-003: Реализовать конфигурацию приложения
 
 Цель: поддержать local dev и будущий Home Assistant add-on mode.
@@ -113,37 +167,6 @@ Acceptance criteria:
 - Бот отвечает только allowlisted пользователям.
 - После рестарта старые updates не обрабатываются повторно.
 - `/status` использует тот же status tool/сервис, что и MAF spike.
-
-### HAAG-007: Минимальный Docker/add-on skeleton
-
-Цель: проверить, что выбранный .NET подход совместим с контейнерной упаковкой для Home Assistant.
-
-- Добавить `addon/Dockerfile`.
-- Добавить `addon/config.yaml` с минимальными options.
-- Добавить `addon/run.sh`.
-- Собрать контейнер локально без реального Home Assistant окружения.
-
-Acceptance criteria:
-
-- Docker image собирается.
-- Контейнер стартует с local test options.
-- `/data` используется как persisted root для state/workspace paths.
-
-### HAAG-008: Настроить Home Assistant add-on UI options
-
-Цель: секреты и базовые параметры должны задаваться через UI Home Assistant add-on, а env aliases использовать только как удобство для local dev/CI.
-
-- Описать options schema в `addon/config.yaml`.
-- Добавить UI-configurable поля для Telegram token, allowlisted Telegram users, Moonshot/OpenAI-compatible LLM settings, Home Assistant MCP endpoint и workspace/state paths.
-- Проверить, что значения из add-on UI попадают в `/data/options.json` и корректно мапятся в `TelegramOptions`, `LlmOptions`, `HomeAssistantOptions` и `AgentOptions`.
-- Для секретов использовать Home Assistant add-on secrets, где это возможно.
-- Сохранить env aliases `MOONSHOT_API_KEY`, `TELEGRAM_BOT_TOKEN`, `HOME_ASSISTANT_LONG_LIVED_ACCESS_TOKEN` только как override/fallback для локального запуска и CI.
-
-Acceptance criteria:
-
-- Основной production path настройки работает через Home Assistant add-on UI.
-- Пользователь может настроить Moonshot API key и Telegram bot token без редактирования файлов внутри контейнера.
-- `/status` показывает только boolean-флаги configured/not configured и не раскрывает значения из UI.
 
 ## Backlog Later
 
