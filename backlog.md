@@ -2,230 +2,293 @@
 
 ## Текущий фокус
 
-Первая порция задач нужна не для полноценного домашнего ассистента, а для учебного vertical slice по Microsoft Agent Framework: поднять C#/.NET skeleton, подключить Moonshot/Kimi через OpenAI-compatible provider, сделать первый tool и довести контекстный диалог через Telegram.
+Цель проекта остается учебной: в первую очередь понять Microsoft Agent Framework на реальном C#/.NET приложении, во вторую - вырастить полезного домашнего ассистента для Home Assistant.
 
-Пока не берем: анализ камер, Frigate, полноценные Home Assistant write actions, vector memory, UI, автоматический деплой на домашний сервер.
+Ближайший фокус: не просто "чат в Telegram", а агентная система с инструментами, памятью, guardrails, workflows, observability и понятной границей между диалогами, системными событиями и действиями в доме.
+
+Release/version bump/image build делаем только когда это явно запрошено.
 
 ## Done
 
-### HAAG-010: Memory strategy spike
-
-Цель: выбрать следующую форму памяти после Telegram MVP, чтобы агент не таскал весь контекст в каждый запрос.
-
-Decision:
-
-- Для MVP используем последние N turns + rolling summary для старых сообщений.
-- Храним это локально в SQLite внутри `/data/state.sqlite`.
-- `/resetContext` должен очищать и последние сообщения, и summary текущего Telegram chat/user.
-- Vector storage не включаем в MVP; вводим отдельной post-MVP задачей.
-
-Acceptance criteria:
-
-- Зафиксировать decision note с выбранной стратегией для следующего этапа.
-- Определить, что хранится локально в `/data`, как это сбрасывается и что нельзя отправлять в embeddings.
-- Выбрать минимальное хранилище для Home Assistant add-on: SQLite-only для MVP, vector storage отдельным post-MVP spike.
-
-Status: done. Decision captured in `agent_memory_analysis.md`: MVP memory is last N turns plus rolling summary; vector storage moves to `HAAG-011`.
-
-### HAAG-006: Telegram dialogue MVP с краткосрочным контекстом
-
-Цель: вести диалог с агентом из Telegram, сохраняя краткосрочный контекст беседы по chat/user и давая пользователю команду сброса.
-
-- Создать `TelegramBotGateway` как `BackgroundService`.
-- Добавить allowlist `allowed_telegram_user_ids`.
-- Реализовать обработку `/start`, `/status` и `/resetContext`.
-- Передавать обычные текстовые сообщения в `IAgentRuntime`.
-- Хранить историю диалога по Telegram chat/user в SQLite.
-- Ограничивать краткосрочный контекст последними N turns, чтобы не отправлять в модель всю историю.
-- Сохранять последний обработанный update offset в SQLite.
-- Игнорировать неразрешенных пользователей без раскрытия деталей.
-
-Acceptance criteria:
-
-- Бот отвечает только allowlisted пользователям.
-- Обычное текстовое сообщение получает ответ агента через настроенный Moonshot/OpenAI-compatible provider.
-- Follow-up сообщение может опираться на предыдущую реплику в том же Telegram chat.
-- Контекст беседы переживает рестарт приложения.
-- `/resetContext` очищает контекст только текущего Telegram chat/user, и следующий запрос не видит старую историю.
-- После рестарта старые updates не обрабатываются повторно.
-- `/status` использует тот же status tool/сервис, что и MAF spike.
-- Логи и ответы не раскрывают Telegram token, LLM API key и Home Assistant token.
-
-Status: done. Added Telegram long polling gateway, allowlist-based update handler, `/start`, `/status`, `/resetContext`, SQLite conversation history, bounded context window, and tests for handler/storage behavior.
-
-### HAAG-005: Первый Microsoft Agent Framework spike
-
-Цель: изучить минимальный рабочий путь MAF в нашем проекте.
-
-- Создать `IAgentRuntime` и реализацию `AgentRuntime`.
-- Подключить `Microsoft.Agents.AI.OpenAI` к Moonshot/Kimi через OpenAI-compatible base URL.
-- Добавить первый безопасный tool: `status`.
-- Сделать простой request/response метод без Telegram.
-- Добавить cancellation token и correlation id в `AgentContext`.
-
-Acceptance criteria:
-
-- При наличии `MOONSHOT_API_KEY` локальная команда/тестовый runner получает ответ от модели.
-- Без `MOONSHOT_API_KEY` приложение стартует, но MAF health помечается как not configured.
-- Tool call `status` возвращает версию, uptime и режим конфигурации без секретов.
-
-Status: done. Added `IAgentRuntime`, `AgentRuntime`, `AgentContext`, safe `status` tool, OpenAI-compatible Moonshot wiring through Microsoft Agent Framework, and a local `ask` CLI runner. External Moonshot call is implemented but not executed automatically to avoid spending API quota.
-
-### HAAG-004: Добавить SQLite state store
-
-Цель: заложить минимальное состояние для Telegram offset и будущих confirmations.
-
-- Создать `SqliteConnectionFactory`.
-- Создать init/migration script для `/data/state.sqlite` или local dev path.
-- Создать `AgentStateRepository`.
-- Поддержать чтение/запись Telegram update offset.
-
-Acceptance criteria:
-
-- Тесты проверяют создание схемы на пустой базе.
-- Offset сохраняется и читается после пересоздания repository.
-- Путь к базе задается конфигом.
-
-Status: done. Added SQLite connection factory, idempotent schema initialization, and Telegram update offset persistence through `AgentStateRepository`.
-
-### HAAG-009: Настроить CI, image build и version bump workflow
-
-Цель: автоматизировать проверку .NET проекта, сборку Home Assistant app image и обновление версии add-on.
-
-- Добавить CI workflow для restore, format, build, test и vulnerability check.
-- Добавить workflow сборки Home Assistant app/add-on image через Docker BuildKit и актуальные `home-assistant/builder/actions/*`.
-- Публиковать image в GHCR на push в `main`.
-- На pull request собирать image без публикации.
-- Добавить ручной workflow для bump версии `addon/config.yaml`, обновления changelog и создания git tag.
-
-Acceptance criteria:
-
-- CI workflow запускается на изменениях `.NET` проекта.
-- Build workflow отслеживает изменения `addon/**`, `src/**`, solution и workflow-файлов.
-- Версия add-on хранится в `addon/config.yaml`.
-- Ручной bump версии создает commit и tag `vX.Y.Z`.
-
-Status: done. Docker build is verified by GitHub Actions because Docker is not available in the local environment.
-
-### HAAG-008: Настроить Home Assistant add-on UI options
-
-Цель: секреты и базовые параметры должны задаваться через UI Home Assistant add-on, а env aliases использовать только как удобство для local dev/CI.
-
-- Описать options schema в `addon/config.yaml`.
-- Добавить UI-configurable поля для Telegram token, allowlisted Telegram users, Moonshot/OpenAI-compatible LLM settings, Home Assistant MCP endpoint и workspace/state paths.
-- Проверить, что значения из add-on UI попадают в `/data/options.json` и корректно мапятся в `TelegramOptions`, `LlmOptions`, `HomeAssistantOptions` и `AgentOptions`.
-- Для секретов использовать Home Assistant add-on secrets, где это возможно.
-- Сохранить env aliases `MOONSHOT_API_KEY`, `TELEGRAM_BOT_TOKEN`, `HOME_ASSISTANT_LONG_LIVED_ACCESS_TOKEN` только как override/fallback для локального запуска и CI.
-
-Acceptance criteria:
-
-- Основной production path настройки работает через Home Assistant add-on UI.
-- Пользователь может настроить Moonshot API key и Telegram bot token без редактирования файлов внутри контейнера.
-- `/status` показывает только boolean-флаги configured/not configured и не раскрывает значения из UI.
-
-Status: done. Add-on UI options and schema are in `addon/config.yaml`.
-
-### HAAG-007: Минимальный Docker/add-on skeleton
-
-Цель: проверить, что выбранный .NET подход совместим с контейнерной упаковкой для Home Assistant.
-
-- Добавить `addon/Dockerfile`.
-- Добавить `addon/config.yaml` с минимальными options.
-- Добавить `addon/run.sh`.
-- Собрать контейнер локально без реального Home Assistant окружения.
-
-Acceptance criteria:
-
-- Docker image собирается.
-- Контейнер стартует с local test options.
-- `/data` используется как persisted root для state/workspace paths.
-
-Status: done with local limitation. Add-on skeleton is present, .NET self-contained publish for `linux-musl-x64` passes locally, and Docker image build is delegated to GitHub Actions because Docker is not installed in the local environment.
-
-### HAAG-003: Реализовать конфигурацию приложения
-
-Цель: поддержать local dev и будущий Home Assistant add-on mode.
-
-- Добавить options records/classes: `TelegramOptions`, `LlmOptions`, `HomeAssistantOptions`, `AgentOptions`.
-- Читать `appsettings.json` для local dev.
-- Добавить чтение `/data/options.json`, если файл существует.
-- Добавить env overrides для секретов.
-- Для Moonshot default: `Provider=moonshot`, `BaseUrl=https://api.moonshot.ai/v1`, `Model=kimi-k2.5`.
-- Замаскировать секреты в logs/status output.
-
-Acceptance criteria:
-
-- Тесты покрывают default values и env overrides.
-- При отсутствующем `/data/options.json` локальный запуск не падает.
-- `llm_api_key` и `telegram_bot_token` нигде не печатаются целиком.
-
-Status: done. App reads normal .NET sections, optional Home Assistant add-on `/data/options.json`, `HA_PERSONAL_AGENT_*` env overrides and common secret aliases such as `MOONSHOT_API_KEY` and `TELEGRAM_BOT_TOKEN`.
-
-### HAAG-002: Зафиксировать NuGet dependencies
-
-Цель: сделать воспроизводимую основу для Agent Framework и интеграций.
-
-- Добавить `Directory.Packages.props`.
-- Зафиксировать `Microsoft.Agents.AI`.
-- Зафиксировать `Microsoft.Agents.AI.OpenAI`.
-- Зафиксировать `ModelContextProtocol`.
-- Добавить `Telegram.Bot`, `Microsoft.Data.Sqlite` и нужные `Microsoft.Extensions.*` пакеты.
-- Не добавлять Azure-specific packages на первом шаге.
-
-Acceptance criteria:
-
-- Все версии управляются централизованно.
-- `dotnet restore` проходит.
-- В проекте нет Azure OpenAI как обязательной зависимости.
-
-Status: done. Versions are centralized in `Directory.Packages.props`; no Azure-specific package references were added.
-
-### HAAG-001: Создать .NET solution skeleton
-
-Цель: получить минимальный компилируемый C# проект под будущий Home Assistant add-on.
-
-- Создать `HomeAssistantPersonalAgent.sln`.
-- Создать `src/HaPersonalAgent/HaPersonalAgent.csproj`.
-- Создать `tests/HaPersonalAgent.Tests/HaPersonalAgent.Tests.csproj`.
-- Target framework: `net10.0`, с fallback decision note для `net8.0`, если понадобится.
-- Включить nullable reference types и analyzers.
-- Добавить базовый `Program.cs` на .NET Generic Host.
-
-Acceptance criteria:
-
-- `dotnet build` проходит.
-- `dotnet test` запускается и проходит хотя бы с одним smoke test.
-- Приложение стартует локально и корректно завершается по Ctrl+C.
-
-Status: done. Skeleton uses `net8.0` because local SDKs are `8.0.303` and `9.0.100`; see `docs/decisions/0001-target-framework.md`.
+- `HAAG-001`: .NET solution skeleton на `net8.0`.
+- `HAAG-002`: централизованные NuGet dependencies, включая `Microsoft.Agents.AI`, `Microsoft.Agents.AI.OpenAI`, `ModelContextProtocol`, Telegram и SQLite.
+- `HAAG-003`: configuration слой для local dev и Home Assistant add-on options.
+- `HAAG-004`: SQLite state store для Telegram offset и истории диалога.
+- `HAAG-005`: первый MAF runtime spike с Moonshot/OpenAI-compatible backend и safe `status` tool.
+- `HAAG-006`: Telegram dialogue MVP с allowlist, `/status`, `/resetContext` и краткосрочным контекстом.
+- `HAAG-007`: минимальный Docker/Home Assistant add-on skeleton.
+- `HAAG-008`: Home Assistant add-on UI options для Telegram, LLM, HA MCP и workspace/state paths.
+- `HAAG-009`: CI, GHCR image build и manual version bump workflow.
+- `HAAG-010`: memory strategy decision: MVP = последние N turns + rolling summary, vector storage позже.
+- `HAAG-012`: transport-agnostic dialogue layer, чтобы Telegram был adapter, а не core dialogue runtime.
+- `HAAG-013`: lazy Home Assistant MCP discovery/status через Streamable HTTP без выполнения tools.
+- `HAAG-015`: универсальная confirmation policy для risky actions через pending SQLite confirmation, `/approve`/`/reject`, audit log и Home Assistant MCP executor.
+- `HAAG-020`: read-only Home Assistant MCP tools доступны MAF agent runtime с консервативной safety policy.
 
 ## Ready
 
-### HAAG-011: Post-MVP vector memory spike
+### HAAG-014: MAF Workflow spike для дневного анализа Frigate alerts
 
-Цель: ввести vector storage и более качественную организацию памяти после проверки Telegram MVP.
+Цель: применить MAF Workflow на не-диалоговой задаче: собрать тревоги Frigate NVR за день, обогатить metadata snapshot/clip и сформировать краткий отчет.
 
-- Спроектировать `IMemoryStore` и `IEmbeddingGenerator` как порты приложения.
-- Описать `MemoryRecord`: scope, kind, text, source, conversation key, metadata, importance, ttl и embedding.
-- Сравнить local-first SQLite vector extension, Qdrant и pgvector для Home Assistant add-on.
-- Добавить policy удаления: `/resetContext` должен удалять vector records текущего chat/user.
-- Добавить redaction policy до embeddings: не embedding-овать токены и другие секреты.
-- Сделать retrieval pipeline: semantic score + recency + importance + source-type weighting.
+Учебная ценность MAF:
+
+- Проверить workflow как directed graph из executors и edges.
+- Сравнить deterministic executors и LLM/agent executor внутри одного workflow.
+- Понять streaming workflow events и как их можно показывать в Telegram/Web UI.
+
+Домашняя ценность:
+
+- Получить ежедневный отчет по тревогам камер.
+- Отделить workflow artifacts/system notifications от обычной dialogue memory.
+
+Минимальный graph:
+
+1. `BuildFrigateDailyWindowExecutor`: дата, timezone, список камер.
+2. `FetchFrigateEventsExecutor`: read-only запрос к Frigate API `/api/events`.
+3. `FilterAndGroupEventsExecutor`: фильтр low-confidence и группировка по camera/label/zone/time bucket.
+4. `EnrichEventMediaExecutor`: metadata и ссылки на snapshot/clip без тяжелого video analysis.
+5. `AnalyzeDailyAlertsAgentExecutor`: агент анализирует сгруппированные события.
+6. `BuildDailySecurityReportExecutor`: формирует отчет.
+7. `NotifyUserExecutor`: отправляет краткое системное уведомление без записи в `conversation_messages`.
 
 Acceptance criteria:
 
-- Есть decision note по выбранному vector store.
-- Есть минимальная реализация `IMemoryStore` с тестами без реального LLM/embedding provider.
-- Есть стратегия multi-arch packaging для Home Assistant add-on, если выбран native SQLite extension.
-- Reset и delete сценарии покрыты тестами.
+- Есть design note с workflow graph, executors, contracts и error handling.
+- Есть минимальный `WorkflowBuilder` spike с fake Frigate client и deterministic тестом порядка executors.
+- Workflow gracefully handles недоступный Frigate, пустой день и слишком большое число events.
+- Workflow output сохраняется как artifact/event, а не как обычная dialogue history.
+- Зафиксированы future config options: Frigate base URL, auth strategy, camera filters, timezone.
 
-## Backlog Later
+### HAAG-016: MAF middleware spike для guardrails и runtime policy
 
-Остальные later items:
+Цель: вынести cross-cutting правила агента в middleware/pipeline, а не размазывать их по Telegram handler и tools.
 
-- Home Assistant MCP discovery и read-only tools.
-- File workspace tool.
-- Confirmation layer для controlled/risky actions.
-- Camera alert MVP.
-- Frigate MQTT adapter.
-- OpenAI API fallback backend.
+Учебная ценность MAF:
+
+- Проверить agent run middleware, function calling middleware и `IChatClient` middleware.
+- Понять порядок выполнения middleware и где лучше делать validation, logging, redaction и budget checks.
+
+Домашняя ценность:
+
+- Единое место для запрета опасных запросов, ограничения tool calls, redaction секретов и token budget.
+
+Acceptance criteria:
+
+- Есть middleware spike, который логирует correlation id и sanitized tool call metadata.
+- Function middleware блокирует control tool без confirmation policy.
+- Chat/client middleware считает примерный prompt size и оставляет 20-30% окна на ответ.
+- Sensitive data не пишется в production logs/traces.
+- Покрыто unit-тестами на blocking, pass-through и redaction.
+
+### HAAG-017: OpenTelemetry/Aspire observability для agents, tools и workflows
+
+Цель: сделать поведение агента наблюдаемым: какие tool calls были предложены, сколько занял runtime, где workflow остановился и почему.
+
+Учебная ценность MAF:
+
+- Подключить MAF/OpenTelemetry instrumentation.
+- Посмотреть spans для agent invocation, model call, tool execution и workflow executors.
+- Понять, что включать в dev traces и что запрещено включать в production.
+
+Домашняя ценность:
+
+- Быстрее разбирать проблемы add-on на сервере без просмотра сырых prompt/secret values.
+
+Acceptance criteria:
+
+- Есть options для включения observability и OTLP endpoint.
+- Локально можно отправить traces/metrics в Aspire Dashboard или OTLP collector.
+- По умолчанию sensitive data disabled.
+- `/status` показывает observability enabled/disabled и endpoint configured/not configured без секретов.
+- Есть test или smoke check, что instrumentation registration не ломает старт без collector.
+
+### HAAG-018: Streaming replies и progress events через dialogue abstraction
+
+Цель: перейти от одного финального ответа к streaming/progress модели, не привязанной к Telegram.
+
+Учебная ценность MAF:
+
+- Изучить streaming agent run.
+- Разделить final assistant answer, partial tokens, tool call progress и workflow progress events.
+
+Домашняя ценность:
+
+- Telegram/Web UI смогут показывать "думаю", "проверяю Home Assistant", "собираю события Frigate" и не выглядеть зависшими.
+
+Acceptance criteria:
+
+- Добавлен transport-agnostic `DialogueEvent`/`DialogueStream` контракт.
+- Telegram adapter умеет отправить progress без записи progress messages в dialogue memory.
+- Финальный assistant response хранится в memory один раз.
+- Есть fake streaming runtime tests.
+
+### HAAG-019: Rolling summary memory MVP
+
+Цель: реализовать выбранную стратегию памяти до vector storage: последние N turns + summary для старых сообщений.
+
+Учебная ценность MAF:
+
+- Сделать отдельный summarizer agent/tool и проверить, как агентные шаги используются для обслуживания памяти, а не только для ответа пользователю.
+- Проверить prompt assembly с фиксированным system prompt, recent turns и summary.
+
+Домашняя ценность:
+
+- Ассистент лучше помнит долгий разговор, но не тащит всю историю в каждый запрос.
+
+Acceptance criteria:
+
+- SQLite хранит per-conversation summary и timestamps.
+- Summary обновляется при достижении 70% budget или 10-15 turns без summary.
+- `/resetContext` очищает recent turns и summary.
+- Summary не включает system notifications, secrets и raw tool results.
+- Prompt assembly тесты проверяют порядок: System + summary + recent turns + current user message.
+
+## Next
+
+### HAAG-021: Post-MVP vector memory spike
+
+Цель: ввести vector storage и более качественную организацию памяти после rolling summary MVP.
+
+Учебная ценность MAF:
+
+- Сравнить RAG/retrieval как отдельный deterministic слой и как tool для агента.
+- Понять, какие memory records должны попадать в relevant history.
+
+Домашняя ценность:
+
+- Агент сможет вспоминать релевантные домашние предпочтения, события и прошлые решения без раздувания prompt.
+
+Acceptance criteria:
+
+- Есть decision note по SQLite vector extension, Qdrant и pgvector для Home Assistant add-on.
+- Есть минимальный `IMemoryStore` и `IEmbeddingGenerator` с тестами без реального embedding provider.
+- Есть redaction policy до embeddings.
+- Retrieval учитывает semantic score, recency, importance и source-type.
+- `/resetContext` удаляет vector records текущего conversation scope.
+
+### HAAG-022: File workspace tool с sandbox policy
+
+Цель: дать агенту безопасную работу с файлами внутри `/data/workspace`.
+
+Учебная ценность MAF:
+
+- Реализовать набор function tools с typed inputs/outputs.
+- Проверить tool error handling и result summarization.
+
+Домашняя ценность:
+
+- Агент сможет вести заметки, сохранять отчеты, читать локальные markdown/json файлы и готовить artifacts.
+
+Acceptance criteria:
+
+- Path traversal заблокирован, работа только внутри configured workspace.
+- Есть read/list/write/delete с max file size и allowed extensions policy.
+- Tool results больших файлов суммаризируются и не пишутся целиком в dialogue memory.
+- Есть audit log для write/delete.
+- Тесты покрывают sandbox boundary и лимиты.
+
+### HAAG-023: Multi-agent composition spike
+
+Цель: разделить обязанности между specialist agents и coordinator agent.
+
+Учебная ценность MAF:
+
+- Проверить agent-as-tool composition и multi-agent orchestration.
+- Сравнить coordinator-agent подход с workflow подходом на одинаковом сценарии.
+
+Домашняя ценность:
+
+- Отдельные специалисты: `HomeStateAgent`, `SecurityAgent`, `MemoryAgent`, `FileAgent`.
+
+Acceptance criteria:
+
+- Есть coordinator agent, который может вызвать fake specialist agent как function tool.
+- Описаны границы ответственности specialist agents.
+- Есть deterministic тест, что coordinator не вызывает `SecurityAgent` для обычного вопроса о памяти.
+- Нет доступа specialist agents к секретам или unrelated tools без явной регистрации.
+
+### HAAG-024: Web UI dialogue adapter
+
+Цель: добавить второй transport для диалога, чтобы проверить transport-agnostic архитектуру на практике.
+
+Учебная ценность MAF:
+
+- Развести backend dialogue events и UI rendering.
+- Подготовить UI к streaming/progress events и tool approval cards.
+
+Домашняя ценность:
+
+- Можно общаться с агентом из браузера Home Assistant/local network, а не только Telegram.
+
+Acceptance criteria:
+
+- Web UI использует тот же `DialogueService`, что Telegram.
+- Есть отдельная conversation identity strategy для web sessions.
+- `/resetContext` или UI-кнопка reset работает через общий dialogue contract.
+- System notifications не попадают в обычную history.
+
+## Later
+
+### HAAG-025: Event/notification store
+
+Цель: хранить системные события отдельно от диалоговой памяти.
+
+- Camera alerts, daily reports, workflow artifacts и proactive notifications идут в `event_notifications`, не в `conversation_messages`.
+- Есть TTL, severity, source, correlation id и optional links to artifacts.
+- Будущий RAG может искать по event scope, но prompt assembly явно отличает events от user-assistant turns.
+
+### HAAG-026: Live Frigate alert pipeline
+
+Цель: перейти от дневного отчета к near-real-time анализу тревог.
+
+- Поддержать Frigate MQTT или API polling adapter.
+- Дедуплицировать события и группировать burst alerts.
+- Для первого шага использовать metadata/snapshots, heavy video analysis оставить отдельно.
+- Уведомления отправлять как system notification, не как dialogue turn.
+
+### HAAG-027: Scheduled routines workflow
+
+Цель: добавить домашние routines как workflow: утренний статус, вечерняя проверка, отчет "дом пустой/все закрыто".
+
+- Workflow запускается по расписанию или вручную.
+- Read-only стадия отделена от write/control стадий.
+- Write/control требует confirmation policy.
+
+### HAAG-028: Prompt/version/evaluation harness
+
+Цель: не ломать поведение агента при изменениях prompts/tools/memory.
+
+- Версионировать system prompt и tool descriptions.
+- Добавить golden scenarios: "сбросить контекст", "узнать температуру", "предложить выключить свет, но не выполнить без approval".
+- Добавить fake LLM/tool runner для deterministic tests.
+- Сохранять eval report как artifact.
+
+### HAAG-029: Provider strategy: Moonshot/OpenAI/optional local model
+
+Цель: сравнить provider behavior без переписывания application code.
+
+- Оставить Moonshot как primary local key path.
+- Добавить OpenAI API fallback как опцию.
+- Исследовать local model/Ollama только для read-only/low-risk сценариев.
+- Зафиксировать capability matrix: tools, streaming, approvals, context window, cost, latency.
+
+### HAAG-030: Agent Skills spike
+
+Цель: понять, как MAF Agent Skills могут помочь с переиспользуемыми навыками ассистента, и не смешивать skills с обычными tools/workflows без необходимости.
+
+- Сравнить `tools`, `skills` и `workflows` на 2-3 домашних сценариях.
+- Проверить approval model для script/code skills.
+- Сделать fake/local skill, который читает безопасный markdown playbook из workspace.
+- Зафиксировать, когда skills полезнее обычных typed C# tools.
+- Не выполнять shell/scripts без отдельного approval и sandbox policy.
+
+### HAAG-031: Add-on runtime hardening
+
+Цель: улучшить эксплуатацию на Home Assistant сервере.
+
+- Health/readiness endpoints или status command extensions.
+- Backup/restore notes для `/data/state.sqlite` и `/data/workspace`.
+- Options validation с понятными ошибками.
+- Graceful shutdown для polling/workflows.
+- Логи без heartbeat noise и без секретов.

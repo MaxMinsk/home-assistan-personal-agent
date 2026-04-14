@@ -1,5 +1,8 @@
 using HaPersonalAgent.Agent;
 using HaPersonalAgent.Configuration;
+using HaPersonalAgent.Confirmation;
+using HaPersonalAgent.Dialogue;
+using HaPersonalAgent.HomeAssistant;
 using HaPersonalAgent.Storage;
 using HaPersonalAgent.Telegram;
 using Microsoft.Extensions.Logging;
@@ -137,22 +140,102 @@ public class TelegramUpdateHandlerTests
         }
     }
 
+    [Fact]
+    public async Task Status_command_includes_home_assistant_mcp_health()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var handler = CreateHandler(
+                CreateRepository(databasePath),
+                new FakeAgentRuntime("unused"),
+                new FakeHomeAssistantMcpClient(
+                    HomeAssistantMcpDiscoveryResult.Reachable(
+                        new Uri("http://supervisor/core/api/mcp"),
+                        new HomeAssistantMcpDiscovery(
+                            new[] { new HomeAssistantMcpItemInfo("get_state", "Get state", "Reads HA state") },
+                            new[] { new HomeAssistantMcpItemInfo("assist", "Assist", "Uses Assist API") }))));
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 14, chatId: 200, userId: 100, text: "/status"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Contains("HA MCP: reachable (1 tools, 1 prompts)", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Approve_command_uses_confirmation_service_without_invoking_dialogue_agent()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var runtime = new FakeAgentRuntime("unused");
+            var confirmationService = new FakeConfirmationService(
+                new ConfirmationDecisionResult(
+                    ConfirmationDecisionOutcome.Completed,
+                    IsSuccess: true,
+                    "Выполнено действие abc12345.",
+                    "abc12345"));
+            var handler = CreateHandler(
+                CreateRepository(databasePath),
+                runtime,
+                confirmationService: confirmationService);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 15, chatId: 200, userId: 100, text: "/approve abc12345"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Empty(runtime.Calls);
+            Assert.Single(confirmationService.ApprovedConfirmations);
+            Assert.Equal("abc12345", confirmationService.ApprovedConfirmations.Single().ConfirmationId);
+            Assert.Contains("Выполнено", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
     private static TelegramUpdateHandler CreateHandler(
         AgentStateRepository repository,
-        FakeAgentRuntime runtime)
+        FakeAgentRuntime runtime,
+        IHomeAssistantMcpClient? homeAssistantMcpClient = null,
+        IConfirmationService? confirmationService = null)
     {
         var statusProvider = new ConfigurationStatusProvider(
             Options.Create(new AgentOptions()),
             Options.Create(new TelegramOptions { AllowedUserIds = new long[] { 100 } }),
             Options.Create(new LlmOptions { ApiKey = "configured" }),
             Options.Create(new HomeAssistantOptions()));
-
-        return new TelegramUpdateHandler(
+        var loggerFactory = LoggerFactory.Create(_ => { });
+        var dialogueService = new DialogueService(
             runtime,
             Options.Create(new AgentOptions()),
             repository,
+            loggerFactory.CreateLogger<DialogueService>());
+
+        return new TelegramUpdateHandler(
+            dialogueService,
+            homeAssistantMcpClient ?? new FakeHomeAssistantMcpClient(HomeAssistantMcpDiscoveryResult.NotConfigured(
+                new Uri("http://supervisor/core/api/mcp"),
+                "HomeAssistant:LongLivedAccessToken is empty.")),
             new AgentStatusTool(statusProvider),
-            LoggerFactory.Create(_ => { }).CreateLogger<TelegramUpdateHandler>());
+            runtime,
+            loggerFactory.CreateLogger<TelegramUpdateHandler>(),
+            confirmationService);
     }
 
     private static AgentStateRepository CreateRepository(string databasePath)
@@ -238,6 +321,74 @@ public class TelegramUpdateHandlerTests
                 IsConfigured: true,
                 NextResponseText,
                 GetHealth()));
+        }
+    }
+
+    /// <summary>
+    /// Что: fake Home Assistant MCP client для тестов Telegram handler.
+    /// Зачем: `/status` должен проверяться без сетевого вызова к Home Assistant `/api/mcp`.
+    /// Как: возвращает заранее заданный discovery result.
+    /// </summary>
+    private sealed class FakeHomeAssistantMcpClient : IHomeAssistantMcpClient
+    {
+        private readonly HomeAssistantMcpDiscoveryResult _result;
+
+        public FakeHomeAssistantMcpClient(HomeAssistantMcpDiscoveryResult result)
+        {
+            _result = result;
+        }
+
+        public Task<HomeAssistantMcpDiscoveryResult> DiscoverAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(_result);
+    }
+
+    /// <summary>
+    /// Что: fake confirmation service для Telegram command tests.
+    /// Зачем: handler должен проверяться без реального MCP executor и SQLite confirmation orchestration.
+    /// Как: записывает approve/reject calls и возвращает заранее заданный результат.
+    /// </summary>
+    private sealed class FakeConfirmationService : IConfirmationService
+    {
+        private readonly ConfirmationDecisionResult _result;
+
+        public FakeConfirmationService(ConfirmationDecisionResult result)
+        {
+            _result = result;
+        }
+
+        public List<(DialogueConversation Conversation, string ConfirmationId)> ApprovedConfirmations { get; } = new();
+
+        public List<(DialogueConversation Conversation, string ConfirmationId)> RejectedConfirmations { get; } = new();
+
+        public Task<ConfirmationProposalResult> ProposeAsync(
+            ConfirmationProposalRequest request,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new ConfirmationProposalResult(
+                IsCreated: false,
+                "unused",
+                ConfirmationId: null,
+                ApproveCommand: null,
+                RejectCommand: null,
+                ExpiresAtUtc: null));
+
+        public Task<ConfirmationDecisionResult> ApproveAsync(
+            DialogueConversation conversation,
+            string confirmationId,
+            CancellationToken cancellationToken)
+        {
+            ApprovedConfirmations.Add((conversation, confirmationId));
+
+            return Task.FromResult(_result);
+        }
+
+        public Task<ConfirmationDecisionResult> RejectAsync(
+            DialogueConversation conversation,
+            string confirmationId,
+            CancellationToken cancellationToken)
+        {
+            RejectedConfirmations.Add((conversation, confirmationId));
+
+            return Task.FromResult(_result);
         }
     }
 

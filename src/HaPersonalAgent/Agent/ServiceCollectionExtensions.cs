@@ -5,7 +5,7 @@ namespace HaPersonalAgent.Agent;
 /// <summary>
 /// Что: DI-регистрация agent runtime слоя.
 /// Зачем: Program.cs должен подключать MAF spike одной строкой, а остальные компоненты получать IAgentRuntime через DI.
-/// Как: регистрирует status tool и IAgentRuntime как singleton, потому что runtime лениво создает переиспользуемый ChatClientAgent.
+/// Как: регистрирует status tool и IAgentRuntime как singleton, а runtime создает per-run MAF agent с актуальными MCP tools.
 /// </summary>
 public static class ServiceCollectionExtensions
 {

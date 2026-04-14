@@ -21,6 +21,7 @@
 - Контекст должен переживать рестарт add-on.
 - В LLM нельзя отправлять секреты: Telegram token, LLM API key, Home Assistant token, внутренние access tokens.
 - Контекст должен быть ограничен по размеру: рост истории не должен линейно увеличивать стоимость каждого запроса.
+- Нужно оставлять 20-30% context window на ответ модели, а не забивать окно памятью полностью.
 - Для обучения MAF реализация должна оставаться понятной: сначала простой контролируемый memory pipeline, потом vector retrieval.
 
 ## MVP Architecture
@@ -36,17 +37,32 @@ SQLite остается единственным persistent store.
 - `summary_version`: версия prompt/алгоритма summary, чтобы можно было пересобрать summary при изменении формата
 - `model`: модель, которой был сделан summary, только для диагностики
 
-Сборка prompt:
+Сборка prompt для MVP:
 
 1. System instructions из `AgentRuntime`.
-2. Conversation summary, если он есть.
-3. Последние N turns из `conversation_messages`.
+2. Последние N turns из `conversation_messages`.
+3. Conversation summary старой части диалога, если он есть.
 4. Текущее сообщение пользователя.
+
+Сборка prompt после добавления vector memory:
+
+1. System instructions из `AgentRuntime`.
+2. Последние N turns из `conversation_messages`.
+3. Relevant history из RAG/search, ограниченный token budget и релевантностью.
+4. Текущее сообщение пользователя.
+
+Token budget rules:
+
+- Оставлять 20-30% context window на ответ модели.
+- Начинать summary/cleanup, когда prompt приближается к 70% лимита токенов.
+- Не держать больше 10-15 шагов диалога как точную историю без summary.
+- Использовать смену темы как сигнал для summary/cleanup, а не только счетчик сообщений.
+- Если есть конфликт между recent turns и relevant history, приоритет у recent turns; RAG не должен вытеснять локальный диалог.
 
 Обновление summary:
 
 - После успешного ответа агента сохраняем user/assistant turn.
-- Если количество несвернутых старых сообщений превышает порог, берем сообщения старше последних N turns и просим модель обновить summary.
+- Если количество несвернутых старых сообщений превышает 10-15 шагов, пользователь явно сменил тему или prompt приближается к 70% лимита токенов, берем сообщения старше последних N turns и просим модель обновить summary.
 - После успешного summary обновляем `summarized_until_message_id`.
 - Последние N turns не сворачиваем, потому что они лучше сохраняют точные формулировки и локальный контекст.
 
@@ -55,6 +71,20 @@ SQLite остается единственным persistent store.
 - Удалить `conversation_messages` для текущего conversation key.
 - Удалить `conversation_summary` для текущего conversation key.
 - В post-MVP vector storage также удалить vector memory records с тем же conversation key.
+
+## Dialogue Memory vs System Notifications
+
+Диалог с моделью не должен быть привязан к Telegram. Telegram - это только transport adapter; будущий Web UI должен использовать тот же dialogue service, agent runtime и memory store.
+
+Обычная dialogue memory хранит только user/assistant turns. Outbound system notifications, например будущая тревога на камере, не должны попадать в `conversation_messages`, потому что они не являются репликой пользователя или ответом assistant.
+
+Для системных уведомлений нужен отдельный event/notification scope:
+
+- `camera_event`
+- `home_assistant_event`
+- `automation_notification`
+
+Такой event scope позже можно использовать в RAG/retrieval, если пользователь спросит "что было по камере?", но он не должен автоматически засорять prompt history текущего разговора.
 
 ## Варианты
 
@@ -161,6 +191,7 @@ SQLite остается единственным persistent store.
 - `IEmbeddingGenerator`: отдельный порт для embeddings, чтобы не привязываться к конкретному provider.
 - `MemoryRecord`: `id`, `scope`, `kind`, `text`, `source`, `conversation_key`, `created_utc`, `importance`, `expires_utc`, `embedding`, `metadata_json`.
 - Retrieval pipeline: semantic score + recency + importance + source-type weighting.
+- Prompt structure: system + last N turns + relevant history, with 20-30% context window reserved for response.
 - Safety policy: redaction секретов до embeddings, clear/delete по `/resetContext`, запрет сохранять одноразовые токены.
 
 Storage candidates:
@@ -178,6 +209,7 @@ Storage candidates:
 - Отдельно тестируем `/resetContext`: исчезают messages, summary и future vector records.
 - Вводим memory scopes: `conversation`, `user_profile`, `home_fact`, `file_fact`, `camera_event`.
 - Для vector retrieval добавляем минимальные метрики: precision в synthetic dialogues, отсутствие retrieval после reset, отсутствие секретов в memory records.
+- Для prompt assembly добавляем тесты на token budget: 20-30% окна остается на ответ, cleanup запускается около 70% лимита, recent turns не вытесняются RAG.
 - Для summary добавляем versioning: при изменении summary prompt можно пересобрать summary.
 - Для спорных фактов используем confidence и provenance, а не безусловное сохранение.
 

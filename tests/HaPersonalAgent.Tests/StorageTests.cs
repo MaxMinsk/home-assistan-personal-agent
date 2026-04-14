@@ -1,5 +1,6 @@
 using HaPersonalAgent.Agent;
 using HaPersonalAgent.Configuration;
+using HaPersonalAgent.Confirmation;
 using HaPersonalAgent.Storage;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
@@ -27,6 +28,8 @@ public class StorageTests
             Assert.True(File.Exists(databasePath));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "agent_state"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "conversation_messages"));
+            Assert.Equal(1L, await CountTablesAsync(databasePath, "pending_confirmations"));
+            Assert.Equal(1L, await CountTablesAsync(databasePath, "confirmation_audit"));
         }
         finally
         {
@@ -133,6 +136,67 @@ public class StorageTests
             Assert.Empty(cleared);
             Assert.Single(kept);
             Assert.Equal("keep me", kept[0].Text);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Pending_confirmation_persists_and_status_updates_once()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var confirmation = new PendingConfirmation(
+                "abc12345",
+                "home_assistant_mcp",
+                "telegram:200:100",
+                "100",
+                "HassCallService",
+                "{\"domain\":\"light\"}",
+                "Turn on kitchen light",
+                "May change light state.",
+                ConfirmationActionStatus.Pending,
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow.AddMinutes(10),
+                CompletedAtUtc: null,
+                "test-correlation",
+                ResultJson: null,
+                Error: null);
+
+            await repository.SavePendingConfirmationAsync(confirmation, CancellationToken.None);
+
+            var stored = await repository.GetPendingConfirmationAsync(
+                "telegram:200:100",
+                "100",
+                "abc12345",
+                CancellationToken.None);
+            var firstUpdate = await repository.TryUpdateConfirmationStatusAsync(
+                "abc12345",
+                ConfirmationActionStatus.Pending,
+                ConfirmationActionStatus.Executing,
+                completedAtUtc: null,
+                resultJson: null,
+                error: null,
+                CancellationToken.None);
+            var secondUpdate = await repository.TryUpdateConfirmationStatusAsync(
+                "abc12345",
+                ConfirmationActionStatus.Pending,
+                ConfirmationActionStatus.Executing,
+                completedAtUtc: null,
+                resultJson: null,
+                error: null,
+                CancellationToken.None);
+
+            Assert.NotNull(stored);
+            Assert.Equal("home_assistant_mcp", stored.ActionKind);
+            Assert.Equal("HassCallService", stored.OperationName);
+            Assert.True(firstUpdate);
+            Assert.False(secondUpdate);
         }
         finally
         {

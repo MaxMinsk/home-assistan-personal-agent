@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0
+
+- Add transport-agnostic dialogue layer so Telegram is an adapter over shared dialogue/runtime/memory contracts.
+- Add Home Assistant MCP discovery/status and expose read-only MCP tools to the MAF agent runtime.
+- Add generic confirmation policy for risky actions with SQLite pending confirmations, audit log, and Telegram `/approve`/`/reject`.
+- Add Home Assistant MCP control executor behind the generic confirmation flow.
+- Add memory analysis/backlog updates for rolling summary and future vector storage.
+
 ## 0.1.3
 
 - Add Telegram long polling dialogue MVP with `/start`, `/status`, and `/resetContext`.

@@ -1,8 +1,9 @@
 using HaPersonalAgent.Agent;
 using HaPersonalAgent.Configuration;
-using HaPersonalAgent.Storage;
+using HaPersonalAgent.Confirmation;
+using HaPersonalAgent.Dialogue;
+using HaPersonalAgent.HomeAssistant;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using Telegram.Bot.Types;
 
 namespace HaPersonalAgent.Telegram;
@@ -10,30 +11,34 @@ namespace HaPersonalAgent.Telegram;
 /// <summary>
 /// Что: обработчик одного Telegram update.
 /// Зачем: long polling gateway должен оставаться транспортным циклом, а команды, allowlist и agent invocation жить в тестируемом классе.
-/// Как: проверяет автора по allowlist, маршрутизирует /start, /status, /resetContext, а обычный текст отправляет в IAgentRuntime с историей из SQLite.
+/// Как: проверяет автора по allowlist, маршрутизирует команды включая approve/reject, а обычный текст передает в transport-agnostic DialogueService.
 /// </summary>
 public sealed class TelegramUpdateHandler
 {
     private const int MaxTelegramMessageLength = 4096;
+    private const string TelegramTransportName = "telegram";
 
-    private readonly IAgentRuntime _agentRuntime;
-    private readonly IOptions<AgentOptions> _agentOptions;
-    private readonly AgentStateRepository _stateRepository;
+    private readonly DialogueService _dialogueService;
+    private readonly IHomeAssistantMcpClient _homeAssistantMcpClient;
+    private readonly IConfirmationService? _confirmationService;
     private readonly AgentStatusTool _statusTool;
+    private readonly IAgentRuntime _agentRuntime;
     private readonly ILogger<TelegramUpdateHandler> _logger;
 
     public TelegramUpdateHandler(
-        IAgentRuntime agentRuntime,
-        IOptions<AgentOptions> agentOptions,
-        AgentStateRepository stateRepository,
+        DialogueService dialogueService,
+        IHomeAssistantMcpClient homeAssistantMcpClient,
         AgentStatusTool statusTool,
-        ILogger<TelegramUpdateHandler> logger)
+        IAgentRuntime agentRuntime,
+        ILogger<TelegramUpdateHandler> logger,
+        IConfirmationService? confirmationService = null)
     {
-        _agentRuntime = agentRuntime;
-        _agentOptions = agentOptions;
-        _stateRepository = stateRepository;
+        _dialogueService = dialogueService;
+        _homeAssistantMcpClient = homeAssistantMcpClient;
         _statusTool = statusTool;
+        _agentRuntime = agentRuntime;
         _logger = logger;
+        _confirmationService = confirmationService;
     }
 
     public async Task HandleAsync(
@@ -63,14 +68,14 @@ public sealed class TelegramUpdateHandler
         }
 
         var chatId = message.Chat.Id;
-        var conversationKey = CreateConversationKey(chatId, userId);
+        var conversation = CreateConversation(chatId, userId);
         var text = message.Text.Trim();
 
         if (IsCommand(text, "/start"))
         {
             await client.SendMessageAsync(
                 chatId,
-                "Привет. Пиши обычным текстом, я отвечу через агента. /status покажет статус, /resetContext очистит контекст этого чата.",
+                "Привет. Пиши обычным текстом, я отвечу через агента. /status покажет статус, /resetContext очистит контекст этого чата. Для действий с домом используй /approve <id> или /reject <id>, когда агент попросит подтверждение.",
                 cancellationToken);
             return;
         }
@@ -79,17 +84,41 @@ public sealed class TelegramUpdateHandler
         {
             await client.SendMessageAsync(
                 chatId,
-                FormatStatus(),
+                await FormatStatusAsync(cancellationToken),
                 cancellationToken);
             return;
         }
 
         if (IsCommand(text, "/resetContext"))
         {
-            await _stateRepository.ClearConversationMessagesAsync(conversationKey, cancellationToken);
+            await _dialogueService.ResetAsync(conversation, cancellationToken);
             await client.SendMessageAsync(
                 chatId,
                 "Контекст этого чата очищен.",
+                cancellationToken);
+            return;
+        }
+
+        if (TryReadCommandArgument(text, "/approve", out var approveActionId))
+        {
+            await HandleConfirmationCommandAsync(
+                client,
+                chatId,
+                conversation,
+                approveActionId,
+                approve: true,
+                cancellationToken);
+            return;
+        }
+
+        if (TryReadCommandArgument(text, "/reject", out var rejectActionId))
+        {
+            await HandleConfirmationCommandAsync(
+                client,
+                chatId,
+                conversation,
+                rejectActionId,
+                approve: false,
                 cancellationToken);
             return;
         }
@@ -98,8 +127,46 @@ public sealed class TelegramUpdateHandler
             client,
             update.Id,
             chatId,
-            conversationKey,
+            conversation,
             text,
+            cancellationToken);
+    }
+
+    private async Task HandleConfirmationCommandAsync(
+        ITelegramBotClientAdapter client,
+        long chatId,
+        DialogueConversation conversation,
+        string? actionId,
+        bool approve,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(actionId))
+        {
+            await client.SendMessageAsync(
+                chatId,
+                approve
+                    ? "Укажи id действия: /approve <id>."
+                    : "Укажи id действия: /reject <id>.",
+                cancellationToken);
+            return;
+        }
+
+        if (_confirmationService is null)
+        {
+            await client.SendMessageAsync(
+                chatId,
+                "Confirmation service сейчас недоступен.",
+                cancellationToken);
+            return;
+        }
+
+        var result = approve
+            ? await _confirmationService.ApproveAsync(conversation, actionId, cancellationToken)
+            : await _confirmationService.RejectAsync(conversation, actionId, cancellationToken);
+
+        await client.SendMessageAsync(
+            chatId,
+            NormalizeTelegramText(result.Message),
             cancellationToken);
     }
 
@@ -107,59 +174,28 @@ public sealed class TelegramUpdateHandler
         ITelegramBotClientAdapter client,
         int updateId,
         long chatId,
-        string conversationKey,
+        DialogueConversation conversation,
         string text,
         CancellationToken cancellationToken)
     {
-        var maxMessages = GetMaxContextMessages();
-        var history = await _stateRepository.GetConversationMessagesAsync(
-            conversationKey,
-            maxMessages,
-            cancellationToken);
-
-        var now = DateTimeOffset.UtcNow;
-        var response = await _agentRuntime.SendAsync(
-            text,
-            AgentContext.Create(
-                correlationId: $"telegram-{updateId}",
-                conversationMessages: history),
+        var response = await _dialogueService.SendUserMessageAsync(
+            DialogueRequest.Create(
+                conversation,
+                text,
+                correlationId: $"telegram-{updateId}"),
             cancellationToken);
 
         await client.SendMessageAsync(
             chatId,
             NormalizeTelegramText(response.Text),
             cancellationToken);
-
-        if (!response.IsConfigured)
-        {
-            return;
-        }
-
-        await _stateRepository.AppendConversationMessagesAsync(
-            conversationKey,
-            new[]
-            {
-                new AgentConversationMessage(AgentConversationRole.User, text, now),
-                new AgentConversationMessage(AgentConversationRole.Assistant, response.Text, DateTimeOffset.UtcNow),
-            },
-            cancellationToken);
-
-        await _stateRepository.TrimConversationMessagesAsync(
-            conversationKey,
-            maxMessages,
-            cancellationToken);
     }
 
-    private int GetMaxContextMessages()
-    {
-        var maxTurns = Math.Clamp(_agentOptions.Value.ConversationContextMaxTurns, 0, 50);
-        return maxTurns * 2;
-    }
-
-    private string FormatStatus()
+    private async Task<string> FormatStatusAsync(CancellationToken cancellationToken)
     {
         var status = _statusTool.GetStatus();
         var runtimeHealth = _agentRuntime.GetHealth();
+        var mcpDiscovery = await _homeAssistantMcpClient.DiscoverAsync(cancellationToken);
         var runtimeText = runtimeHealth.IsConfigured
             ? "configured"
             : $"not configured ({runtimeHealth.Reason})";
@@ -171,22 +207,53 @@ public sealed class TelegramUpdateHandler
             $"LLM: {runtimeHealth.Provider} / {runtimeHealth.Model}",
             $"Uptime: {status.Uptime}",
             $"Configuration: {status.ConfigurationMode}",
-            $"Telegram allowlist users: {status.Configuration.AllowedTelegramUserCount}",
-            $"Context window: {_agentOptions.Value.ConversationContextMaxTurns} turns");
+            $"HA MCP: {FormatMcpStatus(mcpDiscovery)}",
+            $"Telegram allowlist users: {status.Configuration.AllowedTelegramUserCount}");
     }
+
+    private static string FormatMcpStatus(HomeAssistantMcpDiscoveryResult discovery) =>
+        discovery.Status switch
+        {
+            HomeAssistantMcpStatus.Reachable => $"reachable ({discovery.ToolCount} tools, {discovery.PromptCount} prompts)",
+            HomeAssistantMcpStatus.NotConfigured => $"not configured ({discovery.Reason})",
+            HomeAssistantMcpStatus.InvalidConfiguration => $"invalid configuration ({discovery.Reason})",
+            HomeAssistantMcpStatus.AuthFailed => "auth failed",
+            HomeAssistantMcpStatus.IntegrationMissing => "integration missing",
+            HomeAssistantMcpStatus.Unreachable => $"unreachable ({discovery.Reason})",
+            _ => $"error ({discovery.Reason})",
+        };
 
     private static bool IsAllowed(TelegramOptions telegramOptions, long userId) =>
         telegramOptions.AllowedUserIds.Contains(userId);
 
-    private static string CreateConversationKey(long chatId, long userId) =>
-        $"telegram:{chatId}:{userId}";
+    private static DialogueConversation CreateConversation(long chatId, long userId) =>
+        DialogueConversation.Create(
+            TelegramTransportName,
+            chatId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            userId.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
     private static bool IsCommand(string text, string command)
+    {
+        return TryReadCommandArgument(text, command, out _);
+    }
+
+    private static bool TryReadCommandArgument(
+        string text,
+        string command,
+        out string? argument)
     {
         var commandToken = text.Split(' ', 2, StringSplitOptions.TrimEntries)[0];
         var commandWithoutBotSuffix = commandToken.Split('@', 2, StringSplitOptions.TrimEntries)[0];
 
-        return string.Equals(commandWithoutBotSuffix, command, StringComparison.OrdinalIgnoreCase);
+        if (!string.Equals(commandWithoutBotSuffix, command, StringComparison.OrdinalIgnoreCase))
+        {
+            argument = null;
+            return false;
+        }
+
+        var parts = text.Split(' ', 2, StringSplitOptions.TrimEntries);
+        argument = parts.Length == 2 ? parts[1].Trim() : null;
+        return true;
     }
 
     private static string NormalizeTelegramText(string text)
