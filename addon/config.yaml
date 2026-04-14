@@ -1,5 +1,5 @@
 name: Home Assistant Personal Agent
-version: "0.1.0"
+version: "0.1.1"
 slug: ha_personal_agent
 description: Learning-first Microsoft Agent Framework assistant for Home Assistant.
 url: https://github.com/MaxMinsk/home-assistan-personal-agent/tree/main/addon
@@ -13,7 +13,7 @@ homeassistant_api: true
 image: ghcr.io/maxminsk/home-assistan-personal-agent
 options:
   telegram_bot_token: ""
-  allowed_telegram_user_ids: []
+  allowed_telegram_user_ids: ""
   ha_url: "http://supervisor/core"
   ha_long_lived_access_token: ""
   mcp_endpoint: "/api/mcp"
@@ -26,8 +26,7 @@ options:
   workspace_max_mb: 512
 schema:
   telegram_bot_token: password?
-  allowed_telegram_user_ids:
-    - int
+  allowed_telegram_user_ids: 'match(^\s*$|^\d+(\s*[,;\s]\s*\d+)*\s*$)'
   ha_url: url
   ha_long_lived_access_token: password?
   mcp_endpoint: str

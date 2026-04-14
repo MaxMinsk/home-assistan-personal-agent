@@ -87,6 +87,25 @@ public class ConfigurationTests
         }
     }
 
+    [Theory]
+    [InlineData("""{"allowed_telegram_user_ids": "123, 456 789"}""", new long[] { 123, 456, 789 })]
+    [InlineData("""{"allowed_telegram_user_ids": 93372553}""", new long[] { 93372553 })]
+    [InlineData("""{"allowed_telegram_user_ids": ""}""", new long[] { })]
+    public void Addon_options_mapper_accepts_ui_friendly_telegram_user_ids(
+        string json,
+        long[] expectedUserIds)
+    {
+        var mapped = HomeAssistantAddOnOptionsMapper.MapJson(json);
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(mapped)
+            .Build();
+
+        var telegramOptions = Bind<TelegramOptions>(configuration, TelegramOptions.SectionName);
+
+        Assert.Equal(expectedUserIds, telegramOptions.AllowedUserIds);
+    }
+
     [Fact]
     public void Environment_aliases_override_secret_values()
     {

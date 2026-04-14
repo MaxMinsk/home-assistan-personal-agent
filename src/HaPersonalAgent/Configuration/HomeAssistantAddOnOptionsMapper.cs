@@ -4,6 +4,8 @@ namespace HaPersonalAgent.Configuration;
 
 public static class HomeAssistantAddOnOptionsMapper
 {
+    private static readonly char[] TelegramUserIdSeparators = [',', ';', ' ', '\n', '\r', '\t'];
+
     private static readonly IReadOnlyDictionary<string, string> ScalarMappings =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -57,34 +59,67 @@ public static class HomeAssistantAddOnOptionsMapper
             }
         }
 
-        AddArray(root, "allowed_telegram_user_ids", $"{TelegramOptions.SectionName}:AllowedUserIds", mapped);
+        AddTelegramUserIds(root, mapped);
 
         return mapped;
     }
 
-    private static void AddArray(
-        JsonElement root,
-        string sourceKey,
-        string targetKey,
-        IDictionary<string, string?> mapped)
+    private static void AddTelegramUserIds(JsonElement root, IDictionary<string, string?> mapped)
     {
+        const string sourceKey = "allowed_telegram_user_ids";
+        const string targetKey = $"{TelegramOptions.SectionName}:AllowedUserIds";
+
         if (!root.TryGetProperty(sourceKey, out var sourceValue) ||
-            sourceValue.ValueKind != JsonValueKind.Array)
+            sourceValue.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
         {
             return;
         }
 
         var index = 0;
-        foreach (var item in sourceValue.EnumerateArray())
+        foreach (var value in EnumerateTelegramUserIds(sourceValue))
         {
-            var value = ConvertScalar(item);
-            if (value is null)
-            {
-                continue;
-            }
-
             mapped[$"{targetKey}:{index}"] = value;
             index++;
+        }
+    }
+
+    private static IEnumerable<string> EnumerateTelegramUserIds(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in value.EnumerateArray())
+            {
+                foreach (var userId in EnumerateTelegramUserIds(item))
+                {
+                    yield return userId;
+                }
+            }
+
+            yield break;
+        }
+
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            var rawValue = value.GetString();
+            if (string.IsNullOrWhiteSpace(rawValue))
+            {
+                yield break;
+            }
+
+            foreach (var token in rawValue.Split(
+                         TelegramUserIdSeparators,
+                         StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                yield return token;
+            }
+
+            yield break;
+        }
+
+        var scalarValue = ConvertScalar(value);
+        if (scalarValue is not null)
+        {
+            yield return scalarValue;
         }
     }
 

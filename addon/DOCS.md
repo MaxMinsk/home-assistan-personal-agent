@@ -5,7 +5,7 @@
 Use the Home Assistant app/add-on UI to set:
 
 - Telegram bot token
-- Allowed Telegram user IDs
+- Allowed Telegram user IDs, as a comma-separated string such as `93372553` or `93372553,12345`
 - Moonshot/Kimi API key
 - LLM base URL and model
 - Home Assistant MCP endpoint

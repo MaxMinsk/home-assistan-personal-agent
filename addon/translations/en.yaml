@@ -4,7 +4,7 @@ configuration:
     description: Bot token from BotFather.
   allowed_telegram_user_ids:
     name: Allowed Telegram user IDs
-    description: Telegram user IDs that can talk to the assistant.
+    description: Comma-separated Telegram user IDs that can talk to the assistant.
   ha_url:
     name: Home Assistant URL
     description: Home Assistant Core API proxy URL.

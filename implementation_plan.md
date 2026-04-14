@@ -202,7 +202,7 @@ home-assistant-personal-agent/
 
 ```yaml
 telegram_bot_token: ""
-allowed_telegram_user_ids: []
+allowed_telegram_user_ids: ""
 ha_url: "http://supervisor/core"
 ha_long_lived_access_token: ""
 mcp_endpoint: "/api/mcp"
