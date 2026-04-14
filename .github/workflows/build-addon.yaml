@@ -56,6 +56,9 @@ jobs:
           RAW_VERSION: ${{ steps.info.outputs.version }}
         run: |
           image="${RAW_IMAGE}"
+          image="${image%\"}"
+          image="${image#\"}"
+
           version="${RAW_VERSION}"
           version="${version%\"}"
           version="${version#\"}"
