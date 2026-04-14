@@ -2,6 +2,11 @@ using System.Text.Json;
 
 namespace HaPersonalAgent.Configuration;
 
+/// <summary>
+/// Что: преобразователь /data/options.json из Home Assistant add-on UI в обычные .NET configuration keys.
+/// Зачем: HA использует snake_case options, а приложение внутри работает с typed options и секциями Agent/Telegram/Llm/HomeAssistant.
+/// Как: scalar поля мапятся по таблице, а Telegram allowlist дополнительно принимает массив, строку или одиночное число для совместимости UI.
+/// </summary>
 public static class HomeAssistantAddOnOptionsMapper
 {
     private static readonly char[] TelegramUserIdSeparators = [',', ';', ' ', '\n', '\r', '\t'];

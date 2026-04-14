@@ -8,6 +8,41 @@
 
 ## Done
 
+### HAAG-005: Первый Microsoft Agent Framework spike
+
+Цель: изучить минимальный рабочий путь MAF в нашем проекте.
+
+- Создать `IAgentRuntime` и реализацию `AgentRuntime`.
+- Подключить `Microsoft.Agents.AI.OpenAI` к Moonshot/Kimi через OpenAI-compatible base URL.
+- Добавить первый безопасный tool: `status`.
+- Сделать простой request/response метод без Telegram.
+- Добавить cancellation token и correlation id в `AgentContext`.
+
+Acceptance criteria:
+
+- При наличии `MOONSHOT_API_KEY` локальная команда/тестовый runner получает ответ от модели.
+- Без `MOONSHOT_API_KEY` приложение стартует, но MAF health помечается как not configured.
+- Tool call `status` возвращает версию, uptime и режим конфигурации без секретов.
+
+Status: done. Added `IAgentRuntime`, `AgentRuntime`, `AgentContext`, safe `status` tool, OpenAI-compatible Moonshot wiring through Microsoft Agent Framework, and a local `ask` CLI runner. External Moonshot call is implemented but not executed automatically to avoid spending API quota.
+
+### HAAG-004: Добавить SQLite state store
+
+Цель: заложить минимальное состояние для Telegram offset и будущих confirmations.
+
+- Создать `SqliteConnectionFactory`.
+- Создать init/migration script для `/data/state.sqlite` или local dev path.
+- Создать `AgentStateRepository`.
+- Поддержать чтение/запись Telegram update offset.
+
+Acceptance criteria:
+
+- Тесты проверяют создание схемы на пустой базе.
+- Offset сохраняется и читается после пересоздания repository.
+- Путь к базе задается конфигом.
+
+Status: done. Added SQLite connection factory, idempotent schema initialization, and Telegram update offset persistence through `AgentStateRepository`.
+
 ### HAAG-009: Настроить CI, image build и version bump workflow
 
 Цель: автоматизировать проверку .NET проекта, сборку Home Assistant app image и обновление версии add-on.
@@ -120,37 +155,6 @@ Acceptance criteria:
 Status: done. Skeleton uses `net8.0` because local SDKs are `8.0.303` and `9.0.100`; see `docs/decisions/0001-target-framework.md`.
 
 ## Ready
-
-### HAAG-004: Добавить SQLite state store
-
-Цель: заложить минимальное состояние для Telegram offset и будущих confirmations.
-
-- Создать `SqliteConnectionFactory`.
-- Создать init/migration script для `/data/state.sqlite` или local dev path.
-- Создать `AgentStateRepository`.
-- Поддержать чтение/запись Telegram update offset.
-
-Acceptance criteria:
-
-- Тесты проверяют создание схемы на пустой базе.
-- Offset сохраняется и читается после пересоздания repository.
-- Путь к базе задается конфигом.
-
-### HAAG-005: Первый Microsoft Agent Framework spike
-
-Цель: изучить минимальный рабочий путь MAF в нашем проекте.
-
-- Создать `IAgentRuntime` и реализацию `AgentRuntime`.
-- Подключить `Microsoft.Agents.AI.OpenAI` к Moonshot/Kimi через OpenAI-compatible base URL.
-- Добавить первый безопасный tool: `status`.
-- Сделать простой request/response метод без Telegram.
-- Добавить cancellation token и correlation id в `AgentContext`.
-
-Acceptance criteria:
-
-- При наличии `MOONSHOT_API_KEY` локальная команда/тестовый runner получает ответ от модели.
-- Без `MOONSHOT_API_KEY` приложение стартует, но MAF health помечается как not configured.
-- Tool call `status` возвращает версию, uptime и режим конфигурации без секретов.
 
 ### HAAG-006: Telegram long polling skeleton
 

@@ -1,5 +1,10 @@
 namespace HaPersonalAgent.Configuration;
 
+/// <summary>
+/// Что: безопасный снимок текущей конфигурации без секретных значений.
+/// Зачем: статус нужен в логах, status tool и будущей команде /status, но токены нельзя выводить даже случайно.
+/// Как: From собирает только публичные поля и boolean-флаги configured/not configured из typed options.
+/// </summary>
 public sealed record ConfigurationStatus(
     string LlmProvider,
     string LlmBaseUrl,

@@ -10,9 +10,12 @@
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="8.0.25" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
     <PackageVersion Include="Microsoft.Extensions.Http" Version="8.0.1" />
+    <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="10.4.1" />
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.4.0" />
     <PackageVersion Include="ModelContextProtocol" Version="1.2.0" />
+    <PackageVersion Include="OpenAI" Version="2.9.1" />
+    <PackageVersion Include="System.ClientModel" Version="1.10.0" />
     <PackageVersion Include="Telegram.Bot" Version="22.9.6.1" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />

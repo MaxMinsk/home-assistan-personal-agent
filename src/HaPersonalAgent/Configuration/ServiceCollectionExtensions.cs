@@ -3,6 +3,11 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace HaPersonalAgent.Configuration;
 
+/// <summary>
+/// Что: DI-регистрация configuration слоя.
+/// Зачем: остальной код должен зависеть от typed options и сервисов, а не читать IConfiguration напрямую в каждом классе.
+/// Как: метод биндит секции конфигурации в options classes и регистрирует ConfigurationStatusProvider как singleton.
+/// </summary>
 public static class ServiceCollectionExtensions
 {
     public static IServiceCollection AddAgentConfiguration(

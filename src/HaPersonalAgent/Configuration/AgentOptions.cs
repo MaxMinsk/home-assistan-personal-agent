@@ -1,5 +1,10 @@
 namespace HaPersonalAgent.Configuration;
 
+/// <summary>
+/// Что: настройки самого agent-приложения, не привязанные к конкретной интеграции.
+/// Зачем: state database и workspace должны одинаково задаваться из appsettings, env и Home Assistant add-on UI.
+/// Как: класс биндингом заполняется из секции Agent, а значения по умолчанию соответствуют persisted директории /data в add-on.
+/// </summary>
 public sealed class AgentOptions
 {
     public const string SectionName = "Agent";

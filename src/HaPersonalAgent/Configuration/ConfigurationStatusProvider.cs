@@ -2,6 +2,11 @@ using Microsoft.Extensions.Options;
 
 namespace HaPersonalAgent.Configuration;
 
+/// <summary>
+/// Что: сервис для получения актуального безопасного статуса конфигурации.
+/// Зачем: потребителям не нужно знать обо всех typed options и повторять маскирование секретов.
+/// Как: через IOptions берет значения секций Agent, Telegram, Llm и HomeAssistant и собирает ConfigurationStatus.
+/// </summary>
 public sealed class ConfigurationStatusProvider
 {
     private readonly IOptions<AgentOptions> _agentOptions;

@@ -1,5 +1,10 @@
 namespace HaPersonalAgent.Configuration;
 
+/// <summary>
+/// Что: маппер коротких environment aliases в внутренние ключи .NET configuration.
+/// Зачем: локально удобнее задавать MOONSHOT_API_KEY и TELEGRAM_BOT_TOKEN, чем длинные HA_PERSONAL_AGENT_* ключи.
+/// Как: проходит по allowlist aliases и добавляет только непустые значения, не логируя и не раскрывая сами секреты.
+/// </summary>
 public static class EnvironmentOverridesMapper
 {
     private static readonly IReadOnlyDictionary<string, string> SecretAliases =

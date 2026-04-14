@@ -2,6 +2,11 @@ using HaPersonalAgent.Configuration;
 
 namespace HaPersonalAgent;
 
+/// <summary>
+/// Что: фоновый сервис, который удерживает Generic Host живым в add-on контейнере.
+/// Зачем: пока Telegram и MCP background services еще не подключены, процессу нужен один hosted service, иначе ему нечего выполнять.
+/// Как: при старте пишет безопасный статус конфигурации без секретов и затем ждет отмены токена остановки без heartbeat-спама.
+/// </summary>
 public class Worker : BackgroundService
 {
     private readonly ConfigurationStatusProvider _configurationStatusProvider;
@@ -22,14 +27,12 @@ public class Worker : BackgroundService
             ApplicationInfo.Name,
             _configurationStatusProvider.Create());
 
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            if (_logger.IsEnabled(LogLevel.Information))
-            {
-                _logger.LogInformation("Worker heartbeat at: {Time}", DateTimeOffset.UtcNow);
-            }
-
-            await Task.Delay(1000, stoppingToken);
+            await Task.Delay(Timeout.InfiniteTimeSpan, stoppingToken);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
         }
     }
 }

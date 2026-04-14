@@ -3,6 +3,11 @@ using Microsoft.Extensions.Configuration;
 
 namespace HaPersonalAgent.Tests;
 
+/// <summary>
+/// Что: тесты configuration слоя.
+/// Зачем: Home Assistant add-on options, env aliases и маскирование секретов являются критичным runtime-контрактом.
+/// Как: собирает IConfiguration из in-memory/temp источников и проверяет binding в typed options без реальных секретов.
+/// </summary>
 public class ConfigurationTests
 {
     [Fact]
