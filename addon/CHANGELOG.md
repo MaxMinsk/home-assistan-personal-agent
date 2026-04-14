@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.3
+
+- Add Telegram long polling dialogue MVP with `/start`, `/status`, and `/resetContext`.
+- Persist per-chat Telegram conversation context in SQLite and pass recent turns into the agent runtime.
+- Add memory strategy analysis: MVP uses last N turns plus rolling summary; vector memory is planned post-MVP.
+
 ## 0.1.2
 
 - Add the first Microsoft Agent Framework runtime spike with Moonshot/OpenAI-compatible wiring and a safe status tool.
