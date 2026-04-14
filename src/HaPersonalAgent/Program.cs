@@ -2,6 +2,7 @@ using HaPersonalAgent;
 using HaPersonalAgent.Agent;
 using HaPersonalAgent.Configuration;
 using HaPersonalAgent.Storage;
+using HaPersonalAgent.Telegram;
 using Microsoft.Extensions.DependencyInjection;
 
 var builder = Host.CreateApplicationBuilder(args);
@@ -14,6 +15,7 @@ builder.Configuration
 builder.Services.AddAgentConfiguration(builder.Configuration);
 builder.Services.AddAgentRuntime();
 builder.Services.AddAgentStorage();
+builder.Services.AddTelegramGateway();
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();

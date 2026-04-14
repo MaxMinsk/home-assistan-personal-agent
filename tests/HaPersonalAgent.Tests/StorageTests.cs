@@ -1,3 +1,4 @@
+using HaPersonalAgent.Agent;
 using HaPersonalAgent.Configuration;
 using HaPersonalAgent.Storage;
 using Microsoft.Data.Sqlite;
@@ -25,6 +26,113 @@ public class StorageTests
 
             Assert.True(File.Exists(databasePath));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "agent_state"));
+            Assert.Equal(1L, await CountTablesAsync(databasePath, "conversation_messages"));
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Conversation_messages_persist_after_repository_recreated()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var firstRepository = CreateRepository(databasePath);
+            await firstRepository.AppendConversationMessagesAsync(
+                "telegram:1:2",
+                new[]
+                {
+                    new AgentConversationMessage(AgentConversationRole.User, "hello", DateTimeOffset.UtcNow),
+                    new AgentConversationMessage(AgentConversationRole.Assistant, "hi", DateTimeOffset.UtcNow),
+                },
+                CancellationToken.None);
+
+            var secondRepository = CreateRepository(databasePath);
+            var messages = await secondRepository.GetConversationMessagesAsync(
+                "telegram:1:2",
+                limit: 10,
+                CancellationToken.None);
+
+            Assert.Collection(
+                messages,
+                message =>
+                {
+                    Assert.Equal(AgentConversationRole.User, message.Role);
+                    Assert.Equal("hello", message.Text);
+                },
+                message =>
+                {
+                    Assert.Equal(AgentConversationRole.Assistant, message.Role);
+                    Assert.Equal("hi", message.Text);
+                });
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Conversation_messages_returns_last_messages_in_chronological_order()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            await repository.AppendConversationMessagesAsync(
+                "telegram:1:2",
+                new[]
+                {
+                    new AgentConversationMessage(AgentConversationRole.User, "one", DateTimeOffset.UtcNow),
+                    new AgentConversationMessage(AgentConversationRole.Assistant, "two", DateTimeOffset.UtcNow),
+                    new AgentConversationMessage(AgentConversationRole.User, "three", DateTimeOffset.UtcNow),
+                    new AgentConversationMessage(AgentConversationRole.Assistant, "four", DateTimeOffset.UtcNow),
+                },
+                CancellationToken.None);
+
+            var messages = await repository.GetConversationMessagesAsync(
+                "telegram:1:2",
+                limit: 3,
+                CancellationToken.None);
+
+            Assert.Equal(new[] { "two", "three", "four" }, messages.Select(message => message.Text));
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Clear_conversation_messages_removes_only_selected_conversation()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            await repository.AppendConversationMessagesAsync(
+                "telegram:1:2",
+                new[] { new AgentConversationMessage(AgentConversationRole.User, "clear me", DateTimeOffset.UtcNow) },
+                CancellationToken.None);
+            await repository.AppendConversationMessagesAsync(
+                "telegram:3:4",
+                new[] { new AgentConversationMessage(AgentConversationRole.User, "keep me", DateTimeOffset.UtcNow) },
+                CancellationToken.None);
+
+            await repository.ClearConversationMessagesAsync("telegram:1:2", CancellationToken.None);
+
+            var cleared = await repository.GetConversationMessagesAsync("telegram:1:2", 10, CancellationToken.None);
+            var kept = await repository.GetConversationMessagesAsync("telegram:3:4", 10, CancellationToken.None);
+
+            Assert.Empty(cleared);
+            Assert.Single(kept);
+            Assert.Equal("keep me", kept[0].Text);
         }
         finally
         {

@@ -2,11 +2,56 @@
 
 ## Текущий фокус
 
-Первая порция задач нужна не для полноценного домашнего ассистента, а для учебного vertical slice по Microsoft Agent Framework: поднять C#/.NET skeleton, подключить Moonshot/Kimi через OpenAI-compatible provider, сделать первый tool и доставить ответ через Telegram.
+Первая порция задач нужна не для полноценного домашнего ассистента, а для учебного vertical slice по Microsoft Agent Framework: поднять C#/.NET skeleton, подключить Moonshot/Kimi через OpenAI-compatible provider, сделать первый tool и довести контекстный диалог через Telegram.
 
-Пока не берем: анализ камер, Frigate, полноценные Home Assistant write actions, сложную memory, UI, автоматический деплой на домашний сервер.
+Пока не берем: анализ камер, Frigate, полноценные Home Assistant write actions, vector memory, UI, автоматический деплой на домашний сервер.
 
 ## Done
+
+### HAAG-010: Memory strategy spike
+
+Цель: выбрать следующую форму памяти после Telegram MVP, чтобы агент не таскал весь контекст в каждый запрос.
+
+Decision:
+
+- Для MVP используем последние N turns + rolling summary для старых сообщений.
+- Храним это локально в SQLite внутри `/data/state.sqlite`.
+- `/resetContext` должен очищать и последние сообщения, и summary текущего Telegram chat/user.
+- Vector storage не включаем в MVP; вводим отдельной post-MVP задачей.
+
+Acceptance criteria:
+
+- Зафиксировать decision note с выбранной стратегией для следующего этапа.
+- Определить, что хранится локально в `/data`, как это сбрасывается и что нельзя отправлять в embeddings.
+- Выбрать минимальное хранилище для Home Assistant add-on: SQLite-only для MVP, vector storage отдельным post-MVP spike.
+
+Status: done. Decision captured in `agent_memory_analysis.md`: MVP memory is last N turns plus rolling summary; vector storage moves to `HAAG-011`.
+
+### HAAG-006: Telegram dialogue MVP с краткосрочным контекстом
+
+Цель: вести диалог с агентом из Telegram, сохраняя краткосрочный контекст беседы по chat/user и давая пользователю команду сброса.
+
+- Создать `TelegramBotGateway` как `BackgroundService`.
+- Добавить allowlist `allowed_telegram_user_ids`.
+- Реализовать обработку `/start`, `/status` и `/resetContext`.
+- Передавать обычные текстовые сообщения в `IAgentRuntime`.
+- Хранить историю диалога по Telegram chat/user в SQLite.
+- Ограничивать краткосрочный контекст последними N turns, чтобы не отправлять в модель всю историю.
+- Сохранять последний обработанный update offset в SQLite.
+- Игнорировать неразрешенных пользователей без раскрытия деталей.
+
+Acceptance criteria:
+
+- Бот отвечает только allowlisted пользователям.
+- Обычное текстовое сообщение получает ответ агента через настроенный Moonshot/OpenAI-compatible provider.
+- Follow-up сообщение может опираться на предыдущую реплику в том же Telegram chat.
+- Контекст беседы переживает рестарт приложения.
+- `/resetContext` очищает контекст только текущего Telegram chat/user, и следующий запрос не видит старую историю.
+- После рестарта старые updates не обрабатываются повторно.
+- `/status` использует тот же status tool/сервис, что и MAF spike.
+- Логи и ответы не раскрывают Telegram token, LLM API key и Home Assistant token.
+
+Status: done. Added Telegram long polling gateway, allowlist-based update handler, `/start`, `/status`, `/resetContext`, SQLite conversation history, bounded context window, and tests for handler/storage behavior.
 
 ### HAAG-005: Первый Microsoft Agent Framework spike
 
@@ -156,23 +201,27 @@ Status: done. Skeleton uses `net8.0` because local SDKs are `8.0.303` and `9.0.1
 
 ## Ready
 
-### HAAG-006: Telegram long polling skeleton
+### HAAG-011: Post-MVP vector memory spike
 
-Цель: доставить первый agent response через Telegram, но без сложной логики диалога.
+Цель: ввести vector storage и более качественную организацию памяти после проверки Telegram MVP.
 
-- Создать `TelegramBotGateway` как `BackgroundService`.
-- Добавить allowlist `allowed_telegram_user_ids`.
-- Реализовать обработку `/start` и `/status`.
-- Сохранять последний обработанный update offset в SQLite.
-- Игнорировать неразрешенных пользователей без раскрытия деталей.
+- Спроектировать `IMemoryStore` и `IEmbeddingGenerator` как порты приложения.
+- Описать `MemoryRecord`: scope, kind, text, source, conversation key, metadata, importance, ttl и embedding.
+- Сравнить local-first SQLite vector extension, Qdrant и pgvector для Home Assistant add-on.
+- Добавить policy удаления: `/resetContext` должен удалять vector records текущего chat/user.
+- Добавить redaction policy до embeddings: не embedding-овать токены и другие секреты.
+- Сделать retrieval pipeline: semantic score + recency + importance + source-type weighting.
 
 Acceptance criteria:
 
-- Бот отвечает только allowlisted пользователям.
-- После рестарта старые updates не обрабатываются повторно.
-- `/status` использует тот же status tool/сервис, что и MAF spike.
+- Есть decision note по выбранному vector store.
+- Есть минимальная реализация `IMemoryStore` с тестами без реального LLM/embedding provider.
+- Есть стратегия multi-arch packaging для Home Assistant add-on, если выбран native SQLite extension.
+- Reset и delete сценарии покрыты тестами.
 
 ## Backlog Later
+
+Остальные later items:
 
 - Home Assistant MCP discovery и read-only tools.
 - File workspace tool.

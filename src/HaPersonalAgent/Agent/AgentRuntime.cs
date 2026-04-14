@@ -6,6 +6,8 @@ using Microsoft.Extensions.Options;
 using OpenAI;
 using OpenAI.Chat;
 using System.ClientModel;
+using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
+using AiChatRole = Microsoft.Extensions.AI.ChatRole;
 
 namespace HaPersonalAgent.Agent;
 
@@ -93,7 +95,7 @@ public sealed class AgentRuntime : IAgentRuntime
         };
 
         var response = await agent.RunAsync(
-            message,
+            CreateMessages(message, context),
             session: null,
             options: runOptions,
             cancellationToken);
@@ -142,4 +144,33 @@ public sealed class AgentRuntime : IAgentRuntime
             loggerFactory: _loggerFactory,
             services: _serviceProvider);
     }
+
+    private static IReadOnlyList<AiChatMessage> CreateMessages(string message, AgentContext context)
+    {
+        var messages = new List<AiChatMessage>(context.ConversationMessages.Count + 1);
+
+        foreach (var conversationMessage in context.ConversationMessages)
+        {
+            if (string.IsNullOrWhiteSpace(conversationMessage.Text))
+            {
+                continue;
+            }
+
+            messages.Add(new AiChatMessage(
+                MapRole(conversationMessage.Role),
+                conversationMessage.Text));
+        }
+
+        messages.Add(new AiChatMessage(AiChatRole.User, message));
+
+        return messages;
+    }
+
+    private static AiChatRole MapRole(AgentConversationRole role) =>
+        role switch
+        {
+            AgentConversationRole.User => AiChatRole.User,
+            AgentConversationRole.Assistant => AiChatRole.Assistant,
+            _ => AiChatRole.User,
+        };
 }
