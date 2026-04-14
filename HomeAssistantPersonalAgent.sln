@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{2B79797F-9923-49BD-A446-BCE45F09AD89}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HaPersonalAgent", "src\HaPersonalAgent\HaPersonalAgent.csproj", "{FC2B0E16-391B-4046-BA18-2EB280D6C553}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{92FD5350-3CEB-4EF2-8D53-A2E875B19EEE}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "HaPersonalAgent.Tests", "tests\HaPersonalAgent.Tests\HaPersonalAgent.Tests.csproj", "{E56DB420-7FE3-4487-8491-E207276C7842}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{FC2B0E16-391B-4046-BA18-2EB280D6C553}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FC2B0E16-391B-4046-BA18-2EB280D6C553}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FC2B0E16-391B-4046-BA18-2EB280D6C553}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FC2B0E16-391B-4046-BA18-2EB280D6C553}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E56DB420-7FE3-4487-8491-E207276C7842}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E56DB420-7FE3-4487-8491-E207276C7842}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E56DB420-7FE3-4487-8491-E207276C7842}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E56DB420-7FE3-4487-8491-E207276C7842}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{FC2B0E16-391B-4046-BA18-2EB280D6C553} = {2B79797F-9923-49BD-A446-BCE45F09AD89}
+		{E56DB420-7FE3-4487-8491-E207276C7842} = {92FD5350-3CEB-4EF2-8D53-A2E875B19EEE}
+	EndGlobalSection
+EndGlobal
