@@ -38,7 +38,7 @@ jobs:
       name: ${{ steps.info.outputs.name }}
       registry_prefix: ${{ steps.normalize.outputs.registry_prefix }}
       url: ${{ steps.info.outputs.url }}
-      version: ${{ steps.info.outputs.version }}
+      version: ${{ steps.normalize.outputs.version }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v6.0.2
@@ -51,10 +51,18 @@ jobs:
 
       - name: Normalize image name
         id: normalize
+        env:
+          RAW_IMAGE: ${{ steps.info.outputs.image }}
+          RAW_VERSION: ${{ steps.info.outputs.version }}
         run: |
-          image=${{ steps.info.outputs.image }}
+          image="${RAW_IMAGE}"
+          version="${RAW_VERSION}"
+          version="${version%\"}"
+          version="${version#\"}"
+
           echo "image_name=${image##*/}" >> "$GITHUB_OUTPUT"
           echo "registry_prefix=${image%/*}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare multi-arch matrix
         id: matrix
