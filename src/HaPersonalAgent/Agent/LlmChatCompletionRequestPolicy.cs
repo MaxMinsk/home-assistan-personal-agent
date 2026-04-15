@@ -7,13 +7,20 @@ using System.Text.Json.Nodes;
 namespace HaPersonalAgent.Agent;
 
 /// <summary>
-/// Что: pipeline policy для OpenAI-compatible Moonshot/Kimi chat completions.
-/// Зачем: kimi-k2.5 включает thinking по умолчанию, а OpenAI/Microsoft.Extensions.AI tool-call history не содержит `reasoning_content`, из-за чего Moonshot может вернуть HTTP 400.
-/// Как: перед отправкой HTTP request добавляет в JSON body `thinking: { "type": "disabled" }`, не меняя остальную сериализацию SDK.
+/// Что: generic OpenAI-compatible request policy для provider-specific LLM extensions.
+/// Зачем: reasoning/thinking controls должны применяться по execution plan, а не через hardcoded Moonshot-only policy в AgentRuntime.
+/// Как: перед отправкой chat completions request аккуратно patch-ит JSON body, если provider capability объявил поддерживаемую schema.
 /// </summary>
-public sealed class MoonshotThinkingDisabledPolicy : PipelinePolicy
+public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+
+    private readonly LlmExecutionPlan _executionPlan;
+
+    public LlmChatCompletionRequestPolicy(LlmExecutionPlan executionPlan)
+    {
+        _executionPlan = executionPlan;
+    }
 
     public override void Process(
         PipelineMessage message,
@@ -33,9 +40,18 @@ public sealed class MoonshotThinkingDisabledPolicy : PipelinePolicy
         await ProcessNextAsync(message, pipeline, currentIndex);
     }
 
-    public static bool TryPatchRequestJson(string json, out string patchedJson)
+    public static bool TryPatchRequestJson(
+        string json,
+        LlmExecutionPlan executionPlan,
+        out string patchedJson)
     {
+        ArgumentNullException.ThrowIfNull(executionPlan);
+
         patchedJson = json;
+        if (!executionPlan.ShouldPatchChatCompletionRequest)
+        {
+            return false;
+        }
 
         JsonNode? rootNode;
         try
@@ -52,16 +68,46 @@ public sealed class MoonshotThinkingDisabledPolicy : PipelinePolicy
             return false;
         }
 
-        root["thinking"] = new JsonObject
+        if (!TryApplyThinkingControl(root, executionPlan))
         {
-            ["type"] = "disabled",
-        };
+            return false;
+        }
+
         patchedJson = root.ToJsonString(JsonOptions);
 
         return true;
     }
 
-    private static void PatchRequest(PipelineMessage message, CancellationToken cancellationToken)
+    private static bool TryApplyThinkingControl(
+        JsonObject root,
+        LlmExecutionPlan executionPlan)
+    {
+        if (executionPlan.Capabilities.ThinkingControlStyle != LlmThinkingControlStyle.OpenAiCompatibleThinkingObject)
+        {
+            return false;
+        }
+
+        var type = executionPlan.EffectiveThinkingMode switch
+        {
+            LlmEffectiveThinkingMode.Disabled => "disabled",
+            LlmEffectiveThinkingMode.Enabled => "enabled",
+            _ => null,
+        };
+
+        if (type is null)
+        {
+            return false;
+        }
+
+        root["thinking"] = new JsonObject
+        {
+            ["type"] = type,
+        };
+
+        return true;
+    }
+
+    private void PatchRequest(PipelineMessage message, CancellationToken cancellationToken)
     {
         if (!ShouldPatch(message.Request) || message.Request.Content is null)
         {
@@ -72,13 +118,13 @@ public sealed class MoonshotThinkingDisabledPolicy : PipelinePolicy
         message.Request.Content.WriteTo(stream, cancellationToken);
         var json = Encoding.UTF8.GetString(stream.ToArray());
 
-        if (TryPatchRequestJson(json, out var patchedJson))
+        if (TryPatchRequestJson(json, _executionPlan, out var patchedJson))
         {
             message.Request.Content = BinaryContent.Create(BinaryData.FromString(patchedJson));
         }
     }
 
-    private static async ValueTask PatchRequestAsync(
+    private async ValueTask PatchRequestAsync(
         PipelineMessage message,
         CancellationToken cancellationToken)
     {
@@ -91,7 +137,7 @@ public sealed class MoonshotThinkingDisabledPolicy : PipelinePolicy
         await message.Request.Content.WriteToAsync(stream, cancellationToken);
         var json = Encoding.UTF8.GetString(stream.ToArray());
 
-        if (TryPatchRequestJson(json, out var patchedJson))
+        if (TryPatchRequestJson(json, _executionPlan, out var patchedJson))
         {
             message.Request.Content = BinaryContent.Create(BinaryData.FromString(patchedJson));
         }

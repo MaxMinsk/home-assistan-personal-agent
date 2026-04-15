@@ -11,7 +11,8 @@ public sealed record AgentContext(
     string? ConversationKey = null,
     string? Transport = null,
     string? ConversationId = null,
-    string? ParticipantId = null)
+    string? ParticipantId = null,
+    LlmExecutionProfile ExecutionProfile = LlmExecutionProfile.ToolEnabled)
 {
     public static AgentContext Create(
         string? correlationId = null,
@@ -19,12 +20,14 @@ public sealed record AgentContext(
         string? conversationKey = null,
         string? transport = null,
         string? conversationId = null,
-        string? participantId = null) =>
+        string? participantId = null,
+        LlmExecutionProfile executionProfile = LlmExecutionProfile.ToolEnabled) =>
         new(
             string.IsNullOrWhiteSpace(correlationId) ? Guid.NewGuid().ToString("N") : correlationId,
             conversationMessages ?? Array.Empty<AgentConversationMessage>(),
             string.IsNullOrWhiteSpace(conversationKey) ? null : conversationKey.Trim(),
             string.IsNullOrWhiteSpace(transport) ? null : transport.Trim(),
             string.IsNullOrWhiteSpace(conversationId) ? null : conversationId.Trim(),
-            string.IsNullOrWhiteSpace(participantId) ? null : participantId.Trim());
+            string.IsNullOrWhiteSpace(participantId) ? null : participantId.Trim(),
+            executionProfile);
 }

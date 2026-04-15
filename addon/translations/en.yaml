@@ -26,6 +26,9 @@ configuration:
   llm_api_key:
     name: LLM API key
     description: API key for the configured LLM provider.
+  llm_thinking_mode:
+    name: LLM thinking mode
+    description: auto keeps tool calls stable, disabled forces no thinking when supported, enabled allows provider defaults unless explicit enable is supported.
   state_database_path:
     name: State database path
     description: SQLite database path for persistent agent state.

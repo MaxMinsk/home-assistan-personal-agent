@@ -22,6 +22,7 @@ public static class HomeAssistantAddOnOptionsMapper
             ["llm_base_url"] = $"{LlmOptions.SectionName}:BaseUrl",
             ["llm_model"] = $"{LlmOptions.SectionName}:Model",
             ["llm_api_key"] = $"{LlmOptions.SectionName}:ApiKey",
+            ["llm_thinking_mode"] = $"{LlmOptions.SectionName}:ThinkingMode",
             ["state_database_path"] = $"{AgentOptions.SectionName}:StateDatabasePath",
             ["workspace_path"] = $"{AgentOptions.SectionName}:WorkspacePath",
             ["workspace_max_mb"] = $"{AgentOptions.SectionName}:WorkspaceMaxMb",

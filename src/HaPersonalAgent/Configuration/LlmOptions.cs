@@ -2,8 +2,8 @@ namespace HaPersonalAgent.Configuration;
 
 /// <summary>
 /// Что: настройки LLM backend для Microsoft Agent Framework.
-/// Зачем: проект должен уметь стартовать с Moonshot/Kimi как OpenAI-compatible provider и позже переключаться на другой backend.
-/// Как: provider/base URL/model/API key приходят из конфигурации, а defaults настроены на Moonshot без Azure-зависимостей.
+/// Зачем: проект должен уметь стартовать с Moonshot/Kimi как OpenAI-compatible provider и позже переключаться на другой backend без переписывания runtime.
+/// Как: provider/base URL/model/API key/thinking mode приходят из конфигурации, а defaults настроены на Moonshot без Azure-зависимостей.
 /// </summary>
 public sealed class LlmOptions
 {
@@ -16,4 +16,6 @@ public sealed class LlmOptions
     public string Model { get; set; } = "kimi-k2.5";
 
     public string ApiKey { get; set; } = string.Empty;
+
+    public string ThinkingMode { get; set; } = LlmThinkingModes.Auto;
 }

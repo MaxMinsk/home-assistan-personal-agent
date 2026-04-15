@@ -12,6 +12,7 @@ public sealed record AgentRuntimeHealth(
     string Provider,
     string BaseUrl,
     string Model,
+    string ThinkingMode,
     string? Reason)
 {
     public static AgentRuntimeHealth Configured(LlmOptions options) =>
@@ -20,6 +21,7 @@ public sealed record AgentRuntimeHealth(
             options.Provider,
             options.BaseUrl,
             options.Model,
+            LlmThinkingModes.Normalize(options.ThinkingMode),
             Reason: null);
 
     public static AgentRuntimeHealth NotConfigured(LlmOptions options, string reason) =>
@@ -28,5 +30,6 @@ public sealed record AgentRuntimeHealth(
             options.Provider,
             options.BaseUrl,
             options.Model,
+            LlmThinkingModes.Normalize(options.ThinkingMode),
             reason);
 }

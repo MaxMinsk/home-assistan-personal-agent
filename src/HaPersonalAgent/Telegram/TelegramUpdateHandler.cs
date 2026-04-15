@@ -75,7 +75,7 @@ public sealed class TelegramUpdateHandler
         {
             await client.SendMessageAsync(
                 chatId,
-                "Привет. Пиши обычным текстом, я отвечу через агента. /status покажет статус, /resetContext очистит контекст этого чата. Для действий с домом используй /approve <id> или /reject <id>, когда агент попросит подтверждение.",
+                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /resetContext очистит контекст этого чата. Для действий с домом используй /approve <id> или /reject <id>, когда агент попросит подтверждение.",
                 cancellationToken);
             return;
         }
@@ -123,12 +123,35 @@ public sealed class TelegramUpdateHandler
             return;
         }
 
+        if (TryReadCommandArgument(text, "/think", out var deepReasoningText))
+        {
+            if (string.IsNullOrWhiteSpace(deepReasoningText))
+            {
+                await client.SendMessageAsync(
+                    chatId,
+                    "Укажи вопрос: /think <вопрос>. В этом режиме tools отключены.",
+                    cancellationToken);
+                return;
+            }
+
+            await HandleAgentMessageAsync(
+                client,
+                update.Id,
+                chatId,
+                conversation,
+                deepReasoningText,
+                LlmExecutionProfile.DeepReasoning,
+                cancellationToken);
+            return;
+        }
+
         await HandleAgentMessageAsync(
             client,
             update.Id,
             chatId,
             conversation,
             text,
+            LlmExecutionProfile.ToolEnabled,
             cancellationToken);
     }
 
@@ -176,13 +199,15 @@ public sealed class TelegramUpdateHandler
         long chatId,
         DialogueConversation conversation,
         string text,
+        LlmExecutionProfile executionProfile,
         CancellationToken cancellationToken)
     {
         var response = await _dialogueService.SendUserMessageAsync(
             DialogueRequest.Create(
                 conversation,
                 text,
-                correlationId: $"telegram-{updateId}"),
+                correlationId: $"telegram-{updateId}",
+                executionProfile: executionProfile),
             cancellationToken);
 
         await client.SendMessageAsync(
@@ -204,7 +229,7 @@ public sealed class TelegramUpdateHandler
             Environment.NewLine,
             $"{status.ApplicationName} {status.Version}",
             $"Runtime: {runtimeText}",
-            $"LLM: {runtimeHealth.Provider} / {runtimeHealth.Model}",
+            $"LLM: {runtimeHealth.Provider} / {runtimeHealth.Model} / thinking {runtimeHealth.ThinkingMode}",
             $"Uptime: {status.Uptime}",
             $"Configuration: {status.ConfigurationMode}",
             $"HA MCP: {FormatMcpStatus(mcpDiscovery)}",

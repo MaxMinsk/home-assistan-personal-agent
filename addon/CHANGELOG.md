@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.3
+
+- Add provider-agnostic LLM capability profiles and adaptive execution planner for `tool-enabled`, `pure chat`, and `deep reasoning` runs.
+- Add `llm_thinking_mode` (`auto|disabled|enabled`) to Home Assistant add-on UI/options mapping and status diagnostics.
+- Add Telegram `/think` command for no-tools deep reasoning mode with transport-agnostic execution profile wiring.
+- Replace Moonshot-only thinking patch with generic chat completion request policy.
+- Add per-run `ReasoningContentReplayChatClient` middleware to capture/replay reasoning content across tool-call steps.
+- Keep Moonshot tool-enabled `auto` mode on provider-default thinking when reasoning replay is available.
+- Add tests for planner selection, request policy behavior, deep reasoning command, and reasoning replay middleware.
+
 ## 0.2.2
 
 - Treat Home Assistant `GetLiveContext` as read-only so state questions can run without approval.

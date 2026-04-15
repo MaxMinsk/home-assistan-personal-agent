@@ -1,5 +1,5 @@
 name: Home Assistant Personal Agent
-version: "0.2.2"
+version: "0.2.3"
 slug: ha_personal_agent
 description: Learning-first Microsoft Agent Framework assistant for Home Assistant.
 url: https://github.com/MaxMinsk/home-assistan-personal-agent/tree/main/addon
@@ -21,6 +21,7 @@ options:
   llm_base_url: "https://api.moonshot.ai/v1"
   llm_model: "kimi-k2.5"
   llm_api_key: ""
+  llm_thinking_mode: "auto"
   state_database_path: "/data/state.sqlite"
   workspace_path: "/data/workspace"
   workspace_max_mb: 512
@@ -34,6 +35,7 @@ schema:
   llm_base_url: url
   llm_model: str
   llm_api_key: password?
+  llm_thinking_mode: list(auto|disabled|enabled)
   state_database_path: str
   workspace_path: str
   workspace_max_mb: int(64,4096)

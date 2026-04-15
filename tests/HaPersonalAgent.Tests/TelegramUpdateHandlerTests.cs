@@ -165,6 +165,35 @@ public class TelegramUpdateHandlerTests
                 CancellationToken.None);
 
             Assert.Contains("HA MCP: reachable (1 tools, 1 prompts)", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("thinking auto", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Think_command_invokes_deep_reasoning_profile_without_command_prefix()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var runtime = new FakeAgentRuntime("deep answer");
+            var handler = CreateHandler(CreateRepository(databasePath), runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 18, chatId: 200, userId: 100, text: "/think сравни два подхода"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Single(runtime.Calls);
+            Assert.Equal("сравни два подхода", runtime.Calls.Single().Message);
+            Assert.Equal(LlmExecutionProfile.DeepReasoning, runtime.Calls.Single().Context.ExecutionProfile);
+            Assert.Equal("deep answer", adapter.SentMessages.Single().Text);
         }
         finally
         {

@@ -17,8 +17,8 @@ namespace HaPersonalAgent.Agent;
 
 /// <summary>
 /// Что: первая реализация runtime поверх Microsoft Agent Framework.
-/// Зачем: нужен учебный vertical slice, который создает MAF ChatClientAgent, подключает Moonshot и дает агенту безопасные tools.
-/// Как: на каждый run собирает status tool, read-only MCP tools и optional confirmation proposal tool, затем запускает ChatClientAgent без привязки к Telegram.
+/// Зачем: нужен учебный vertical slice, который создает MAF ChatClientAgent, подключает OpenAI-compatible LLM и дает агенту безопасные tools.
+/// Как: на каждый run выбирает LLM execution plan, собирает tools по профилю и запускает ChatClientAgent без привязки к Telegram.
 /// </summary>
 public sealed class AgentRuntime : IAgentRuntime
 {
@@ -37,6 +37,7 @@ public sealed class AgentRuntime : IAgentRuntime
     private readonly IConfirmationService? _confirmationService;
     private readonly IHomeAssistantMcpAgentToolProvider? _homeAssistantMcpToolProvider;
     private readonly HomeAssistantMcpStatusTool? _homeAssistantMcpStatusTool;
+    private readonly LlmExecutionPlanner _executionPlanner;
     private readonly ILogger<AgentRuntime> _logger;
     private readonly ILoggerFactory _loggerFactory;
     private readonly IOptions<LlmOptions> _llmOptions;
@@ -46,6 +47,7 @@ public sealed class AgentRuntime : IAgentRuntime
     public AgentRuntime(
         IOptions<LlmOptions> llmOptions,
         AgentStatusTool statusTool,
+        LlmExecutionPlanner executionPlanner,
         ILoggerFactory loggerFactory,
         IServiceProvider serviceProvider,
         IHomeAssistantMcpAgentToolProvider? homeAssistantMcpToolProvider = null,
@@ -54,6 +56,7 @@ public sealed class AgentRuntime : IAgentRuntime
     {
         _llmOptions = llmOptions;
         _statusTool = statusTool;
+        _executionPlanner = executionPlanner;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<AgentRuntime>();
         _serviceProvider = serviceProvider;
@@ -81,6 +84,11 @@ public sealed class AgentRuntime : IAgentRuntime
             return AgentRuntimeHealth.NotConfigured(options, "Llm:Model is missing.");
         }
 
+        if (!LlmThinkingModes.IsValid(options.ThinkingMode))
+        {
+            return AgentRuntimeHealth.NotConfigured(options, "Llm:ThinkingMode must be one of: auto, disabled, enabled.");
+        }
+
         return AgentRuntimeHealth.Configured(options);
     }
 
@@ -102,18 +110,26 @@ public sealed class AgentRuntime : IAgentRuntime
                 health);
         }
 
-        await using var homeAssistantMcpTools = await CreateHomeAssistantMcpToolsAsync(cancellationToken);
+        var executionPlan = _executionPlanner.CreatePlan(_llmOptions.Value, context.ExecutionProfile);
+        await using var homeAssistantMcpTools = await CreateHomeAssistantMcpToolsAsync(
+            executionPlan,
+            cancellationToken);
         _logger.LogInformation(
-            "Agent run {CorrelationId} starting with provider {Provider}, model {Model}, history messages {HistoryMessageCount}, MCP status {McpStatus}, read-only MCP tools {ReadOnlyToolCount}, confirmation MCP tools {ConfirmationToolCount}.",
+            "Agent run {CorrelationId} starting with provider {Provider}, model {Model}, profile {ExecutionProfile}, provider profile {ProviderProfile}, thinking requested {RequestedThinkingMode}, thinking effective {EffectiveThinkingMode}, thinking reason {ThinkingReason}, history messages {HistoryMessageCount}, MCP status {McpStatus}, read-only MCP tools {ReadOnlyToolCount}, confirmation MCP tools {ConfirmationToolCount}.",
             context.CorrelationId,
             health.Provider,
             health.Model,
+            executionPlan.Profile,
+            executionPlan.Capabilities.ProviderKey,
+            executionPlan.RequestedThinkingMode,
+            executionPlan.EffectiveThinkingMode,
+            executionPlan.Reason,
             context.ConversationMessages.Count,
             homeAssistantMcpTools.Status,
             homeAssistantMcpTools.ExposedToolCount,
             homeAssistantMcpTools.ConfirmationRequiredTools.Count);
 
-        var agent = CreateAgent(_llmOptions.Value, homeAssistantMcpTools, context);
+        var agent = CreateAgent(_llmOptions.Value, homeAssistantMcpTools, context, executionPlan);
         var runOptions = new ChatClientAgentRunOptions(new ChatOptions())
         {
             AdditionalProperties = new AdditionalPropertiesDictionary
@@ -186,12 +202,21 @@ public sealed class AgentRuntime : IAgentRuntime
     private ChatClientAgent CreateAgent(
         LlmOptions options,
         HomeAssistantMcpAgentToolSet homeAssistantMcpTools,
-        AgentContext context)
+        AgentContext context,
+        LlmExecutionPlan executionPlan)
     {
         var chatClient = new ChatClient(
             model: options.Model,
             credential: new ApiKeyCredential(options.ApiKey),
-            options: CreateOpenAIClientOptions(options));
+            options: CreateOpenAIClientOptions(options, executionPlan));
+        IChatClient aiChatClient = chatClient.AsIChatClient();
+        if (executionPlan.UsesTools
+            && executionPlan.Capabilities.RequiresReasoningContentRoundTripForToolCalls)
+        {
+            aiChatClient = new ReasoningContentReplayChatClient(
+                aiChatClient,
+                _loggerFactory.CreateLogger<ReasoningContentReplayChatClient>());
+        }
 
         var statusTool = AIFunctionFactory.Create(
             (Func<AgentStatusSnapshot>)_statusTool.GetStatus,
@@ -199,32 +224,33 @@ public sealed class AgentRuntime : IAgentRuntime
             description: "Returns non-secret application version, uptime, configuration mode, and health details.",
             serializerOptions: null);
 
-        var tools = new List<AITool>(homeAssistantMcpTools.Tools.Count + 2)
+        var tools = new List<AITool>();
+        if (executionPlan.UsesTools)
         {
-            statusTool,
-        };
+            tools.Add(statusTool);
 
-        if (_homeAssistantMcpStatusTool is not null)
-        {
-            tools.Add(AIFunctionFactory.Create(
-                (Func<CancellationToken, Task<HomeAssistantMcpDiscoveryResult>>)_homeAssistantMcpStatusTool.GetStatusAsync,
-                name: "home_assistant_mcp_status",
-                description: "Returns Home Assistant MCP reachability, auth state, endpoint, and discovered tools/prompts without revealing tokens.",
-                serializerOptions: null));
+            if (_homeAssistantMcpStatusTool is not null)
+            {
+                tools.Add(AIFunctionFactory.Create(
+                    (Func<CancellationToken, Task<HomeAssistantMcpDiscoveryResult>>)_homeAssistantMcpStatusTool.GetStatusAsync,
+                    name: "home_assistant_mcp_status",
+                    description: "Returns Home Assistant MCP reachability, auth state, endpoint, and discovered tools/prompts without revealing tokens.",
+                    serializerOptions: null));
+            }
+
+            tools.AddRange(homeAssistantMcpTools.Tools);
+
+            if (_confirmationService is not null
+                && homeAssistantMcpTools.ConfirmationRequiredTools.Count > 0)
+            {
+                tools.Add(CreateHomeAssistantActionProposalTool(
+                    context,
+                    homeAssistantMcpTools.ConfirmationRequiredTools));
+            }
         }
 
-        tools.AddRange(homeAssistantMcpTools.Tools);
-
-        if (_confirmationService is not null
-            && homeAssistantMcpTools.ConfirmationRequiredTools.Count > 0)
-        {
-            tools.Add(CreateHomeAssistantActionProposalTool(
-                context,
-                homeAssistantMcpTools.ConfirmationRequiredTools));
-        }
-
-        return chatClient.AsAIAgent(
-            instructions: CreateInstructions(homeAssistantMcpTools),
+        return aiChatClient.AsAIAgent(
+            instructions: CreateInstructions(homeAssistantMcpTools, executionPlan),
             name: "ha_personal_agent",
             description: "Learning-first personal assistant for Home Assistant.",
             tools: tools,
@@ -232,16 +258,20 @@ public sealed class AgentRuntime : IAgentRuntime
             services: _serviceProvider);
     }
 
-    private static OpenAIClientOptions CreateOpenAIClientOptions(LlmOptions options)
+    private static OpenAIClientOptions CreateOpenAIClientOptions(
+        LlmOptions options,
+        LlmExecutionPlan executionPlan)
     {
         var clientOptions = new OpenAIClientOptions
         {
             Endpoint = new Uri(options.BaseUrl),
         };
 
-        if (IsMoonshotProvider(options))
+        if (executionPlan.ShouldPatchChatCompletionRequest)
         {
-            clientOptions.AddPolicy(new MoonshotThinkingDisabledPolicy(), PipelinePosition.BeforeTransport);
+            clientOptions.AddPolicy(
+                new LlmChatCompletionRequestPolicy(executionPlan),
+                PipelinePosition.BeforeTransport);
         }
 
         return clientOptions;
@@ -286,8 +316,20 @@ public sealed class AgentRuntime : IAgentRuntime
     }
 
     private async Task<HomeAssistantMcpAgentToolSet> CreateHomeAssistantMcpToolsAsync(
+        LlmExecutionPlan executionPlan,
         CancellationToken cancellationToken)
     {
+        if (!executionPlan.UsesTools)
+        {
+            _logger.LogInformation(
+                "Agent run profile {ExecutionProfile} disables all tools for this run.",
+                executionPlan.Profile);
+
+            return HomeAssistantMcpAgentToolSet.Unavailable(
+                HomeAssistantMcpStatus.NotConfigured,
+                $"Tools are disabled for {executionPlan.Profile} profile.");
+        }
+
         if (_homeAssistantMcpToolProvider is null)
         {
             _logger.LogInformation(
@@ -330,9 +372,21 @@ public sealed class AgentRuntime : IAgentRuntime
             _ => AiChatRole.User,
         };
 
-    private string CreateInstructions(HomeAssistantMcpAgentToolSet homeAssistantMcpTools)
+    private string CreateInstructions(
+        HomeAssistantMcpAgentToolSet homeAssistantMcpTools,
+        LlmExecutionPlan executionPlan)
     {
         var instructions = new StringBuilder(Instructions);
+
+        if (!executionPlan.UsesTools)
+        {
+            instructions.AppendLine();
+            instructions.AppendLine(
+                "This run uses a no-tools profile. Do not claim to inspect Home Assistant, call tools, read files, or control devices.");
+            instructions.AppendLine(
+                "If the user asks for live home state or control, explain that this requires the normal tool-enabled dialogue profile.");
+            return instructions.ToString();
+        }
 
         if (_confirmationService is not null
             && homeAssistantMcpTools.ConfirmationRequiredTools.Count > 0)
@@ -352,10 +406,6 @@ public sealed class AgentRuntime : IAgentRuntime
 
         return instructions.ToString();
     }
-
-    private static bool IsMoonshotProvider(LlmOptions options) =>
-        string.Equals(options.Provider, "moonshot", StringComparison.OrdinalIgnoreCase)
-        || options.BaseUrl.Contains("moonshot.ai", StringComparison.OrdinalIgnoreCase);
 
     private static string FormatToolList(
         IReadOnlyCollection<HomeAssistantMcpItemInfo> tools,

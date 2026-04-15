@@ -20,6 +20,7 @@ public class ConfigurationTests
         Assert.Equal("moonshot", llmOptions.Provider);
         Assert.Equal("https://api.moonshot.ai/v1", llmOptions.BaseUrl);
         Assert.Equal("kimi-k2.5", llmOptions.Model);
+        Assert.Equal(LlmThinkingModes.Auto, llmOptions.ThinkingMode);
         Assert.Equal("/data/state.sqlite", agentOptions.StateDatabasePath);
         Assert.Equal("/data/workspace", agentOptions.WorkspacePath);
         Assert.Equal("http://supervisor/core", homeAssistantOptions.Url);
@@ -61,6 +62,7 @@ public class ConfigurationTests
                   "llm_base_url": "https://api.moonshot.ai/v1",
                   "llm_model": "kimi-k2.5",
                   "llm_api_key": "moonshot-secret",
+                  "llm_thinking_mode": "disabled",
                   "state_database_path": "/tmp/state.sqlite",
                   "workspace_path": "/tmp/workspace",
                   "workspace_max_mb": 128
@@ -80,6 +82,7 @@ public class ConfigurationTests
             Assert.Equal(new long[] { 123, 456 }, telegramOptions.AllowedUserIds);
             Assert.Equal("moonshot-secret", llmOptions.ApiKey);
             Assert.Equal("kimi-k2.5", llmOptions.Model);
+            Assert.Equal(LlmThinkingModes.Disabled, llmOptions.ThinkingMode);
             Assert.Equal("http://homeassistant.local:8123", homeAssistantOptions.Url);
             Assert.Equal("ha-secret", homeAssistantOptions.LongLivedAccessToken);
             Assert.Equal("/tmp/state.sqlite", agentOptions.StateDatabasePath);
@@ -162,6 +165,7 @@ public class ConfigurationTests
         var statusText = status.ToString();
 
         Assert.True(status.LlmApiKeyConfigured);
+        Assert.Equal(LlmThinkingModes.Auto, status.LlmThinkingMode);
         Assert.True(status.TelegramBotTokenConfigured);
         Assert.True(status.HomeAssistantTokenConfigured);
         Assert.DoesNotContain("moonshot-secret", statusText);

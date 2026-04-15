@@ -34,6 +34,21 @@ public class AgentRuntimeTests
     }
 
     [Fact]
+    public void Runtime_reports_not_configured_with_invalid_thinking_mode()
+    {
+        var runtime = CreateRuntime(new LlmOptions
+        {
+            ApiKey = "configured",
+            ThinkingMode = "always",
+        });
+
+        var health = runtime.GetHealth();
+
+        Assert.False(health.IsConfigured);
+        Assert.Contains("ThinkingMode", health.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Status_tool_returns_safe_status_without_raw_secrets()
     {
         var statusProvider = CreateConfigurationStatusProvider(
@@ -65,19 +80,152 @@ public class AgentRuntimeTests
     }
 
     [Fact]
-    public void Moonshot_policy_adds_disabled_thinking_to_chat_completion_body()
+    public void Planner_uses_provider_default_for_moonshot_tool_enabled_auto_when_roundtrip_supported()
     {
-        var patched = MoonshotThinkingDisabledPolicy.TryPatchRequestJson(
+        var plan = CreatePlanner().CreatePlan(
+            new LlmOptions
+            {
+                Provider = "moonshot",
+                BaseUrl = "https://api.moonshot.ai/v1",
+                ThinkingMode = LlmThinkingModes.Auto,
+            },
+            LlmExecutionProfile.ToolEnabled);
+        var patched = LlmChatCompletionRequestPolicy.TryPatchRequestJson(
             """
             {"model":"kimi-k2.5","messages":[]}
             """,
+            plan,
+            out _);
+
+        Assert.Equal(LlmEffectiveThinkingMode.ProviderDefault, plan.EffectiveThinkingMode);
+        Assert.False(patched);
+    }
+
+    [Fact]
+    public void Planner_does_not_force_disabled_thinking_for_moonshot_pure_chat_auto()
+    {
+        var plan = CreatePlanner().CreatePlan(
+            new LlmOptions
+            {
+                Provider = "moonshot",
+                BaseUrl = "https://api.moonshot.ai/v1",
+                ThinkingMode = LlmThinkingModes.Auto,
+            },
+            LlmExecutionProfile.PureChat);
+
+        var patched = LlmChatCompletionRequestPolicy.TryPatchRequestJson(
+            """
+            {"model":"kimi-k2.5","messages":[]}
+            """,
+            plan,
+            out _);
+
+        Assert.Equal(LlmEffectiveThinkingMode.ProviderDefault, plan.EffectiveThinkingMode);
+        Assert.False(patched);
+    }
+
+    [Fact]
+    public void Planner_respects_explicit_disabled_mode_for_moonshot()
+    {
+        var plan = CreatePlanner().CreatePlan(
+            new LlmOptions
+            {
+                Provider = "moonshot",
+                BaseUrl = "https://api.moonshot.ai/v1",
+                ThinkingMode = LlmThinkingModes.Disabled,
+            },
+            LlmExecutionProfile.ToolEnabled);
+
+        var patched = LlmChatCompletionRequestPolicy.TryPatchRequestJson(
+            """
+            {"model":"kimi-k2.5","messages":[]}
+            """,
+            plan,
+            out var patchedJson);
+
+        using var document = JsonDocument.Parse(patchedJson);
+
+        Assert.Equal(LlmEffectiveThinkingMode.Disabled, plan.EffectiveThinkingMode);
+        Assert.True(patched);
+        Assert.Equal("disabled", document.RootElement.GetProperty("thinking").GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void Planner_keeps_generic_openai_compatible_provider_unpatched()
+    {
+        var plan = CreatePlanner().CreatePlan(
+            new LlmOptions
+            {
+                Provider = "openai-compatible",
+                BaseUrl = "https://llm.local/v1",
+                ThinkingMode = LlmThinkingModes.Disabled,
+            },
+            LlmExecutionProfile.ToolEnabled);
+
+        var patched = LlmChatCompletionRequestPolicy.TryPatchRequestJson(
+            """
+            {"model":"local-model","messages":[]}
+            """,
+            plan,
+            out _);
+
+        Assert.Equal("openai-compatible", plan.Capabilities.ProviderKey);
+        Assert.Equal(LlmEffectiveThinkingMode.ProviderDefault, plan.EffectiveThinkingMode);
+        Assert.False(patched);
+    }
+
+    [Fact]
+    public void Planner_uses_provider_default_for_moonshot_enabled_deep_reasoning()
+    {
+        var plan = CreatePlanner().CreatePlan(
+            new LlmOptions
+            {
+                Provider = "moonshot",
+                BaseUrl = "https://api.moonshot.ai/v1",
+                ThinkingMode = LlmThinkingModes.Enabled,
+            },
+            LlmExecutionProfile.DeepReasoning);
+
+        var patched = LlmChatCompletionRequestPolicy.TryPatchRequestJson(
+            """
+            {"model":"kimi-k2.5","messages":[]}
+            """,
+            plan,
+            out _);
+
+        Assert.Equal(LlmEffectiveThinkingMode.ProviderDefault, plan.EffectiveThinkingMode);
+        Assert.False(patched);
+    }
+
+    [Fact]
+    public void Policy_can_emit_enabled_when_provider_profile_supports_explicit_enable()
+    {
+        var plan = new LlmExecutionPlan(
+            LlmExecutionProfile.DeepReasoning,
+            new LlmProviderCapabilities(
+                ProviderKey: "test-provider",
+                SupportsTools: true,
+                SupportsStreaming: true,
+                SupportsReasoning: true,
+                RequiresReasoningContentRoundTripForToolCalls: false,
+                SupportsReasoningContentRoundTrip: false,
+                SupportsExplicitThinkingEnable: true,
+                ThinkingControlStyle: LlmThinkingControlStyle.OpenAiCompatibleThinkingObject),
+            LlmThinkingModes.Enabled,
+            LlmEffectiveThinkingMode.Enabled,
+            "test");
+
+        var patched = LlmChatCompletionRequestPolicy.TryPatchRequestJson(
+            """
+            {"model":"test-model","messages":[]}
+            """,
+            plan,
             out var patchedJson);
 
         using var document = JsonDocument.Parse(patchedJson);
 
         Assert.True(patched);
-        Assert.Equal("kimi-k2.5", document.RootElement.GetProperty("model").GetString());
-        Assert.Equal("disabled", document.RootElement.GetProperty("thinking").GetProperty("type").GetString());
+        Assert.Equal("enabled", document.RootElement.GetProperty("thinking").GetProperty("type").GetString());
     }
 
     private static AgentRuntime CreateRuntime(LlmOptions llmOptions)
@@ -91,9 +239,13 @@ public class AgentRuntimeTests
         return new AgentRuntime(
             Options.Create(llmOptions),
             new AgentStatusTool(statusProvider),
+            CreatePlanner(),
             LoggerFactory.Create(_ => { }),
             serviceProvider: new EmptyServiceProvider());
     }
+
+    private static LlmExecutionPlanner CreatePlanner() =>
+        new(new LlmProviderCapabilitiesResolver());
 
     private static ConfigurationStatusProvider CreateConfigurationStatusProvider(
         LlmOptions llmOptions,

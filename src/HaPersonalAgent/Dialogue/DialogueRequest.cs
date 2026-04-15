@@ -1,19 +1,23 @@
+using HaPersonalAgent.Agent;
+
 namespace HaPersonalAgent.Dialogue;
 
 /// <summary>
 /// Что: входящий пользовательский запрос к диалогу с агентом.
-/// Зачем: transport adapters должны передавать в core слой не Telegram DTO, а общий request с conversation reference и correlation id.
+/// Зачем: transport adapters должны передавать в core слой не Telegram DTO, а общий request с conversation reference, correlation id и execution profile.
 /// Как: Create валидирует текст, создает correlation id при необходимости и оставляет transport-specific детали внутри DialogueConversation.
 /// </summary>
 public sealed record DialogueRequest(
     DialogueConversation Conversation,
     string Text,
-    string CorrelationId)
+    string CorrelationId,
+    LlmExecutionProfile ExecutionProfile)
 {
     public static DialogueRequest Create(
         DialogueConversation conversation,
         string text,
-        string? correlationId = null)
+        string? correlationId = null,
+        LlmExecutionProfile executionProfile = LlmExecutionProfile.ToolEnabled)
     {
         ArgumentNullException.ThrowIfNull(conversation);
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
@@ -21,6 +25,7 @@ public sealed record DialogueRequest(
         return new DialogueRequest(
             conversation,
             text.Trim(),
-            string.IsNullOrWhiteSpace(correlationId) ? Guid.NewGuid().ToString("N") : correlationId.Trim());
+            string.IsNullOrWhiteSpace(correlationId) ? Guid.NewGuid().ToString("N") : correlationId.Trim(),
+            executionProfile);
     }
 }

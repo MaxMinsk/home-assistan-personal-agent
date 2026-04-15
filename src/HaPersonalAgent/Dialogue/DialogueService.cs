@@ -55,7 +55,8 @@ public sealed class DialogueService
                     conversationKey: conversationKey,
                     transport: request.Conversation.Transport,
                     conversationId: request.Conversation.ConversationId,
-                    participantId: request.Conversation.ParticipantId),
+                    participantId: request.Conversation.ParticipantId,
+                    executionProfile: request.ExecutionProfile),
                 cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
