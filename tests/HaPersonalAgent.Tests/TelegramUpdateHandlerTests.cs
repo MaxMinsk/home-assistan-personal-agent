@@ -235,7 +235,7 @@ public class TelegramUpdateHandlerTests
             var refreshedSummary = await repository.GetConversationSummaryAsync("telegram:200:100", CancellationToken.None);
 
             Assert.Single(runtime.Calls);
-            Assert.Equal(LlmExecutionProfile.PureChat, runtime.Calls.Single().Context.ExecutionProfile);
+            Assert.Equal(LlmExecutionProfile.Summarization, runtime.Calls.Single().Context.ExecutionProfile);
             Assert.True(runtime.Calls.Single().Context.ForcePersistedSummaryRefresh);
             Assert.Equal(2, stored.Count);
             Assert.NotNull(refreshedSummary);

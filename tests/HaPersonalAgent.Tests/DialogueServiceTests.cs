@@ -409,7 +409,7 @@ public class DialogueServiceTests
                 CancellationToken.None);
 
             Assert.Single(runtime.Calls);
-            Assert.Equal(LlmExecutionProfile.PureChat, runtime.Calls[0].Context.ExecutionProfile);
+            Assert.Equal(LlmExecutionProfile.Summarization, runtime.Calls[0].Context.ExecutionProfile);
             Assert.True(runtime.Calls[0].Context.ShouldRefreshPersistedSummary);
             Assert.True(runtime.Calls[0].Context.ForcePersistedSummaryRefresh);
             Assert.Equal(2, stored.Count);

@@ -331,7 +331,7 @@ public sealed class AgentRuntime : IAgentRuntime
     {
         var summarizationExecutionPlan = _executionPlanner.CreatePlan(
             llmOptions,
-            LlmExecutionProfile.PureChat);
+            LlmExecutionProfile.Summarization);
         IChatClient summarizationChatClient = primaryChatClient.AsIChatClient();
         summarizationChatClient = new LlmRequestLoggingChatClient(
             summarizationChatClient,
@@ -366,7 +366,7 @@ public sealed class AgentRuntime : IAgentRuntime
                 summarizationChatClient,
                 summarizationTrigger,
                 minimumPreservedGroups: minimumPreservedGroups,
-                summarizationPrompt: CreateSummarizationPrompt(),
+                summarizationPrompt: CreateSummarizationPrompt(context.PersistedSummary),
                 target: summarizationTarget));
         }
 
@@ -385,35 +385,52 @@ public sealed class AgentRuntime : IAgentRuntime
         return new PipelineCompactionStrategy(strategies);
     }
 
-    private static string CreateSummarizationPrompt() =>
-        """
-        Build persisted long-term conversation memory in Russian.
-        Return only this markdown structure:
+    private static string CreateSummarizationPrompt(string? persistedSummary)
+    {
+        var prompt = new StringBuilder(
+            """
+            Build persisted long-term conversation memory in Russian.
+            Return only this markdown structure:
 
-        ## Контекст пользователя
-        - ...
+            ## Контекст пользователя
+            - ...
 
-        ## Факты и решения
-        - ...
+            ## Факты и решения
+            - ...
 
-        ## Открытые задачи
-        - ...
+            ## Открытые задачи
+            - ...
 
-        ## Ограничения и предпочтения
-        - ...
+            ## Ограничения и предпочтения
+            - ...
 
-        Rules:
-        - This is memory for future runs, not a short recap.
-        - Preserve durable context from prior summary when it is still relevant.
-        - Prefer concrete entities, values, commitments, and decisions.
-        - Keep only facts useful for future turns; remove obvious noise.
-        - Do not copy long quotes from dialogue.
-        - Do not ask questions and do not address the user directly.
-        - Do not include role labels, timestamps, message ids, tokens, secrets, or raw tool outputs.
-        - For sections with data, provide 2-6 concise bullets.
-        - If no data for a section, write one bullet: "- нет данных".
-        - Target 1500-2800 characters, hard max 3200.
-        """;
+            Rules:
+            - This is memory for future runs, not a short recap.
+            - Prefer concrete entities, values, commitments, and decisions.
+            - Keep only facts useful for future turns; remove obvious noise.
+            - Do not copy long quotes from dialogue.
+            - Do not ask questions and do not address the user directly.
+            - Do not include role labels, timestamps, message ids, tokens, secrets, or raw tool outputs.
+            - For sections with data, provide 2-6 concise bullets.
+            - If no data for a section, write one bullet: "- нет данных".
+            - Target 1500-2800 characters, hard max 3200.
+            """);
+
+        if (!string.IsNullOrWhiteSpace(persistedSummary))
+        {
+            prompt.AppendLine();
+            prompt.AppendLine(
+                "Important: below is existing persisted summary baseline. Preserve its still-relevant facts unless explicitly contradicted by newer context.");
+            prompt.AppendLine("Baseline summary:");
+            prompt.AppendLine("---");
+            prompt.AppendLine(Truncate(persistedSummary.Trim(), 2_500));
+            prompt.AppendLine("---");
+            prompt.AppendLine(
+                "Do not drop baseline facts only because the latest dialogue topic changed.");
+        }
+
+        return prompt.ToString();
+    }
 
     private static OpenAIClientOptions CreateOpenAIClientOptions(
         LlmOptions options,

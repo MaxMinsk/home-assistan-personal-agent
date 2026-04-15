@@ -10,4 +10,5 @@ public enum LlmExecutionProfile
     ToolEnabled,
     PureChat,
     DeepReasoning,
+    Summarization,
 }

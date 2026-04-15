@@ -227,7 +227,7 @@ public sealed class DialogueService
                     transport: conversation.Transport,
                     conversationId: conversation.ConversationId,
                     participantId: conversation.ParticipantId,
-                    executionProfile: LlmExecutionProfile.PureChat),
+                    executionProfile: LlmExecutionProfile.Summarization),
                 cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)

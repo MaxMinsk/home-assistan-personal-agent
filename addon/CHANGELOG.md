@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.14
+
+- Add dedicated `Summarization` LLM execution profile and force `thinking=disabled` for summary-compaction requests when provider supports request-level thinking control.
+- Use `Summarization` profile for forced `/refreshSummary` service runs to keep summary rebuild deterministic and cheaper.
+- Improve summary continuity by injecting previous persisted summary as explicit baseline in summarization prompt, so relevant long-term facts are retained across topic changes.
+- Expand planner/dialogue/telegram tests for summarization profile and forced refresh behavior.
+
 ## 0.2.13
 
 - Add Telegram command `/refreshSummary` to force immediate persisted summary rebuild for the current chat.

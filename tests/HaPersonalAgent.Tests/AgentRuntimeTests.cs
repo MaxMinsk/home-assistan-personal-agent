@@ -125,6 +125,32 @@ public class AgentRuntimeTests
     }
 
     [Fact]
+    public void Planner_forces_disabled_thinking_for_moonshot_summarization_profile()
+    {
+        var plan = CreatePlanner().CreatePlan(
+            new LlmOptions
+            {
+                Provider = "moonshot",
+                BaseUrl = "https://api.moonshot.ai/v1",
+                ThinkingMode = LlmThinkingModes.Auto,
+            },
+            LlmExecutionProfile.Summarization);
+
+        var patched = LlmChatCompletionRequestPolicy.TryPatchRequestJson(
+            """
+            {"model":"kimi-k2.5","messages":[]}
+            """,
+            plan,
+            out var patchedJson);
+
+        using var document = JsonDocument.Parse(patchedJson);
+
+        Assert.Equal(LlmEffectiveThinkingMode.Disabled, plan.EffectiveThinkingMode);
+        Assert.True(patched);
+        Assert.Equal("disabled", document.RootElement.GetProperty("thinking").GetProperty("type").GetString());
+    }
+
+    [Fact]
     public void Policy_disables_thinking_for_moonshot_auto_when_tool_call_history_has_no_reasoning_content()
     {
         var plan = CreatePlanner().CreatePlan(

@@ -24,6 +24,10 @@ public sealed class LlmExecutionPlanner
 
         var capabilities = _capabilitiesResolver.Resolve(options);
         var requestedThinkingMode = LlmThinkingModes.Normalize(options.ThinkingMode);
+        if (profile == LlmExecutionProfile.Summarization)
+        {
+            return CreateSummarizationPlan(capabilities, requestedThinkingMode);
+        }
 
         return requestedThinkingMode switch
         {
@@ -31,6 +35,28 @@ public sealed class LlmExecutionPlanner
             LlmThinkingModes.Enabled => CreateEnabledPlan(profile, capabilities, requestedThinkingMode),
             _ => CreateAutoPlan(profile, capabilities, requestedThinkingMode),
         };
+    }
+
+    private static LlmExecutionPlan CreateSummarizationPlan(
+        LlmProviderCapabilities capabilities,
+        string requestedThinkingMode)
+    {
+        if (capabilities.ThinkingControlStyle == LlmThinkingControlStyle.None)
+        {
+            return new LlmExecutionPlan(
+                LlmExecutionProfile.Summarization,
+                capabilities,
+                requestedThinkingMode,
+                LlmEffectiveThinkingMode.ProviderDefault,
+                "summarization profile prefers thinking disabled, but provider profile has no known request-level thinking control.");
+        }
+
+        return new LlmExecutionPlan(
+            LlmExecutionProfile.Summarization,
+            capabilities,
+            requestedThinkingMode,
+            LlmEffectiveThinkingMode.Disabled,
+            "summarization profile forces thinking disabled for stable and cheaper memory compaction.");
     }
 
     private static LlmExecutionPlan CreateAutoPlan(
