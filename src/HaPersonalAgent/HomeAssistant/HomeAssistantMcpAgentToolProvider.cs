@@ -109,6 +109,9 @@ public sealed class HomeAssistantMcpAgentToolProvider : IHomeAssistantMcpAgentTo
                     session.Tools.Count,
                     0,
                     confirmationRequiredTools.Length);
+                _logger.LogInformation(
+                    "Home Assistant MCP tool policy: read-only [none], confirmation-required [{ConfirmationRequiredToolNames}].",
+                    FormatToolNames(confirmationRequiredTools));
 
                 return HomeAssistantMcpAgentToolSet.Available(
                     Array.Empty<Microsoft.Extensions.AI.AIFunction>(),
@@ -122,6 +125,10 @@ public sealed class HomeAssistantMcpAgentToolProvider : IHomeAssistantMcpAgentTo
                 session.Tools.Count,
                 exposedTools.Length,
                 confirmationRequiredTools.Length);
+            _logger.LogInformation(
+                "Home Assistant MCP tool policy: read-only [{ReadOnlyToolNames}], confirmation-required [{ConfirmationRequiredToolNames}].",
+                FormatToolNames(exposedTools),
+                FormatToolNames(confirmationRequiredTools));
 
             return HomeAssistantMcpAgentToolSet.Available(
                 exposedTools,
@@ -181,5 +188,23 @@ public sealed class HomeAssistantMcpAgentToolProvider : IHomeAssistantMcpAgentTo
                 HomeAssistantMcpStatus.Error,
                 $"Home Assistant MCP tool loading failed with {exception.GetType().Name}.");
         }
+    }
+
+    private static string FormatToolNames(IReadOnlyCollection<Microsoft.Extensions.AI.AIFunction> tools) =>
+        FormatToolNames(tools.Select(tool => tool.Name));
+
+    private static string FormatToolNames(IReadOnlyCollection<HomeAssistantMcpItemInfo> tools) =>
+        FormatToolNames(tools.Select(tool => tool.Name));
+
+    private static string FormatToolNames(IEnumerable<string> toolNames)
+    {
+        var names = toolNames
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Take(20)
+            .ToArray();
+
+        return names.Length == 0
+            ? "none"
+            : string.Join(", ", names);
     }
 }

@@ -17,17 +17,20 @@ public sealed class ConfirmationService : IConfirmationService
 
     private readonly IReadOnlyDictionary<string, IConfirmationActionExecutor> _executorsByKind;
     private readonly ILogger<ConfirmationService> _logger;
+    private readonly ConfirmationResultFormatter _resultFormatter;
     private readonly AgentStateRepository _stateRepository;
 
     public ConfirmationService(
         AgentStateRepository stateRepository,
         IEnumerable<IConfirmationActionExecutor> actionExecutors,
+        ConfirmationResultFormatter resultFormatter,
         ILogger<ConfirmationService> logger)
     {
         _stateRepository = stateRepository;
         _executorsByKind = actionExecutors.ToDictionary(
             executor => executor.ActionKind,
             StringComparer.Ordinal);
+        _resultFormatter = resultFormatter;
         _logger = logger;
     }
 
@@ -213,14 +216,14 @@ public sealed class ConfirmationService : IConfirmationService
             await AppendAuditAsync(
                 pendingConfirmation,
                 "Completed",
-                Truncate(executionResult.ResultJson, 512),
+                _resultFormatter.CreateAuditDetails(executionResult.ResultJson),
                 completedAtUtc,
                 cancellationToken);
 
             return new ConfirmationDecisionResult(
                 ConfirmationDecisionOutcome.Completed,
                 IsSuccess: true,
-                $"Выполнено действие {pendingConfirmation.Id}: {pendingConfirmation.Summary}",
+                _resultFormatter.CreateCompletedMessage(pendingConfirmation, executionResult.ResultJson),
                 pendingConfirmation.Id,
                 executionResult.ResultJson);
         }

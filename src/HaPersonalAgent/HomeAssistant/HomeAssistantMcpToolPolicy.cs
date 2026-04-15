@@ -9,6 +9,11 @@ namespace HaPersonalAgent.HomeAssistant;
 /// </summary>
 public sealed class HomeAssistantMcpToolPolicy
 {
+    private static readonly string[] ExplicitReadOnlyNames =
+    [
+        "getlivecontext",
+    ];
+
     private static readonly string[] ReadOnlyNameMarkers =
     [
         "get",
@@ -71,6 +76,11 @@ public sealed class HomeAssistantMcpToolPolicy
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
         var normalizedName = NormalizeIdentifier(name);
+        if (ExplicitReadOnlyNames.Contains(normalizedName, StringComparer.Ordinal))
+        {
+            return HomeAssistantMcpToolSafety.ReadOnly;
+        }
+
         if (UnsafeNameMarkers.Any(normalizedName.Contains))
         {
             return HomeAssistantMcpToolSafety.RequiresConfirmation;

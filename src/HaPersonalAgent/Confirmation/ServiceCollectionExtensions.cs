@@ -13,6 +13,7 @@ public static class ServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        services.AddSingleton<ConfirmationResultFormatter>();
         services.AddSingleton<IConfirmationService, ConfirmationService>();
 
         return services;

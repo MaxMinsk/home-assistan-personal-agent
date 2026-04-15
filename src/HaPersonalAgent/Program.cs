@@ -7,8 +7,11 @@ using HaPersonalAgent.HomeAssistant;
 using HaPersonalAgent.Storage;
 using HaPersonalAgent.Telegram;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 var builder = Host.CreateApplicationBuilder(args);
+
+builder.Logging.AddFilter("ModelContextProtocol.Client.McpClient", LogLevel.Warning);
 
 builder.Configuration
     .AddHomeAssistantAddOnOptions()

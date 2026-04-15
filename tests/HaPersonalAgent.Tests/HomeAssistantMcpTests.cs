@@ -156,6 +156,7 @@ public class HomeAssistantMcpTests
     [Theory]
     [InlineData("HassGetState", "Reads entity state", HomeAssistantMcpToolSafety.ReadOnly)]
     [InlineData("HassListEntities", "Lists exposed entities", HomeAssistantMcpToolSafety.ReadOnly)]
+    [InlineData("GetLiveContext", "Gets live Home Assistant context for the LLM to control exposed devices.", HomeAssistantMcpToolSafety.ReadOnly)]
     [InlineData("HassCallService", "Calls a Home Assistant service", HomeAssistantMcpToolSafety.RequiresConfirmation)]
     [InlineData("HassTurnOn", "Turns on an entity", HomeAssistantMcpToolSafety.RequiresConfirmation)]
     [InlineData("HassUnknown", "Does something not documented", HomeAssistantMcpToolSafety.RequiresConfirmation)]
@@ -176,6 +177,7 @@ public class HomeAssistantMcpTests
     {
         var connector = new FakeMcpToolConnector(
             CreateTool("HassGetState", "Reads entity state"),
+            CreateTool("GetLiveContext", "Gets live Home Assistant context for the LLM to control exposed devices."),
             CreateTool("HassCallService", "Calls a Home Assistant service"),
             CreateTool("HassUnknown", "Does something not documented"));
         var provider = CreateToolProvider(
@@ -188,10 +190,10 @@ public class HomeAssistantMcpTests
         await using var toolSet = await provider.CreateReadOnlyToolSetAsync(CancellationToken.None);
 
         Assert.Equal(HomeAssistantMcpStatus.Reachable, toolSet.Status);
-        Assert.Equal(3, toolSet.TotalToolCount);
-        Assert.Equal(1, toolSet.ExposedToolCount);
+        Assert.Equal(4, toolSet.TotalToolCount);
+        Assert.Equal(2, toolSet.ExposedToolCount);
         Assert.Equal(2, toolSet.BlockedToolCount);
-        Assert.Equal("HassGetState", toolSet.Tools.Single().Name);
+        Assert.Equal(new[] { "HassGetState", "GetLiveContext" }, toolSet.Tools.Select(tool => tool.Name));
         Assert.Equal(new[] { "HassCallService", "HassUnknown" }, toolSet.ConfirmationRequiredTools.Select(tool => tool.Name));
         Assert.True(connector.WasCalled);
         Assert.False(connector.SessionDisposed);

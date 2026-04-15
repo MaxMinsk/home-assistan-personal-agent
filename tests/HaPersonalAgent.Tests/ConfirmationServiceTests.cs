@@ -50,9 +50,56 @@ public class ConfirmationServiceTests
             Assert.Contains("/approve", proposal.Message, StringComparison.Ordinal);
             Assert.True(approved.IsSuccess);
             Assert.Equal(ConfirmationDecisionOutcome.Completed, approved.Outcome);
+            Assert.Contains("Результат:", approved.Message, StringComparison.Ordinal);
+            Assert.Contains("\"ok\":true", approved.Message, StringComparison.Ordinal);
             Assert.Single(executor.ExecutedConfirmations);
             Assert.Equal(ConfirmationActionStatus.Completed, stored?.Status);
             Assert.Equal(ConfirmationDecisionOutcome.AlreadyHandled, secondApprove.Outcome);
+            Assert.Empty(await repository.GetConversationMessagesAsync(
+                DialogueConversationKey.Create(conversation),
+                limit: 10,
+                CancellationToken.None));
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Approve_returns_sanitized_truncated_result_preview()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var resultJson = $$"""
+                {
+                  "ok": true,
+                  "access_token": "secret-token",
+                  "note": "authorization: Bearer embedded-secret",
+                  "message": "{{new string('x', 2000)}}"
+                }
+                """;
+            var executor = new FakeActionExecutor(ConfirmationActionExecutionResult.Success(resultJson));
+            var service = CreateService(repository, executor);
+            var conversation = DialogueConversation.Create("telegram", "200", "100");
+            var proposal = await service.ProposeAsync(
+                CreateRequest(conversation, payloadJson: "{}"),
+                CancellationToken.None);
+
+            var approved = await service.ApproveAsync(
+                conversation,
+                proposal.ConfirmationId!,
+                CancellationToken.None);
+
+            Assert.True(approved.IsSuccess);
+            Assert.Contains("[redacted]", approved.Message, StringComparison.Ordinal);
+            Assert.Contains("[truncated]", approved.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("secret-token", approved.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("embedded-secret", approved.Message, StringComparison.Ordinal);
+            Assert.True(approved.Message.Length < 1800);
         }
         finally
         {
@@ -229,6 +276,7 @@ public class ConfirmationServiceTests
         return new ConfirmationService(
             repository,
             executors,
+            new ConfirmationResultFormatter(),
             loggerFactory.CreateLogger<ConfirmationService>());
     }
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2
+
+- Treat Home Assistant `GetLiveContext` as read-only so state questions can run without approval.
+- Return a sanitized and truncated result preview after `/approve` completes an action.
+- Log Home Assistant MCP tool policy categories by tool name for easier diagnosis.
+- Suppress normal info-level MCP client stream shutdown noise.
+- Expand backlog notes for Moonshot/Kimi `reasoning_content` and move confirmation result UX to Done.
+
 ## 0.2.1
 
 - Use `SUPERVISOR_TOKEN` for the default `http://supervisor/core` Home Assistant MCP endpoint and keep long-lived tokens for direct Core URLs.
