@@ -9,7 +9,7 @@ namespace HaPersonalAgent.Dialogue;
 /// <summary>
 /// Что: transport-agnostic сервис диалога с агентом.
 /// Зачем: Telegram и будущий Web UI должны переиспользовать одну логику загрузки истории, вызова IAgentRuntime, сохранения turns и reset.
-/// Как: получает DialogueRequest, строит storage key через DialogueConversationKey, читает SQLite history, вызывает runtime и сохраняет только user/assistant turns.
+/// Как: получает DialogueRequest, строит storage key через DialogueConversationKey, загружает bounded history + vector recall, вызывает runtime и сохраняет только user/assistant turns.
 /// </summary>
 public sealed class DialogueService
 {
@@ -18,17 +18,23 @@ public sealed class DialogueService
 
     private readonly IAgentRuntime _agentRuntime;
     private readonly IOptions<AgentOptions> _agentOptions;
+    private readonly BoundedChatHistoryProvider _boundedChatHistoryProvider;
+    private readonly ProjectCapsuleService _projectCapsuleService;
     private readonly ILogger<DialogueService> _logger;
     private readonly AgentStateRepository _stateRepository;
 
     public DialogueService(
         IAgentRuntime agentRuntime,
         IOptions<AgentOptions> agentOptions,
+        BoundedChatHistoryProvider boundedChatHistoryProvider,
+        ProjectCapsuleService projectCapsuleService,
         AgentStateRepository stateRepository,
         ILogger<DialogueService> logger)
     {
         _agentRuntime = agentRuntime;
         _agentOptions = agentOptions;
+        _boundedChatHistoryProvider = boundedChatHistoryProvider;
+        _projectCapsuleService = projectCapsuleService;
         _stateRepository = stateRepository;
         _logger = logger;
     }
@@ -52,12 +58,21 @@ public sealed class DialogueService
             latestMessageId);
         var shouldRefreshPersistedSummary = persistedSummary is null
             || messagesSincePersistedSummary >= PersistedSummaryRefreshMessageThreshold;
-        var history = await _stateRepository.GetConversationMessagesAsync(
+        var boundedHistory = await _boundedChatHistoryProvider.LoadAsync(
             conversationKey,
+            request.Text,
             maxMessages,
             cancellationToken);
+        var capsulePromptContext = await _projectCapsuleService.BuildPromptContextAsync(
+            conversationKey,
+            cancellationToken);
+        var combinedMemoryContext = CombineContextBlocks(
+            capsulePromptContext.PromptText,
+            boundedHistory.RetrievedMemoryContext);
+        var combinedMemoryCount = capsulePromptContext.CapsuleCount + boundedHistory.RetrievedMemoryCount;
+        var history = boundedHistory.RecentMessages;
         _logger.LogInformation(
-            "Dialogue request {CorrelationId} started for {ConversationKey} ({Transport}/{ConversationId}, participant {ParticipantId}) with profile {ExecutionProfile}, text length {TextLength}, history messages {HistoryMessageCount}, persisted summary present {PersistedSummaryPresent}, persisted summary version {PersistedSummaryVersion}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}.",
+            "Dialogue request {CorrelationId} started for {ConversationKey} ({Transport}/{ConversationId}, participant {ParticipantId}) with profile {ExecutionProfile}, text length {TextLength}, history messages {HistoryMessageCount}, retrieved memories {RetrievedMemoryCount}, project capsules in prompt {ProjectCapsuleCount}, persisted summary present {PersistedSummaryPresent}, persisted summary version {PersistedSummaryVersion}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}.",
             request.CorrelationId,
             conversationKey,
             request.Conversation.Transport,
@@ -66,6 +81,8 @@ public sealed class DialogueService
             request.ExecutionProfile,
             request.Text.Length,
             history.Count,
+            combinedMemoryCount,
+            capsulePromptContext.CapsuleCount,
             persistedSummary is not null,
             persistedSummary?.SummaryVersion ?? 0,
             messagesSincePersistedSummary,
@@ -96,6 +113,8 @@ public sealed class DialogueService
                     correlationId: request.CorrelationId,
                     conversationMessages: history,
                     persistedSummary: persistedSummary?.Summary,
+                    retrievedMemoryContext: combinedMemoryContext,
+                    retrievedMemoryCount: combinedMemoryCount,
                     shouldRefreshPersistedSummary: shouldRefreshPersistedSummary,
                     messagesSincePersistedSummary: messagesSincePersistedSummary,
                     conversationKey: conversationKey,
@@ -179,7 +198,7 @@ public sealed class DialogueService
             },
             cancellationToken);
 
-        await _stateRepository.TrimConversationMessagesAsync(
+        await _boundedChatHistoryProvider.ArchiveOverflowAndTrimAsync(
             conversationKey,
             maxMessages,
             cancellationToken);
@@ -187,6 +206,11 @@ public sealed class DialogueService
             conversationKey,
             response.PersistedSummaryCandidate,
             persistedSummary,
+            cancellationToken);
+        await TryAutoRefreshProjectCapsulesAsync(
+            request.Conversation,
+            conversationKey,
+            request.CorrelationId,
             cancellationToken);
         _logger.LogInformation(
             "Dialogue request {CorrelationId} completed and persisted user/assistant turns for {ConversationKey}; response length {ResponseLength}.",
@@ -208,6 +232,15 @@ public sealed class DialogueService
             conversationKey,
             cancellationToken);
         await _stateRepository.ClearConversationSummaryAsync(
+            conversationKey,
+            cancellationToken);
+        await _stateRepository.ClearConversationVectorMemoryAsync(
+            conversationKey,
+            cancellationToken);
+        await _stateRepository.ClearProjectCapsulesAsync(
+            conversationKey,
+            cancellationToken);
+        await _stateRepository.ClearProjectCapsuleExtractionStateAsync(
             conversationKey,
             cancellationToken);
         await _stateRepository.AppendRawEventsAsync(
@@ -250,6 +283,36 @@ public sealed class DialogueService
         return await _stateRepository.GetRawEventsAsync(
             conversationKey,
             limit,
+            cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<ProjectCapsuleMemory>> GetProjectCapsulesAsync(
+        DialogueConversation conversation,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+
+        var conversationKey = DialogueConversationKey.Create(conversation);
+        return await _stateRepository.GetProjectCapsulesAsync(
+            conversationKey,
+            limit,
+            cancellationToken);
+    }
+
+    public Task<ProjectCapsuleRefreshResult> RefreshProjectCapsulesAsync(
+        DialogueConversation conversation,
+        string correlationId,
+        bool force,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+        ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
+
+        return _projectCapsuleService.RefreshAsync(
+            conversation,
+            correlationId,
+            force,
             cancellationToken);
     }
 
@@ -401,6 +464,21 @@ public sealed class DialogueService
         var rawEventCount = await _stateRepository.GetRawEventCountAsync(
             conversationKey,
             cancellationToken);
+        var vectorMemoryCount = await _stateRepository.GetConversationVectorMemoryCountAsync(
+            conversationKey,
+            cancellationToken);
+        var projectCapsuleCount = await _stateRepository.GetProjectCapsuleCountAsync(
+            conversationKey,
+            cancellationToken);
+        var projectCapsuleLatestSourceEventId = await _stateRepository.GetProjectCapsuleLatestSourceEventIdAsync(
+            conversationKey,
+            cancellationToken);
+        var projectCapsuleLastUpdatedAtUtc = await _stateRepository.GetProjectCapsuleLastUpdatedAtUtcAsync(
+            conversationKey,
+            cancellationToken);
+        var projectCapsuleExtractionState = await _stateRepository.GetProjectCapsuleExtractionStateAsync(
+            conversationKey,
+            cancellationToken);
         var summary = await _stateRepository.GetConversationSummaryAsync(
             conversationKey,
             cancellationToken);
@@ -413,6 +491,13 @@ public sealed class DialogueService
             conversationKey,
             StoredMessageCount: storedMessageCount,
             RawEventCount: rawEventCount,
+            VectorMemoryCount: vectorMemoryCount,
+            ProjectCapsuleCount: projectCapsuleCount,
+            ProjectCapsuleLatestSourceEventId: projectCapsuleLatestSourceEventId ?? 0,
+            ProjectCapsuleLastUpdatedAtUtc: projectCapsuleLastUpdatedAtUtc,
+            ProjectCapsuleLastProcessedRawEventId: projectCapsuleExtractionState?.LastRawEventId ?? 0,
+            ProjectCapsuleLastExtractionAtUtc: projectCapsuleExtractionState?.UpdatedAtUtc,
+            ProjectCapsuleExtractionRunsCount: projectCapsuleExtractionState?.RunsCount ?? 0,
             MaxContextMessages: maxMessages,
             LoadedHistoryMessageCount: Math.Min(storedMessageCount, maxMessages),
             MessagesSincePersistedSummary: messagesSinceSummary,
@@ -455,6 +540,44 @@ public sealed class DialogueService
     {
         var maxTurns = Math.Clamp(_agentOptions.Value.ConversationContextMaxTurns, 0, 50);
         return maxTurns * 2;
+    }
+
+    private async Task TryAutoRefreshProjectCapsulesAsync(
+        DialogueConversation conversation,
+        string conversationKey,
+        string parentCorrelationId,
+        CancellationToken cancellationToken)
+    {
+        if (!await _projectCapsuleService.ShouldAutoRefreshAsync(conversationKey, cancellationToken))
+        {
+            return;
+        }
+
+        var autoCorrelationId = $"{parentCorrelationId}-capsules";
+        try
+        {
+            var result = await _projectCapsuleService.RefreshAsync(
+                conversation,
+                autoCorrelationId,
+                force: false,
+                cancellationToken);
+            _logger.LogInformation(
+                "Auto-batched project capsules refresh {CorrelationId} completed for {ConversationKey}; configured {IsConfigured}, updated {IsUpdated}, capsule count {CapsuleCount}, last raw event id {LastProcessedRawEventId}.",
+                autoCorrelationId,
+                conversationKey,
+                result.IsConfigured,
+                result.IsUpdated,
+                result.CapsuleCount,
+                result.LastProcessedRawEventId);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                exception,
+                "Auto-batched project capsules refresh {CorrelationId} failed for {ConversationKey}.",
+                autoCorrelationId,
+                conversationKey);
+        }
     }
 
     private async Task PersistSummaryCandidateIfNeededAsync(
@@ -525,6 +648,26 @@ public sealed class DialogueService
         string.IsNullOrWhiteSpace(payload)
             ? "[empty]"
             : payload;
+
+    private static string? CombineContextBlocks(string? first, string? second)
+    {
+        if (string.IsNullOrWhiteSpace(first))
+        {
+            return string.IsNullOrWhiteSpace(second)
+                ? null
+                : second.Trim();
+        }
+
+        if (string.IsNullOrWhiteSpace(second))
+        {
+            return first.Trim();
+        }
+
+        return string.Join(
+            Environment.NewLine + Environment.NewLine,
+            first.Trim(),
+            second.Trim());
+    }
 
     private static string LimitSummaryLength(string summary) =>
         summary.Length <= MaxPersistedSummaryLength

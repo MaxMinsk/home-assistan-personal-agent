@@ -23,6 +23,8 @@ public class ConfigurationTests
         Assert.Equal(LlmThinkingModes.Auto, llmOptions.ThinkingMode);
         Assert.Equal("/data/state.sqlite", agentOptions.StateDatabasePath);
         Assert.Equal("/data/workspace", agentOptions.WorkspacePath);
+        Assert.Equal(AgentOptions.CapsuleExtractionModeManual, agentOptions.CapsuleExtractionMode);
+        Assert.Equal(20, agentOptions.CapsuleAutoBatchRawEventThreshold);
         Assert.Equal("http://supervisor/core", homeAssistantOptions.Url);
         Assert.Equal("/api/mcp", homeAssistantOptions.McpEndpoint);
     }
@@ -65,7 +67,9 @@ public class ConfigurationTests
                   "llm_thinking_mode": "disabled",
                   "state_database_path": "/tmp/state.sqlite",
                   "workspace_path": "/tmp/workspace",
-                  "workspace_max_mb": 128
+                  "workspace_max_mb": 128,
+                  "capsule_extraction_mode": "auto-batched",
+                  "capsule_auto_batch_raw_event_threshold": 30
                 }
                 """);
 
@@ -88,6 +92,8 @@ public class ConfigurationTests
             Assert.Equal("/tmp/state.sqlite", agentOptions.StateDatabasePath);
             Assert.Equal("/tmp/workspace", agentOptions.WorkspacePath);
             Assert.Equal(128, agentOptions.WorkspaceMaxMb);
+            Assert.Equal("auto-batched", agentOptions.CapsuleExtractionMode);
+            Assert.Equal(30, agentOptions.CapsuleAutoBatchRawEventThreshold);
         }
         finally
         {

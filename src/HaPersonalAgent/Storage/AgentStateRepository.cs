@@ -8,7 +8,7 @@ namespace HaPersonalAgent.Storage;
 /// <summary>
 /// Что: repository для небольшого persistent state агента.
 /// Зачем: Telegram offset, краткосрочный контекст диалога и pending confirmations должны переживать рестарт add-on контейнера.
-/// Как: при первом обращении создает таблицы, затем хранит offset как key/value, историю как append-only turns, а confirmation actions отдельно от memory.
+/// Как: при первом обращении создает таблицы, затем хранит offset как key/value, историю как append-only turns, overflow vector memory, project capsules и confirmation actions отдельно от memory.
 /// </summary>
 public sealed class AgentStateRepository
 {
@@ -65,6 +65,48 @@ public sealed class AgentStateRepository
                     updated_utc TEXT NOT NULL,
                     source_last_message_id INTEGER NOT NULL,
                     summary_version INTEGER NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS conversation_vector_memory (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_key TEXT NOT NULL,
+                    source_message_id INTEGER NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    embedding TEXT NOT NULL,
+                    created_utc TEXT NOT NULL
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_conversation_vector_memory_source
+                ON conversation_vector_memory (conversation_key, source_message_id);
+
+                CREATE INDEX IF NOT EXISTS idx_conversation_vector_memory_key_id
+                ON conversation_vector_memory (conversation_key, id);
+
+                CREATE TABLE IF NOT EXISTS project_capsules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_key TEXT NOT NULL,
+                    capsule_key TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    content_markdown TEXT NOT NULL,
+                    scope TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    source_event_id INTEGER NOT NULL,
+                    updated_utc TEXT NOT NULL,
+                    version INTEGER NOT NULL
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_project_capsules_key
+                ON project_capsules (conversation_key, capsule_key);
+
+                CREATE INDEX IF NOT EXISTS idx_project_capsules_scope_updated
+                ON project_capsules (conversation_key, updated_utc DESC);
+
+                CREATE TABLE IF NOT EXISTS project_capsule_extraction_state (
+                    conversation_key TEXT PRIMARY KEY NOT NULL,
+                    last_raw_event_id INTEGER NOT NULL,
+                    updated_utc TEXT NOT NULL,
+                    runs_count INTEGER NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS raw_events (
@@ -248,6 +290,584 @@ public sealed class AgentStateRepository
         return Convert.ToInt32(value, CultureInfo.InvariantCulture);
     }
 
+    public async Task<IReadOnlyList<StoredConversationMessage>> GetOverflowConversationMessagesAsync(
+        string conversationKey,
+        int retainedMessageCount,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+
+        if (retainedMessageCount <= 0)
+        {
+            command.CommandText =
+                """
+                SELECT id, role, content, created_utc
+                FROM conversation_messages
+                WHERE conversation_key = $conversationKey
+                ORDER BY id ASC;
+                """;
+            command.Parameters.AddWithValue("$conversationKey", conversationKey);
+        }
+        else
+        {
+            command.CommandText =
+                """
+                SELECT id, role, content, created_utc
+                FROM conversation_messages
+                WHERE conversation_key = $conversationKey
+                  AND id NOT IN (
+                      SELECT id
+                      FROM conversation_messages
+                      WHERE conversation_key = $conversationKey
+                      ORDER BY id DESC
+                      LIMIT $retainedMessageCount
+                  )
+                ORDER BY id ASC;
+                """;
+            command.Parameters.AddWithValue("$conversationKey", conversationKey);
+            command.Parameters.AddWithValue("$retainedMessageCount", retainedMessageCount);
+        }
+
+        var messages = new List<StoredConversationMessage>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            messages.Add(new StoredConversationMessage(
+                reader.GetInt64(0),
+                Enum.Parse<AgentConversationRole>(reader.GetString(1), ignoreCase: true),
+                reader.GetString(2),
+                DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture)));
+        }
+
+        return messages;
+    }
+
+    public async Task UpsertConversationVectorMemoryAsync(
+        IEnumerable<ConversationVectorMemoryEntry> entries,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+
+        var entryList = entries
+            .Where(entry =>
+                !string.IsNullOrWhiteSpace(entry.ConversationKey)
+                && entry.SourceMessageId > 0
+                && !string.IsNullOrWhiteSpace(entry.Content)
+                && !string.IsNullOrWhiteSpace(entry.Embedding))
+            .ToArray();
+        if (entryList.Length == 0)
+        {
+            return;
+        }
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            INSERT INTO conversation_vector_memory (
+                conversation_key,
+                source_message_id,
+                role,
+                content,
+                embedding,
+                created_utc)
+            VALUES (
+                $conversationKey,
+                $sourceMessageId,
+                $role,
+                $content,
+                $embedding,
+                $createdUtc)
+            ON CONFLICT(conversation_key, source_message_id) DO UPDATE SET
+                role = excluded.role,
+                content = excluded.content,
+                embedding = excluded.embedding,
+                created_utc = excluded.created_utc;
+            """;
+
+        foreach (var entry in entryList)
+        {
+            command.Parameters.Clear();
+            command.Parameters.AddWithValue("$conversationKey", entry.ConversationKey);
+            command.Parameters.AddWithValue("$sourceMessageId", entry.SourceMessageId);
+            command.Parameters.AddWithValue("$role", entry.Role.ToString());
+            command.Parameters.AddWithValue("$content", entry.Content);
+            command.Parameters.AddWithValue("$embedding", entry.Embedding);
+            command.Parameters.AddWithValue("$createdUtc", entry.CreatedAtUtc.ToString("O", CultureInfo.InvariantCulture));
+
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<ConversationVectorMemoryRecord>> GetConversationVectorMemoryAsync(
+        string conversationKey,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        if (limit <= 0)
+        {
+            return Array.Empty<ConversationVectorMemoryRecord>();
+        }
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                id,
+                conversation_key,
+                source_message_id,
+                role,
+                content,
+                embedding,
+                created_utc
+            FROM conversation_vector_memory
+            WHERE conversation_key = $conversationKey
+            ORDER BY id DESC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+        command.Parameters.AddWithValue("$limit", limit);
+
+        var records = new List<ConversationVectorMemoryRecord>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            records.Add(new ConversationVectorMemoryRecord(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetInt64(2),
+                Enum.Parse<AgentConversationRole>(reader.GetString(3), ignoreCase: true),
+                reader.GetString(4),
+                reader.GetString(5),
+                DateTimeOffset.Parse(reader.GetString(6), CultureInfo.InvariantCulture)));
+        }
+
+        return records;
+    }
+
+    public async Task<int> GetConversationVectorMemoryCountAsync(
+        string conversationKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT COUNT(*)
+            FROM conversation_vector_memory
+            WHERE conversation_key = $conversationKey;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        if (value is null || value is DBNull)
+        {
+            return 0;
+        }
+
+        return Convert.ToInt32(value, CultureInfo.InvariantCulture);
+    }
+
+    public async Task<IReadOnlyList<ProjectCapsuleMemory>> GetProjectCapsulesAsync(
+        string conversationKey,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        if (limit <= 0)
+        {
+            return Array.Empty<ProjectCapsuleMemory>();
+        }
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                conversation_key,
+                capsule_key,
+                title,
+                content_markdown,
+                scope,
+                confidence,
+                source_event_id,
+                updated_utc,
+                version
+            FROM project_capsules
+            WHERE conversation_key = $conversationKey
+            ORDER BY updated_utc DESC, capsule_key ASC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+        command.Parameters.AddWithValue("$limit", limit);
+
+        var capsules = new List<ProjectCapsuleMemory>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            capsules.Add(new ProjectCapsuleMemory(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetDouble(5),
+                reader.GetInt64(6),
+                DateTimeOffset.Parse(reader.GetString(7), CultureInfo.InvariantCulture),
+                reader.GetInt32(8)));
+        }
+
+        return capsules;
+    }
+
+    public async Task<ProjectCapsuleMemory?> GetProjectCapsuleByKeyAsync(
+        string conversationKey,
+        string capsuleKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(capsuleKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                conversation_key,
+                capsule_key,
+                title,
+                content_markdown,
+                scope,
+                confidence,
+                source_event_id,
+                updated_utc,
+                version
+            FROM project_capsules
+            WHERE conversation_key = $conversationKey
+              AND capsule_key = $capsuleKey
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+        command.Parameters.AddWithValue("$capsuleKey", capsuleKey);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        return new ProjectCapsuleMemory(
+            reader.GetString(0),
+            reader.GetString(1),
+            reader.GetString(2),
+            reader.GetString(3),
+            reader.GetString(4),
+            reader.GetDouble(5),
+            reader.GetInt64(6),
+            DateTimeOffset.Parse(reader.GetString(7), CultureInfo.InvariantCulture),
+            reader.GetInt32(8));
+    }
+
+    public async Task UpsertProjectCapsulesAsync(
+        IEnumerable<ProjectCapsuleMemory> capsules,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(capsules);
+
+        var capsuleList = capsules
+            .Where(capsule =>
+                !string.IsNullOrWhiteSpace(capsule.ConversationKey)
+                && !string.IsNullOrWhiteSpace(capsule.CapsuleKey)
+                && !string.IsNullOrWhiteSpace(capsule.Title)
+                && !string.IsNullOrWhiteSpace(capsule.ContentMarkdown)
+                && !string.IsNullOrWhiteSpace(capsule.Scope)
+                && capsule.SourceEventId > 0
+                && capsule.Version > 0)
+            .ToArray();
+        if (capsuleList.Length == 0)
+        {
+            return;
+        }
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            INSERT INTO project_capsules (
+                conversation_key,
+                capsule_key,
+                title,
+                content_markdown,
+                scope,
+                confidence,
+                source_event_id,
+                updated_utc,
+                version)
+            VALUES (
+                $conversationKey,
+                $capsuleKey,
+                $title,
+                $contentMarkdown,
+                $scope,
+                $confidence,
+                $sourceEventId,
+                $updatedUtc,
+                $version)
+            ON CONFLICT(conversation_key, capsule_key) DO UPDATE SET
+                title = excluded.title,
+                content_markdown = excluded.content_markdown,
+                scope = excluded.scope,
+                confidence = excluded.confidence,
+                source_event_id = excluded.source_event_id,
+                updated_utc = excluded.updated_utc,
+                version = excluded.version;
+            """;
+
+        foreach (var capsule in capsuleList)
+        {
+            command.Parameters.Clear();
+            command.Parameters.AddWithValue("$conversationKey", capsule.ConversationKey);
+            command.Parameters.AddWithValue("$capsuleKey", capsule.CapsuleKey);
+            command.Parameters.AddWithValue("$title", capsule.Title);
+            command.Parameters.AddWithValue("$contentMarkdown", capsule.ContentMarkdown);
+            command.Parameters.AddWithValue("$scope", capsule.Scope);
+            command.Parameters.AddWithValue("$confidence", Math.Clamp(capsule.Confidence, 0d, 1d));
+            command.Parameters.AddWithValue("$sourceEventId", capsule.SourceEventId);
+            command.Parameters.AddWithValue("$updatedUtc", capsule.UpdatedAtUtc.ToString("O", CultureInfo.InvariantCulture));
+            command.Parameters.AddWithValue("$version", capsule.Version);
+
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<int> GetProjectCapsuleCountAsync(
+        string conversationKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT COUNT(*)
+            FROM project_capsules
+            WHERE conversation_key = $conversationKey;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        if (value is null || value is DBNull)
+        {
+            return 0;
+        }
+
+        return Convert.ToInt32(value, CultureInfo.InvariantCulture);
+    }
+
+    public async Task<long?> GetProjectCapsuleLatestSourceEventIdAsync(
+        string conversationKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT MAX(source_event_id)
+            FROM project_capsules
+            WHERE conversation_key = $conversationKey;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        if (value is null || value is DBNull)
+        {
+            return null;
+        }
+
+        return Convert.ToInt64(value, CultureInfo.InvariantCulture);
+    }
+
+    public async Task<DateTimeOffset?> GetProjectCapsuleLastUpdatedAtUtcAsync(
+        string conversationKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT MAX(updated_utc)
+            FROM project_capsules
+            WHERE conversation_key = $conversationKey;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        if (value is null || value is DBNull)
+        {
+            return null;
+        }
+
+        var text = Convert.ToString(value, CultureInfo.InvariantCulture);
+        return string.IsNullOrWhiteSpace(text)
+            ? null
+            : DateTimeOffset.Parse(text, CultureInfo.InvariantCulture);
+    }
+
+    public async Task<ProjectCapsuleExtractionState?> GetProjectCapsuleExtractionStateAsync(
+        string conversationKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT conversation_key, last_raw_event_id, updated_utc, runs_count
+            FROM project_capsule_extraction_state
+            WHERE conversation_key = $conversationKey;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        return new ProjectCapsuleExtractionState(
+            reader.GetString(0),
+            reader.GetInt64(1),
+            DateTimeOffset.Parse(reader.GetString(2), CultureInfo.InvariantCulture),
+            reader.GetInt32(3));
+    }
+
+    public async Task UpsertProjectCapsuleExtractionStateAsync(
+        ProjectCapsuleExtractionState state,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentException.ThrowIfNullOrWhiteSpace(state.ConversationKey);
+        if (state.LastRawEventId < 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(state),
+                "LastRawEventId must be greater than or equal to zero.");
+        }
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO project_capsule_extraction_state (
+                conversation_key,
+                last_raw_event_id,
+                updated_utc,
+                runs_count)
+            VALUES (
+                $conversationKey,
+                $lastRawEventId,
+                $updatedUtc,
+                $runsCount)
+            ON CONFLICT(conversation_key) DO UPDATE SET
+                last_raw_event_id = excluded.last_raw_event_id,
+                updated_utc = excluded.updated_utc,
+                runs_count = excluded.runs_count;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", state.ConversationKey);
+        command.Parameters.AddWithValue("$lastRawEventId", state.LastRawEventId);
+        command.Parameters.AddWithValue("$updatedUtc", state.UpdatedAtUtc.ToString("O", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$runsCount", Math.Max(state.RunsCount, 0));
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task ClearProjectCapsulesAsync(
+        string conversationKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            DELETE FROM project_capsules
+            WHERE conversation_key = $conversationKey;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task ClearProjectCapsuleExtractionStateAsync(
+        string conversationKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            DELETE FROM project_capsule_extraction_state
+            WHERE conversation_key = $conversationKey;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     public async Task AppendRawEventsAsync(
         IEnumerable<RawEventEntry> events,
         CancellationToken cancellationToken)
@@ -315,6 +935,122 @@ public sealed class AgentStateRepository
         }
 
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<long?> GetLatestRawEventIdAsync(
+        string conversationKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT MAX(id)
+            FROM raw_events
+            WHERE conversation_key = $conversationKey;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        if (value is null || value is DBNull)
+        {
+            return null;
+        }
+
+        return Convert.ToInt64(value, CultureInfo.InvariantCulture);
+    }
+
+    public async Task<int> GetRawEventCountSinceIdAsync(
+        string conversationKey,
+        long afterIdExclusive,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT COUNT(*)
+            FROM raw_events
+            WHERE conversation_key = $conversationKey
+              AND id > $afterIdExclusive;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+        command.Parameters.AddWithValue("$afterIdExclusive", Math.Max(afterIdExclusive, 0));
+
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        if (value is null || value is DBNull)
+        {
+            return 0;
+        }
+
+        return Convert.ToInt32(value, CultureInfo.InvariantCulture);
+    }
+
+    public async Task<IReadOnlyList<RawEventRecord>> GetRawEventsSinceIdAsync(
+        string conversationKey,
+        long afterIdExclusive,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+        if (limit <= 0)
+        {
+            return Array.Empty<RawEventRecord>();
+        }
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                id,
+                conversation_key,
+                transport,
+                conversation_id,
+                participant_id,
+                event_kind,
+                payload,
+                source_id,
+                correlation_id,
+                created_utc
+            FROM raw_events
+            WHERE conversation_key = $conversationKey
+              AND id > $afterIdExclusive
+            ORDER BY id ASC
+            LIMIT $limit;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+        command.Parameters.AddWithValue("$afterIdExclusive", Math.Max(afterIdExclusive, 0));
+        command.Parameters.AddWithValue("$limit", limit);
+
+        var events = new List<RawEventRecord>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            events.Add(new RawEventRecord(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                DateTimeOffset.Parse(reader.GetString(9), CultureInfo.InvariantCulture)));
+        }
+
+        return events;
     }
 
     public async Task<int> GetRawEventCountAsync(
@@ -818,6 +1554,26 @@ public sealed class AgentStateRepository
         command.CommandText =
             """
             DELETE FROM conversation_summary
+            WHERE conversation_key = $conversationKey;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task ClearConversationVectorMemoryAsync(
+        string conversationKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            DELETE FROM conversation_vector_memory
             WHERE conversation_key = $conversationKey;
             """;
         command.Parameters.AddWithValue("$conversationKey", conversationKey);

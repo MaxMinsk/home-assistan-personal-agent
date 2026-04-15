@@ -18,7 +18,9 @@ public sealed record ConfigurationStatus(
     bool HomeAssistantTokenConfigured,
     string StateDatabasePath,
     string WorkspacePath,
-    int WorkspaceMaxMb)
+    int WorkspaceMaxMb,
+    string CapsuleExtractionMode,
+    int CapsuleAutoBatchRawEventThreshold)
 {
     public static ConfigurationStatus From(
         AgentOptions agentOptions,
@@ -44,6 +46,10 @@ public sealed record ConfigurationStatus(
             !string.IsNullOrWhiteSpace(homeAssistantOptions.LongLivedAccessToken),
             agentOptions.StateDatabasePath,
             agentOptions.WorkspacePath,
-            agentOptions.WorkspaceMaxMb);
+            agentOptions.WorkspaceMaxMb,
+            string.IsNullOrWhiteSpace(agentOptions.CapsuleExtractionMode)
+                ? AgentOptions.CapsuleExtractionModeManual
+                : agentOptions.CapsuleExtractionMode.Trim(),
+            Math.Max(agentOptions.CapsuleAutoBatchRawEventThreshold, 0));
     }
 }

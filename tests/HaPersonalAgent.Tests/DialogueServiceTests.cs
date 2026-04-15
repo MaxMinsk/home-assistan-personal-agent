@@ -72,6 +72,18 @@ public class DialogueServiceTests
                 DialogueConversationKey.Create(conversation),
                 CancellationToken.None);
             Assert.True(latestMessageId.HasValue);
+            await repository.UpsertConversationVectorMemoryAsync(
+                new[]
+                {
+                    new ConversationVectorMemoryEntry(
+                        DialogueConversationKey.Create(conversation),
+                        latestMessageId!.Value,
+                        AgentConversationRole.User,
+                        "legacy memory",
+                        string.Join(",", Enumerable.Repeat("1", 128)),
+                        DateTimeOffset.UtcNow),
+                },
+                CancellationToken.None);
             await repository.UpsertConversationSummaryAsync(
                 new ConversationSummaryMemory(
                     DialogueConversationKey.Create(conversation),
@@ -79,6 +91,28 @@ public class DialogueServiceTests
                     DateTimeOffset.UtcNow,
                     latestMessageId!.Value,
                     SummaryVersion: 1),
+                CancellationToken.None);
+            await repository.UpsertProjectCapsulesAsync(
+                new[]
+                {
+                    new ProjectCapsuleMemory(
+                        DialogueConversationKey.Create(conversation),
+                        "dog",
+                        "Щенок",
+                        "## Факты\n- Адаптация идет хорошо.",
+                        "conversation",
+                        0.77d,
+                        SourceEventId: 1,
+                        DateTimeOffset.UtcNow,
+                        Version: 1),
+                },
+                CancellationToken.None);
+            await repository.UpsertProjectCapsuleExtractionStateAsync(
+                new ProjectCapsuleExtractionState(
+                    DialogueConversationKey.Create(conversation),
+                    LastRawEventId: 2,
+                    DateTimeOffset.UtcNow,
+                    RunsCount: 1),
                 CancellationToken.None);
 
             await service.ResetAsync(conversation, CancellationToken.None);
@@ -90,6 +124,15 @@ public class DialogueServiceTests
             var summary = await repository.GetConversationSummaryAsync(
                 DialogueConversationKey.Create(conversation),
                 CancellationToken.None);
+            var vectorMemoryCount = await repository.GetConversationVectorMemoryCountAsync(
+                DialogueConversationKey.Create(conversation),
+                CancellationToken.None);
+            var projectCapsuleCount = await repository.GetProjectCapsuleCountAsync(
+                DialogueConversationKey.Create(conversation),
+                CancellationToken.None);
+            var projectCapsuleExtractionState = await repository.GetProjectCapsuleExtractionStateAsync(
+                DialogueConversationKey.Create(conversation),
+                CancellationToken.None);
             var rawEvents = await repository.GetRawEventsAsync(
                 DialogueConversationKey.Create(conversation),
                 limit: 10,
@@ -97,6 +140,9 @@ public class DialogueServiceTests
 
             Assert.Empty(stored);
             Assert.Null(summary);
+            Assert.Equal(0, vectorMemoryCount);
+            Assert.Equal(0, projectCapsuleCount);
+            Assert.Null(projectCapsuleExtractionState);
             Assert.Single(rawEvents);
             Assert.Equal(DialogueRawEventKinds.ContextReset, rawEvents[0].EventKind);
         }
@@ -280,6 +326,106 @@ public class DialogueServiceTests
     }
 
     [Fact]
+    public async Task Bounded_history_archives_overflow_and_recalls_relevant_vector_memory()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var runtime = new FakeAgentRuntime(new[]
+            {
+                "noted one",
+                "noted two",
+                "noted three",
+            });
+            var service = CreateService(
+                repository,
+                runtime,
+                new AgentOptions
+                {
+                    StateDatabasePath = databasePath,
+                    ConversationContextMaxTurns = 1,
+                });
+            var conversation = DialogueConversation.Create("telegram", "200", "100");
+            var conversationKey = DialogueConversationKey.Create(conversation);
+
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "alpha likes tea", "run-1"),
+                CancellationToken.None);
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "beta likes coffee", "run-2"),
+                CancellationToken.None);
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "remind me: alpha likes tea?", "run-3"),
+                CancellationToken.None);
+
+            Assert.Equal(3, runtime.Calls.Count);
+            Assert.Equal(2, runtime.Calls[2].Context.ConversationMessages.Count);
+            Assert.True(runtime.Calls[2].Context.RetrievedMemoryCount > 0);
+            Assert.Contains("alpha likes tea", runtime.Calls[2].Context.RetrievedMemoryContext, StringComparison.OrdinalIgnoreCase);
+
+            var storedMessages = await repository.GetConversationMessagesAsync(
+                conversationKey,
+                10,
+                CancellationToken.None);
+            var vectorMemoryCount = await repository.GetConversationVectorMemoryCountAsync(
+                conversationKey,
+                CancellationToken.None);
+
+            Assert.Equal(2, storedMessages.Count);
+            Assert.Equal(new[] { "remind me: alpha likes tea?", "noted three" }, storedMessages.Select(message => message.Text));
+            Assert.True(vectorMemoryCount >= 2);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Project_capsules_are_injected_into_runtime_memory_context()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            await repository.UpsertProjectCapsulesAsync(
+                new[]
+                {
+                    new ProjectCapsuleMemory(
+                        "telegram:200:100",
+                        "construction",
+                        "Стройка",
+                        "## Статус\n- Выбираем доски для каркаса.",
+                        "conversation",
+                        0.84d,
+                        SourceEventId: 3,
+                        DateTimeOffset.UtcNow,
+                        Version: 1),
+                },
+                CancellationToken.None);
+            var runtime = new FakeAgentRuntime("ok");
+            var service = CreateService(repository, runtime);
+            var conversation = DialogueConversation.Create("telegram", "200", "100");
+
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "что по стройке?", "run-capsule"),
+                CancellationToken.None);
+
+            Assert.Single(runtime.Calls);
+            Assert.Contains("project capsules", runtime.Calls[0].Context.RetrievedMemoryContext, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Стройка", runtime.Calls[0].Context.RetrievedMemoryContext, StringComparison.Ordinal);
+            Assert.True(runtime.Calls[0].Context.RetrievedMemoryCount > 0);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Context_snapshot_reports_message_counts_and_summary_numbers()
     {
         var databasePath = CreateTemporaryDatabasePath();
@@ -320,6 +466,13 @@ public class DialogueServiceTests
             Assert.Equal(key, snapshot.ConversationKey);
             Assert.Equal(3, snapshot.StoredMessageCount);
             Assert.Equal(0, snapshot.RawEventCount);
+            Assert.Equal(0, snapshot.VectorMemoryCount);
+            Assert.Equal(0, snapshot.ProjectCapsuleCount);
+            Assert.Equal(0, snapshot.ProjectCapsuleLatestSourceEventId);
+            Assert.Null(snapshot.ProjectCapsuleLastUpdatedAtUtc);
+            Assert.Equal(0, snapshot.ProjectCapsuleLastProcessedRawEventId);
+            Assert.Null(snapshot.ProjectCapsuleLastExtractionAtUtc);
+            Assert.Equal(0, snapshot.ProjectCapsuleExtractionRunsCount);
             Assert.Equal(24, snapshot.MaxContextMessages);
             Assert.Equal(3, snapshot.LoadedHistoryMessageCount);
             Assert.True(snapshot.PersistedSummaryPresent);
@@ -480,13 +633,24 @@ public class DialogueServiceTests
 
     private static DialogueService CreateService(
         AgentStateRepository repository,
-        FakeAgentRuntime runtime)
+        FakeAgentRuntime runtime,
+        AgentOptions? agentOptions = null)
     {
         var loggerFactory = LoggerFactory.Create(_ => { });
+        var boundedProvider = new BoundedChatHistoryProvider(
+            repository,
+            loggerFactory.CreateLogger<BoundedChatHistoryProvider>());
+        var projectCapsuleService = new ProjectCapsuleService(
+            runtime,
+            Options.Create(agentOptions ?? new AgentOptions()),
+            repository,
+            loggerFactory.CreateLogger<ProjectCapsuleService>());
 
         return new DialogueService(
             runtime,
-            Options.Create(new AgentOptions()),
+            Options.Create(agentOptions ?? new AgentOptions()),
+            boundedProvider,
+            projectCapsuleService,
             repository,
             loggerFactory.CreateLogger<DialogueService>());
     }

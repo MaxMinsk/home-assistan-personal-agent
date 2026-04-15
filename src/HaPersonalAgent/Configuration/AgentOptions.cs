@@ -8,6 +8,8 @@ namespace HaPersonalAgent.Configuration;
 public sealed class AgentOptions
 {
     public const string SectionName = "Agent";
+    public const string CapsuleExtractionModeManual = "manual";
+    public const string CapsuleExtractionModeAutoBatched = "auto-batched";
 
     public string StateDatabasePath { get; set; } = "/data/state.sqlite";
 
@@ -16,4 +18,8 @@ public sealed class AgentOptions
     public int WorkspaceMaxMb { get; set; } = 512;
 
     public int ConversationContextMaxTurns { get; set; } = 12;
+
+    public string CapsuleExtractionMode { get; set; } = CapsuleExtractionModeManual;
+
+    public int CapsuleAutoBatchRawEventThreshold { get; set; } = 20;
 }

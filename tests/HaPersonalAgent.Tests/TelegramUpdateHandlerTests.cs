@@ -190,6 +190,116 @@ public class TelegramUpdateHandlerTests
     }
 
     [Fact]
+    public async Task Show_capsules_returns_project_capsules_for_current_conversation()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            await repository.UpsertProjectCapsulesAsync(
+                new[]
+                {
+                    new ProjectCapsuleMemory(
+                        "telegram:200:100",
+                        "dog",
+                        "Щенок",
+                        "## Факты\n- Собака живет дома.",
+                        "conversation",
+                        0.86d,
+                        SourceEventId: 15,
+                        DateTimeOffset.UtcNow,
+                        Version: 2),
+                },
+                CancellationToken.None);
+            var runtime = new FakeAgentRuntime("unused");
+            var handler = CreateHandler(repository, runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 29, chatId: 200, userId: 100, text: "/showCapsules"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Empty(runtime.Calls);
+            Assert.Single(adapter.SentMessages);
+            Assert.Contains("Project capsules:", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("[dog] Щенок", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("sourceEventId=15", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Refresh_capsules_extracts_capsules_from_raw_events_without_regular_dialogue_turn()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            await repository.AppendRawEventsAsync(
+                new[]
+                {
+                    RawEventEntry.Create(
+                        "telegram:200:100",
+                        "telegram",
+                        "200",
+                        "100",
+                        DialogueRawEventKinds.UserMessage,
+                        "Мы строим сарай и выбираем доски."),
+                },
+                CancellationToken.None);
+            var runtime = new FakeAgentRuntime(
+                """
+                {
+                  "capsules": [
+                    {
+                      "key": "construction",
+                      "title": "Стройка",
+                      "contentMarkdown": "## Статус\n- Идет выбор досок.",
+                      "scope": "conversation",
+                      "confidence": 0.91,
+                      "sourceEventId": 1
+                    }
+                  ]
+                }
+                """);
+            var handler = CreateHandler(repository, runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 30, chatId: 200, userId: 100, text: "/refreshCapsules"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Single(runtime.Calls);
+            Assert.Equal(LlmExecutionProfile.Summarization, runtime.Calls[0].Context.ExecutionProfile);
+            Assert.Empty(runtime.Calls[0].Context.ConversationMessages);
+            Assert.Contains("refresh project capsules", runtime.Calls[0].Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Single(adapter.SentMessages);
+            Assert.Contains("Capsules total: 1", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+
+            var capsules = await repository.GetProjectCapsulesAsync(
+                "telegram:200:100",
+                limit: 10,
+                CancellationToken.None);
+            Assert.Single(capsules);
+            Assert.Equal("construction", capsules[0].CapsuleKey);
+            Assert.Equal(1, capsules[0].SourceEventId);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Show_raw_events_returns_recent_events_for_current_conversation()
     {
         var databasePath = CreateTemporaryDatabasePath();
@@ -423,6 +533,8 @@ public class TelegramUpdateHandlerTests
             Assert.Contains("ReasoningPlan(tool-enabled): requested auto, effective provider-default", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("Context(stored): 0 messages", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("RawEvents(stored): 0 events", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("VectorMemory(stored): 0 entries", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("ProjectCapsules(stored): 0 entries", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("Context(loaded): 0 / 24 messages", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("PersistedSummary: present False", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Empty(adapter.SentTypingActions);
@@ -578,9 +690,20 @@ public class TelegramUpdateHandlerTests
             ApiKey = "configured",
         });
         var loggerFactory = LoggerFactory.Create(_ => { });
+        var boundedProvider = new BoundedChatHistoryProvider(
+            repository,
+            loggerFactory.CreateLogger<BoundedChatHistoryProvider>());
+        var agentOptions = Options.Create(new AgentOptions());
+        var projectCapsuleService = new ProjectCapsuleService(
+            runtime,
+            agentOptions,
+            repository,
+            loggerFactory.CreateLogger<ProjectCapsuleService>());
         var dialogueService = new DialogueService(
             runtime,
-            Options.Create(new AgentOptions()),
+            agentOptions,
+            boundedProvider,
+            projectCapsuleService,
             repository,
             loggerFactory.CreateLogger<DialogueService>());
 

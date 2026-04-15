@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.16
+
+- Add bounded chat history + vector overflow memory layer (`conversation_vector_memory`) with retrieval context injection before each tool-enabled run.
+- Add derived project capsules memory layer (`project_capsules` + extraction state) with manual/auto-batched refresh modes and add-on options.
+- Add Telegram capsule commands (`/showCapsules`, `/refreshCapsules`) and extend `/status` with capsule storage/extraction diagnostics.
+- Expose capsule tools to the agent runtime: `project_capsules_list`, `project_capsule_get`, and `propose_project_capsule_upsert`.
+- Add confirmation-gated capsule write executor (`project_capsule_upsert`) so capsule updates are applied only after `/approve`.
+- Extend storage/dialogue/confirmation test coverage for capsules, extraction state, and confirmation write path.
+
+
 ## 0.2.15
 
 - Add Telegram typing indicator loop for long LLM operations (`typing...`) without persisting progress artifacts into dialogue memory.

@@ -1,5 +1,5 @@
 name: Home Assistant Personal Agent
-version: "0.2.15"
+version: "0.2.16"
 slug: ha_personal_agent
 description: Learning-first Microsoft Agent Framework assistant for Home Assistant.
 url: https://github.com/MaxMinsk/home-assistan-personal-agent/tree/main/addon
@@ -25,6 +25,8 @@ options:
   state_database_path: "/data/state.sqlite"
   workspace_path: "/data/workspace"
   workspace_max_mb: 512
+  capsule_extraction_mode: "manual"
+  capsule_auto_batch_raw_event_threshold: 20
 schema:
   telegram_bot_token: password?
   allowed_telegram_user_ids: 'match(^\s*$|^\d+(\s*[,;\s]\s*\d+)*\s*$)'
@@ -39,3 +41,5 @@ schema:
   state_database_path: str
   workspace_path: str
   workspace_max_mb: int(64,4096)
+  capsule_extraction_mode: list(manual|auto-batched)
+  capsule_auto_batch_raw_event_threshold: int(4,500)
