@@ -26,6 +26,7 @@ public static class HomeAssistantAddOnOptionsMapper
             ["state_database_path"] = $"{AgentOptions.SectionName}:StateDatabasePath",
             ["workspace_path"] = $"{AgentOptions.SectionName}:WorkspacePath",
             ["workspace_max_mb"] = $"{AgentOptions.SectionName}:WorkspaceMaxMb",
+            ["memory_retrieval_mode"] = $"{AgentOptions.SectionName}:MemoryRetrievalMode",
             ["capsule_extraction_mode"] = $"{AgentOptions.SectionName}:CapsuleExtractionMode",
             ["capsule_auto_batch_raw_event_threshold"] = $"{AgentOptions.SectionName}:CapsuleAutoBatchRawEventThreshold",
         };

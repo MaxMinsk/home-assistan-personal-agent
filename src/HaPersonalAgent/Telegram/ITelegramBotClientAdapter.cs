@@ -22,4 +22,21 @@ public interface ITelegramBotClientAdapter
     Task SendTypingAsync(long chatId, CancellationToken cancellationToken);
 
     Task SendMessageAsync(long chatId, string text, CancellationToken cancellationToken);
+
+    Task SendConfirmationMessageAsync(
+        long chatId,
+        string text,
+        string confirmationId,
+        CancellationToken cancellationToken);
+
+    Task ClearInlineKeyboardAsync(
+        long chatId,
+        int messageId,
+        CancellationToken cancellationToken);
+
+    Task AnswerCallbackQueryAsync(
+        string callbackQueryId,
+        string? text,
+        bool showAlert,
+        CancellationToken cancellationToken);
 }

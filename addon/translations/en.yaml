@@ -38,3 +38,12 @@ configuration:
   workspace_max_mb:
     name: Workspace size limit
     description: Maximum workspace size in MB.
+  memory_retrieval_mode:
+    name: Memory retrieval mode
+    description: before_invoke injects recalled vector memory every turn; on_demand_tool exposes memory search as an explicit tool call.
+  capsule_extraction_mode:
+    name: Capsule extraction mode
+    description: manual updates capsules only by command; auto-batched refreshes after enough new raw events.
+  capsule_auto_batch_raw_event_threshold:
+    name: Capsule auto-batch threshold
+    description: Number of new raw events required before auto-batched capsule refresh starts.

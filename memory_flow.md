@@ -2,7 +2,7 @@
 
 ## Контекст
 
-Этот документ фиксирует текущий memory flow в проекте **Home Assistant Personal Agent** после внедрения HAAG-034/HAAG-039/HAAG-043/HAAG-041 (MAF compaction pipeline + persisted summary + bounded history/vector overflow + project capsules).
+Этот документ фиксирует текущий memory flow в проекте **Home Assistant Personal Agent** после внедрения HAAG-034/HAAG-039/HAAG-043/HAAG-041/HAAG-044 (MAF compaction pipeline + persisted summary + bounded history/vector overflow + project capsules + retrieval mode switch).
 
 Цель документа:
 
@@ -20,7 +20,9 @@
    - `conversation_summary` хранит долгоживущий сжатый контекст по разговору.
 3. Overflow retrieval memory:
    - вытесненные сообщения архивируются в `conversation_vector_memory`;
-   - перед каждым run выполняется retrieval и релевантный memory-context подмешивается в prompt.
+   - режим retrieval конфигурируется: `before_invoke` или `on_demand_tool`;
+   - в `before_invoke` retrieval выполняется перед каждым run и подмешивается в prompt;
+   - в `on_demand_tool` auto-injection отключается, а агент получает tool `search_conversation_memory`.
 4. Derived project memory:
    - `project_capsules` хранит карточки проектов, извлеченные из `raw_events`;
    - extraction работает в режимах `manual` или `auto-batched`;
@@ -36,7 +38,7 @@
 ## Ограничения текущего этапа
 
 - Векторизация локальная и легковесная (hash-based embedding), без внешнего embedding provider.
-- Retrieval сейчас fixed в режиме `before_invoke` (подмешивание перед каждым run), без `on_demand` режима через tool call.
+- В `on_demand_tool` retrieval зависит от решения модели вызвать tool; если model/tool reasoning слабый, recall может быть менее стабильным.
 - Капсулы пока conversation-scoped и не покрывают полноценный cross-conversation user/project graph.
 - Качество extraction зависит от batched LLM refresh и будет улучшаться отдельным facts-layer/quality pass.
 
@@ -44,10 +46,9 @@
 
 Следующие memory-этапы:
 
-1. `HAAG-044`: switch retrieval mode (`before_invoke` vs `on_demand_tool`) и прозрачная диагностика выбранного режима.
-2. `HAAG-045`: memory hygiene filters + source attribution, чтобы retrieval/context сообщения не загрязняли обычную историю.
-3. `HAAG-042`: artifacts по капсулам (MD/PDF) и повторная выдача через Telegram вложения.
-4. `HAAG-046`: переход от локальной векторизации к production-grade backend/embeddings.
+1. `HAAG-045`: memory hygiene filters + source attribution, чтобы retrieval/context сообщения не загрязняли обычную историю.
+2. `HAAG-042`: artifacts по капсулам (MD/PDF) и повторная выдача через Telegram вложения.
+3. `HAAG-046`: переход от локальной векторизации к production-grade backend/embeddings.
 
 ## Источники паттерна (MAF)
 
@@ -55,6 +56,10 @@
   - <https://github.com/microsoft/agent-framework/blob/main/dotnet/samples/02-agents/Agents/Agent_Step18_CompactionPipeline/Program.cs>
 - `AgentWithMemory_Step05_BoundedChatHistory`:
   - <https://github.com/microsoft/agent-framework/blob/main/dotnet/samples/02-agents/AgentWithMemory/AgentWithMemory_Step05_BoundedChatHistory/BoundedChatHistoryProvider.cs>
+- `TextSearchProviderOptions.SearchTime` (`BeforeAIInvoke`/`OnDemandFunctionCalling`):
+  - <https://github.com/microsoft/agent-framework/blob/main/dotnet/src/Microsoft.Agents.AI/TextSearchProviderOptions.cs>
+- `ChatHistoryMemoryProviderOptions.SearchTime` (`SearchBehavior.BeforeAIInvoke`/`SearchBehavior.OnDemandFunctionCalling`):
+  - <https://github.com/microsoft/agent-framework/blob/main/dotnet/src/Microsoft.Agents.AI/Memory/ChatHistoryMemoryProviderOptions.cs>
 - `AgentWithMemory_Step01_ChatHistoryMemory`:
   - <https://github.com/microsoft/agent-framework/blob/main/dotnet/samples/02-agents/AgentWithMemory/AgentWithMemory_Step01_ChatHistoryMemory/Program.cs>
 - `AgentWithMemory_Step02_MemoryUsingMem0`:
@@ -136,13 +141,16 @@
 2. `DialogueService`:
    - считает `conversationKey`;
    - читает persisted summary из `conversation_summary`;
+   - читает `Agent:MemoryRetrievalMode`;
    - через `BoundedChatHistoryProvider` читает последние `N*2` сообщений из `conversation_messages`;
-   - через тот же provider делает retrieval по `conversation_vector_memory` и собирает компактный memory-context блок;
+   - в `before_invoke` через тот же provider делает retrieval по `conversation_vector_memory` и собирает компактный memory-context блок;
+   - в `on_demand_tool` retrieval на этом шаге пропускается;
    - подмешивает `project_capsules` как отдельный long-term context блок;
    - формирует `AgentContext` и вызывает `AgentRuntime.SendAsync`.
 3. `AgentRuntime`:
    - создает execution plan;
    - собирает MAF agent;
+   - в `on_demand_tool` добавляет memory tool `search_conversation_memory`;
    - подключает tools для капсул (`project_capsules_list`, `project_capsule_get`, `propose_project_capsule_upsert`);
    - подключает `CompactionProvider` с `PipelineCompactionStrategy`:
      - `ToolResultCompactionStrategy`
@@ -228,6 +236,8 @@
   - проверяет, что пользователь видит `[context-summary]`, но в SQL сохраняется только чистый assistant текст.
 - `DialogueServiceTests.Bounded_history_archives_overflow_and_recalls_relevant_vector_memory`
   - проверяет overflow в `conversation_vector_memory` и recall в `AgentContext.RetrievedMemoryContext`.
+- `DialogueServiceTests.On_demand_retrieval_mode_does_not_auto_inject_vector_memories_into_runtime_context`
+  - проверяет, что при `memory_retrieval_mode=on_demand_tool` auto-inject retrieval отключен и vector memory идет только через tool path.
 - `StorageTests.Conversation_summary_upsert_get_and_clear_roundtrip`
   - проверяет таблицу `conversation_summary`: upsert/get/update/clear.
 - `StorageTests.Conversation_vector_memory_upsert_get_count_and_clear_roundtrip`
@@ -247,4 +257,4 @@
 - `DialogueServiceTests.Persisted_summary_candidate_is_saved_and_reused_in_next_runtime_context`
   - проверяет, что summary сохраняется после run и используется в следующем run как `AgentContext.PersistedSummary`.
 
-Итог: память теперь четырехслойная: recent turns (`conversation_messages`), persisted summary (`conversation_summary`), overflow retrieval (`conversation_vector_memory`) и derived project capsules (`project_capsules`) поверх append-only `raw_events`.
+Итог: память теперь четырехслойная: recent turns (`conversation_messages`), persisted summary (`conversation_summary`), overflow retrieval (`conversation_vector_memory`) и derived project capsules (`project_capsules`) поверх append-only `raw_events`, с переключаемым retrieval mode (`before_invoke`/`on_demand_tool`).

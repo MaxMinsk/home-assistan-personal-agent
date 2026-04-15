@@ -14,7 +14,11 @@ namespace HaPersonalAgent.Telegram;
 /// </summary>
 public sealed class TelegramBotGateway : BackgroundService
 {
-    private static readonly IReadOnlyList<UpdateType> AllowedUpdates = [UpdateType.Message];
+    private static readonly IReadOnlyList<UpdateType> AllowedUpdates =
+    [
+        UpdateType.Message,
+        UpdateType.CallbackQuery,
+    ];
 
     private readonly ITelegramBotClientAdapterFactory _clientFactory;
     private readonly ILogger<TelegramBotGateway> _logger;

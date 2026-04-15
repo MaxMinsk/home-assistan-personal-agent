@@ -1,3 +1,5 @@
+using HaPersonalAgent.Configuration;
+
 namespace HaPersonalAgent.Agent;
 
 /// <summary>
@@ -14,6 +16,7 @@ public sealed record AgentContext(
     bool ShouldRefreshPersistedSummary = true,
     bool ForcePersistedSummaryRefresh = false,
     int MessagesSincePersistedSummary = 0,
+    string MemoryRetrievalMode = AgentOptions.MemoryRetrievalModeBeforeInvoke,
     string? ConversationKey = null,
     string? Transport = null,
     string? ConversationId = null,
@@ -29,6 +32,7 @@ public sealed record AgentContext(
         bool shouldRefreshPersistedSummary = true,
         bool forcePersistedSummaryRefresh = false,
         int messagesSincePersistedSummary = 0,
+        string memoryRetrievalMode = AgentOptions.MemoryRetrievalModeBeforeInvoke,
         string? conversationKey = null,
         string? transport = null,
         string? conversationId = null,
@@ -43,6 +47,7 @@ public sealed record AgentContext(
             shouldRefreshPersistedSummary,
             forcePersistedSummaryRefresh,
             Math.Max(messagesSincePersistedSummary, 0),
+            AgentOptions.NormalizeMemoryRetrievalMode(memoryRetrievalMode),
             string.IsNullOrWhiteSpace(conversationKey) ? null : conversationKey.Trim(),
             string.IsNullOrWhiteSpace(transport) ? null : transport.Trim(),
             string.IsNullOrWhiteSpace(conversationId) ? null : conversationId.Trim(),

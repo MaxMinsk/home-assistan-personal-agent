@@ -13,6 +13,8 @@ namespace HaPersonalAgent.Dialogue;
 /// Ссылки:
 /// - https://github.com/microsoft/agent-framework/blob/main/dotnet/samples/02-agents/AgentWithMemory/AgentWithMemory_Step05_BoundedChatHistory/BoundedChatHistoryProvider.cs
 /// - https://github.com/microsoft/agent-framework/blob/main/dotnet/samples/02-agents/AgentWithMemory/AgentWithMemory_Step05_BoundedChatHistory/Program.cs
+/// - https://github.com/microsoft/agent-framework/blob/main/dotnet/src/Microsoft.Agents.AI/TextSearchProviderOptions.cs
+/// - https://github.com/microsoft/agent-framework/blob/main/dotnet/src/Microsoft.Agents.AI/Memory/ChatHistoryMemoryProviderOptions.cs
 /// </summary>
 public sealed class BoundedChatHistoryProvider
 {
@@ -37,6 +39,7 @@ public sealed class BoundedChatHistoryProvider
         string conversationKey,
         string userMessage,
         int maxRecentMessages,
+        bool includeRetrievedMemory,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
@@ -46,22 +49,43 @@ public sealed class BoundedChatHistoryProvider
             conversationKey,
             maxRecentMessages,
             cancellationToken);
-        var retrieved = await RetrieveMemoriesAsync(
-            conversationKey,
-            userMessage,
-            cancellationToken);
+        var retrieved = includeRetrievedMemory
+            ? await SearchAsync(
+                conversationKey,
+                userMessage,
+                topK: DefaultRecallTopK,
+                cancellationToken)
+            : Array.Empty<BoundedRetrievedMemoryHit>();
         var contextText = BuildRetrievedMemoryContext(retrieved);
 
         _logger.LogInformation(
-            "Bounded chat history load for {ConversationKey}: recent messages {RecentMessages}, retrieved memories {RetrievedMemories}.",
+            "Bounded chat history load for {ConversationKey}: recent messages {RecentMessages}, retrieval mode {RetrievalMode}, retrieved memories {RetrievedMemories}.",
             conversationKey,
             recentMessages.Count,
+            includeRetrievedMemory ? "before_invoke" : "on_demand_tool",
             retrieved.Count);
 
         return new BoundedChatHistorySnapshot(
             recentMessages,
             contextText,
             retrieved.Count);
+    }
+
+    public async Task<IReadOnlyList<BoundedRetrievedMemoryHit>> SearchAsync(
+        string conversationKey,
+        string query,
+        int topK,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(query);
+
+        var normalizedTopK = Math.Clamp(topK, 1, 12);
+        return await RetrieveMemoriesAsync(
+            conversationKey,
+            query,
+            normalizedTopK,
+            cancellationToken);
     }
 
     public async Task ArchiveOverflowAndTrimAsync(
@@ -119,20 +143,21 @@ public sealed class BoundedChatHistoryProvider
             maxRecentMessages);
     }
 
-    private async Task<IReadOnlyList<RetrievedMemoryCandidate>> RetrieveMemoriesAsync(
+    private async Task<IReadOnlyList<BoundedRetrievedMemoryHit>> RetrieveMemoriesAsync(
         string conversationKey,
-        string userMessage,
+        string query,
+        int topK,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(userMessage))
+        if (string.IsNullOrWhiteSpace(query))
         {
-            return Array.Empty<RetrievedMemoryCandidate>();
+            return Array.Empty<BoundedRetrievedMemoryHit>();
         }
 
-        var queryEmbedding = BuildEmbedding(userMessage);
+        var queryEmbedding = BuildEmbedding(query);
         if (!HasMeaningfulSignal(queryEmbedding))
         {
-            return Array.Empty<RetrievedMemoryCandidate>();
+            return Array.Empty<BoundedRetrievedMemoryHit>();
         }
 
         var vectorRecords = await _stateRepository.GetConversationVectorMemoryAsync(
@@ -141,10 +166,10 @@ public sealed class BoundedChatHistoryProvider
             cancellationToken);
         if (vectorRecords.Count == 0)
         {
-            return Array.Empty<RetrievedMemoryCandidate>();
+            return Array.Empty<BoundedRetrievedMemoryHit>();
         }
 
-        var candidates = new List<RetrievedMemoryCandidate>(capacity: Math.Min(vectorRecords.Count, 32));
+        var candidates = new List<BoundedRetrievedMemoryHit>(capacity: Math.Min(vectorRecords.Count, 32));
         foreach (var record in vectorRecords)
         {
             var embedding = ParseEmbedding(record.Embedding);
@@ -159,7 +184,7 @@ public sealed class BoundedChatHistoryProvider
                 continue;
             }
 
-            candidates.Add(new RetrievedMemoryCandidate(
+            candidates.Add(new BoundedRetrievedMemoryHit(
                 record.SourceMessageId,
                 record.Role,
                 record.Content,
@@ -169,11 +194,11 @@ public sealed class BoundedChatHistoryProvider
         return candidates
             .OrderByDescending(candidate => candidate.Score)
             .ThenByDescending(candidate => candidate.SourceMessageId)
-            .Take(DefaultRecallTopK)
+            .Take(topK)
             .ToArray();
     }
 
-    private static string? BuildRetrievedMemoryContext(IReadOnlyList<RetrievedMemoryCandidate> candidates)
+    private static string? BuildRetrievedMemoryContext(IReadOnlyList<BoundedRetrievedMemoryHit> candidates)
     {
         if (candidates.Count == 0)
         {
@@ -356,9 +381,4 @@ public sealed class BoundedChatHistoryProvider
         }
     }
 
-    private sealed record RetrievedMemoryCandidate(
-        long SourceMessageId,
-        AgentConversationRole Role,
-        string Text,
-        float Score);
 }

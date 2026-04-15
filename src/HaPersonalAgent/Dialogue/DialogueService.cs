@@ -56,23 +56,27 @@ public sealed class DialogueService
         var messagesSincePersistedSummary = CountMessagesSinceSummary(
             persistedSummary,
             latestMessageId);
+        var memoryRetrievalMode = AgentOptions.NormalizeMemoryRetrievalMode(_agentOptions.Value.MemoryRetrievalMode);
+        var autoMemoryRetrievalEnabled = AgentOptions.IsBeforeInvokeRetrieval(memoryRetrievalMode);
         var shouldRefreshPersistedSummary = persistedSummary is null
             || messagesSincePersistedSummary >= PersistedSummaryRefreshMessageThreshold;
         var boundedHistory = await _boundedChatHistoryProvider.LoadAsync(
             conversationKey,
             request.Text,
             maxMessages,
+            includeRetrievedMemory: autoMemoryRetrievalEnabled,
             cancellationToken);
         var capsulePromptContext = await _projectCapsuleService.BuildPromptContextAsync(
             conversationKey,
             cancellationToken);
+        var vectorRetrievedMemoryCount = boundedHistory.RetrievedMemoryCount;
         var combinedMemoryContext = CombineContextBlocks(
             capsulePromptContext.PromptText,
             boundedHistory.RetrievedMemoryContext);
-        var combinedMemoryCount = capsulePromptContext.CapsuleCount + boundedHistory.RetrievedMemoryCount;
+        var combinedMemoryCount = capsulePromptContext.CapsuleCount + vectorRetrievedMemoryCount;
         var history = boundedHistory.RecentMessages;
         _logger.LogInformation(
-            "Dialogue request {CorrelationId} started for {ConversationKey} ({Transport}/{ConversationId}, participant {ParticipantId}) with profile {ExecutionProfile}, text length {TextLength}, history messages {HistoryMessageCount}, retrieved memories {RetrievedMemoryCount}, project capsules in prompt {ProjectCapsuleCount}, persisted summary present {PersistedSummaryPresent}, persisted summary version {PersistedSummaryVersion}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}.",
+            "Dialogue request {CorrelationId} started for {ConversationKey} ({Transport}/{ConversationId}, participant {ParticipantId}) with profile {ExecutionProfile}, text length {TextLength}, history messages {HistoryMessageCount}, memory retrieval mode {MemoryRetrievalMode}, auto retrieval {AutoMemoryRetrievalEnabled}, vector retrieved memories {VectorRetrievedMemoryCount}, project capsules in prompt {ProjectCapsuleCount}, combined retrieved memories {RetrievedMemoryCount}, persisted summary present {PersistedSummaryPresent}, persisted summary version {PersistedSummaryVersion}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}.",
             request.CorrelationId,
             conversationKey,
             request.Conversation.Transport,
@@ -81,8 +85,11 @@ public sealed class DialogueService
             request.ExecutionProfile,
             request.Text.Length,
             history.Count,
-            combinedMemoryCount,
+            memoryRetrievalMode,
+            autoMemoryRetrievalEnabled,
+            vectorRetrievedMemoryCount,
             capsulePromptContext.CapsuleCount,
+            combinedMemoryCount,
             persistedSummary is not null,
             persistedSummary?.SummaryVersion ?? 0,
             messagesSincePersistedSummary,
@@ -117,6 +124,7 @@ public sealed class DialogueService
                     retrievedMemoryCount: combinedMemoryCount,
                     shouldRefreshPersistedSummary: shouldRefreshPersistedSummary,
                     messagesSincePersistedSummary: messagesSincePersistedSummary,
+                    memoryRetrievalMode: memoryRetrievalMode,
                     conversationKey: conversationKey,
                     transport: request.Conversation.Transport,
                     conversationId: request.Conversation.ConversationId,
@@ -479,6 +487,8 @@ public sealed class DialogueService
         var projectCapsuleExtractionState = await _stateRepository.GetProjectCapsuleExtractionStateAsync(
             conversationKey,
             cancellationToken);
+        var memoryRetrievalMode = AgentOptions.NormalizeMemoryRetrievalMode(_agentOptions.Value.MemoryRetrievalMode);
+        var autoMemoryRetrievalEnabled = AgentOptions.IsBeforeInvokeRetrieval(memoryRetrievalMode);
         var summary = await _stateRepository.GetConversationSummaryAsync(
             conversationKey,
             cancellationToken);
@@ -498,6 +508,9 @@ public sealed class DialogueService
             ProjectCapsuleLastProcessedRawEventId: projectCapsuleExtractionState?.LastRawEventId ?? 0,
             ProjectCapsuleLastExtractionAtUtc: projectCapsuleExtractionState?.UpdatedAtUtc,
             ProjectCapsuleExtractionRunsCount: projectCapsuleExtractionState?.RunsCount ?? 0,
+            MemoryRetrievalMode: memoryRetrievalMode,
+            MemoryRetrievalBeforeInvokeEnabled: autoMemoryRetrievalEnabled,
+            MemoryRetrievalOnDemandToolEnabled: !autoMemoryRetrievalEnabled,
             MaxContextMessages: maxMessages,
             LoadedHistoryMessageCount: Math.Min(storedMessageCount, maxMessages),
             MessagesSincePersistedSummary: messagesSinceSummary,

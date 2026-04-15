@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
@@ -11,10 +13,14 @@ namespace HaPersonalAgent.Confirmation;
 /// </summary>
 public sealed partial class ConfirmationResultFormatter
 {
+    private const string ProjectCapsuleUpsertActionKind = "project_capsule_upsert";
     private const int UserPreviewMaxLength = 1400;
     private const int AuditPreviewMaxLength = 512;
 
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
 
     private static readonly string[] SensitivePropertyMarkers =
     [
@@ -33,6 +39,18 @@ public sealed partial class ConfirmationResultFormatter
         string? resultJson)
     {
         ArgumentNullException.ThrowIfNull(confirmation);
+
+        if (TryCreateProjectCapsulePreview(
+                confirmation,
+                resultJson,
+                out var projectCapsulePreview))
+        {
+            return string.Join(
+                Environment.NewLine,
+                $"Выполнено действие {confirmation.Id}: {confirmation.Summary}",
+                string.Empty,
+                projectCapsulePreview);
+        }
 
         var preview = CreateUserPreview(resultJson);
         if (string.IsNullOrWhiteSpace(preview))
@@ -180,6 +198,237 @@ public sealed partial class ConfirmationResultFormatter
         value.Length <= maxLength
             ? value
             : value[..Math.Max(0, maxLength - 16)] + "... [truncated]";
+
+    private static bool TryCreateProjectCapsulePreview(
+        PendingConfirmation confirmation,
+        string? resultJson,
+        out string preview)
+    {
+        preview = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(resultJson))
+        {
+            return false;
+        }
+
+        if (!string.Equals(confirmation.ActionKind, ProjectCapsuleUpsertActionKind, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        JsonDocument document;
+        try
+        {
+            document = JsonDocument.Parse(resultJson);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+
+        using (document)
+        {
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            var root = document.RootElement;
+            var key = ReadString(root, "capsuleKey");
+            var title = ReadString(root, "title");
+            var scope = ReadString(root, "scope");
+            var changed = ReadOptionalBoolean(root, "changed");
+            var version = ReadOptionalInt32(root, "version");
+            var sourceEventId = ReadOptionalInt64(root, "sourceEventId");
+            var confidence = ReadOptionalDouble(root, "confidence");
+            var updatedAtUtc = ReadOptionalDateTimeOffset(root, "updatedAtUtc");
+
+            var lines = new List<string>
+            {
+                changed == true
+                    ? "Капсула памяти обновлена."
+                    : "Капсула памяти уже была актуальна, версия не изменилась.",
+            };
+
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                lines.Add($"Название: {title}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                lines.Add($"Ключ: {key}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(scope))
+            {
+                lines.Add($"Scope: {scope}");
+            }
+
+            if (version.HasValue && version.Value > 0)
+            {
+                lines.Add($"Версия: {version.Value.ToString(CultureInfo.InvariantCulture)}");
+            }
+
+            if (sourceEventId.HasValue && sourceEventId.Value > 0)
+            {
+                lines.Add($"Source event id: {sourceEventId.Value.ToString(CultureInfo.InvariantCulture)}");
+            }
+
+            if (confidence.HasValue)
+            {
+                lines.Add($"Confidence: {confidence.Value.ToString("0.00", CultureInfo.InvariantCulture)}");
+            }
+
+            if (updatedAtUtc.HasValue)
+            {
+                lines.Add($"Updated (UTC): {updatedAtUtc.Value:yyyy-MM-dd HH:mm:ss}");
+            }
+
+            preview = string.Join(Environment.NewLine, lines);
+            return true;
+        }
+    }
+
+    private static string? ReadString(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        if (property.ValueKind == JsonValueKind.String)
+        {
+            return property.GetString();
+        }
+
+        return property.GetRawText();
+    }
+
+    private static bool? ReadOptionalBoolean(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        if (property.ValueKind == JsonValueKind.True)
+        {
+            return true;
+        }
+
+        if (property.ValueKind == JsonValueKind.False)
+        {
+            return false;
+        }
+
+        if (property.ValueKind == JsonValueKind.String
+            && bool.TryParse(property.GetString(), out var parsed))
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    private static int? ReadOptionalInt32(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt32(out var numeric))
+        {
+            return numeric;
+        }
+
+        if (property.ValueKind == JsonValueKind.String
+            && int.TryParse(
+                property.GetString(),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var parsed))
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    private static long? ReadOptionalInt64(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out var numeric))
+        {
+            return numeric;
+        }
+
+        if (property.ValueKind == JsonValueKind.String
+            && long.TryParse(
+                property.GetString(),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var parsed))
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    private static double? ReadOptionalDouble(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetDouble(out var numeric))
+        {
+            return numeric;
+        }
+
+        if (property.ValueKind == JsonValueKind.String
+            && double.TryParse(
+                property.GetString(),
+                NumberStyles.Float | NumberStyles.AllowThousands,
+                CultureInfo.InvariantCulture,
+                out var parsed))
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    private static DateTimeOffset? ReadOptionalDateTimeOffset(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        if (property.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+
+        if (DateTimeOffset.TryParse(
+                property.GetString(),
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal,
+                out var parsed))
+        {
+            return parsed.ToUniversalTime();
+        }
+
+        return null;
+    }
 
     [GeneratedRegex(
         "(authorization|password|secret|token|api[_-]?key|access[_-]?token|refresh[_-]?token)\\s*[:=]\\s*[^,;\\r\\n]+",

@@ -19,6 +19,7 @@ public sealed record ConfigurationStatus(
     string StateDatabasePath,
     string WorkspacePath,
     int WorkspaceMaxMb,
+    string MemoryRetrievalMode,
     string CapsuleExtractionMode,
     int CapsuleAutoBatchRawEventThreshold)
 {
@@ -47,6 +48,7 @@ public sealed record ConfigurationStatus(
             agentOptions.StateDatabasePath,
             agentOptions.WorkspacePath,
             agentOptions.WorkspaceMaxMb,
+            AgentOptions.NormalizeMemoryRetrievalMode(agentOptions.MemoryRetrievalMode),
             string.IsNullOrWhiteSpace(agentOptions.CapsuleExtractionMode)
                 ? AgentOptions.CapsuleExtractionModeManual
                 : agentOptions.CapsuleExtractionMode.Trim(),

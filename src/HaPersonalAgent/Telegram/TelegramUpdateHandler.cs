@@ -5,6 +5,7 @@ using HaPersonalAgent.Dialogue;
 using HaPersonalAgent.HomeAssistant;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Text.RegularExpressions;
 using Telegram.Bot.Types;
 
 namespace HaPersonalAgent.Telegram;
@@ -22,8 +23,16 @@ public sealed class TelegramUpdateHandler
     private const int MaxRawEventLimit = 25;
     private const int DefaultProjectCapsuleLimit = 6;
     private const int MaxProjectCapsuleLimit = 12;
+    private const string ConfirmationCallbackApprovePrefix = "confirm:approve:";
+    private const string ConfirmationCallbackRejectPrefix = "confirm:reject:";
     private const string TelegramTransportName = "telegram";
     private static readonly TimeSpan TypingIndicatorInterval = TimeSpan.FromSeconds(4);
+    private static readonly Regex ApproveCommandRegex = new(
+        "/approve\\s+([A-Za-z0-9_-]{6,64})",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
+    private static readonly Regex RejectCommandRegex = new(
+        "/reject\\s+([A-Za-z0-9_-]{6,64})",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     private readonly DialogueService _dialogueService;
     private readonly IHomeAssistantMcpClient _homeAssistantMcpClient;
@@ -64,6 +73,17 @@ public sealed class TelegramUpdateHandler
         ArgumentNullException.ThrowIfNull(update);
         ArgumentNullException.ThrowIfNull(telegramOptions);
 
+        if (update.CallbackQuery is { From: not null } callbackQuery)
+        {
+            await HandleCallbackQueryAsync(
+                client,
+                update.Id,
+                callbackQuery,
+                telegramOptions,
+                cancellationToken);
+            return;
+        }
+
         var message = update.Message;
         if (message?.From is null || string.IsNullOrWhiteSpace(message.Text))
         {
@@ -98,7 +118,7 @@ public sealed class TelegramUpdateHandler
                 update.Id);
             await client.SendMessageAsync(
                 chatId,
-                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary, /showRawEvents [N] покажет последние сырые события памяти, /showCapsules [N] покажет project capsules, /refreshCapsules обновит project capsules из raw events. Для действий с домом используй /approve <id> или /reject <id>, когда агент попросит подтверждение.",
+                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary, /showRawEvents [N] покажет последние сырые события памяти, /showCapsules [N] покажет project capsules, /refreshCapsules обновит project capsules из raw events. Для действий с подтверждением можно нажать кнопки Подтвердить/Отклонить, а также доступны команды /approve <id> и /reject <id>.",
                 cancellationToken);
             return;
         }
@@ -275,6 +295,89 @@ public sealed class TelegramUpdateHandler
             conversation,
             text,
             LlmExecutionProfile.ToolEnabled,
+            cancellationToken);
+    }
+
+    private async Task HandleCallbackQueryAsync(
+        ITelegramBotClientAdapter client,
+        int updateId,
+        CallbackQuery callbackQuery,
+        TelegramOptions telegramOptions,
+        CancellationToken cancellationToken)
+    {
+        var userId = callbackQuery.From.Id;
+        var callbackData = callbackQuery.Data?.Trim();
+        _logger.LogInformation(
+            "Telegram callback query {TelegramUpdateId}/{CallbackQueryId} received from user {TelegramUserId}; data '{CallbackData}'.",
+            updateId,
+            callbackQuery.Id,
+            userId,
+            callbackData ?? "<empty>");
+
+        if (!IsAllowed(telegramOptions, userId))
+        {
+            _logger.LogWarning(
+                "Ignoring Telegram callback query {CallbackQueryId} from non-allowlisted user {TelegramUserId}.",
+                callbackQuery.Id,
+                userId);
+            await client.AnswerCallbackQueryAsync(
+                callbackQuery.Id,
+                "Недостаточно прав для этого действия.",
+                showAlert: true,
+                cancellationToken);
+            return;
+        }
+
+        if (callbackQuery.Message?.Chat is null)
+        {
+            await client.AnswerCallbackQueryAsync(
+                callbackQuery.Id,
+                "Не удалось определить чат для подтверждения.",
+                showAlert: true,
+                cancellationToken);
+            return;
+        }
+
+        if (!TryParseConfirmationCallbackData(callbackData, out var actionId, out var approve))
+        {
+            await client.AnswerCallbackQueryAsync(
+                callbackQuery.Id,
+                "Неизвестное действие кнопки.",
+                showAlert: true,
+                cancellationToken);
+            return;
+        }
+
+        await client.AnswerCallbackQueryAsync(
+            callbackQuery.Id,
+            approve ? "Подтверждаю действие..." : "Отклоняю действие...",
+            showAlert: false,
+            cancellationToken);
+
+        var chatId = callbackQuery.Message.Chat.Id;
+        try
+        {
+            await client.ClearInlineKeyboardAsync(
+                chatId,
+                callbackQuery.Message.Id,
+                cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogDebug(
+                exception,
+                "Failed to clear inline keyboard for callback query {CallbackQueryId} in chat {TelegramChatId}.",
+                callbackQuery.Id,
+                chatId);
+        }
+
+        var conversation = CreateConversation(chatId, userId);
+        await HandleConfirmationCommandAsync(
+            client,
+            chatId,
+            conversation,
+            actionId,
+            approve,
             cancellationToken);
     }
 
@@ -522,10 +625,23 @@ public sealed class TelegramUpdateHandler
             response.IsConfigured,
             response.Text.Length);
 
-        await client.SendMessageAsync(
-            chatId,
-            NormalizeTelegramText(response.Text),
-            cancellationToken);
+        var normalizedResponse = NormalizeTelegramText(response.Text);
+        if (TryExtractConfirmationPromptId(normalizedResponse, out var confirmationId)
+            && !string.IsNullOrWhiteSpace(confirmationId))
+        {
+            _logger.LogInformation(
+                "Dialogue request telegram-{TelegramUpdateId} produced confirmation prompt {ConfirmationId}; sending Telegram inline buttons.",
+                updateId,
+                confirmationId);
+            await client.SendConfirmationMessageAsync(
+                chatId,
+                normalizedResponse,
+                confirmationId,
+                cancellationToken);
+            return;
+        }
+
+        await client.SendMessageAsync(chatId, normalizedResponse, cancellationToken);
     }
 
     private async Task<string> FormatStatusAsync(
@@ -560,6 +676,7 @@ public sealed class TelegramUpdateHandler
             $"Context(stored): {contextSnapshot.StoredMessageCount} messages",
             $"RawEvents(stored): {contextSnapshot.RawEventCount} events",
             $"VectorMemory(stored): {contextSnapshot.VectorMemoryCount} entries",
+            $"MemoryRetrieval: mode {contextSnapshot.MemoryRetrievalMode}, before-invoke {contextSnapshot.MemoryRetrievalBeforeInvokeEnabled}, on-demand-tool {contextSnapshot.MemoryRetrievalOnDemandToolEnabled}",
             $"ProjectCapsules(stored): {contextSnapshot.ProjectCapsuleCount} entries",
             $"ProjectCapsules(lastSourceEventId): {contextSnapshot.ProjectCapsuleLatestSourceEventId}",
             $"ProjectCapsules(lastUpdatedUtc): {FormatUtc(contextSnapshot.ProjectCapsuleLastUpdatedAtUtc)}",
@@ -611,6 +728,70 @@ public sealed class TelegramUpdateHandler
 
         var parts = text.Split(' ', 2, StringSplitOptions.TrimEntries);
         argument = parts.Length == 2 ? parts[1].Trim() : null;
+        return true;
+    }
+
+    private static bool TryParseConfirmationCallbackData(
+        string? callbackData,
+        out string? actionId,
+        out bool approve)
+    {
+        if (string.IsNullOrWhiteSpace(callbackData))
+        {
+            actionId = null;
+            approve = false;
+            return false;
+        }
+
+        if (callbackData.StartsWith(ConfirmationCallbackApprovePrefix, StringComparison.Ordinal))
+        {
+            actionId = callbackData[ConfirmationCallbackApprovePrefix.Length..].Trim();
+            approve = true;
+            return !string.IsNullOrWhiteSpace(actionId);
+        }
+
+        if (callbackData.StartsWith(ConfirmationCallbackRejectPrefix, StringComparison.Ordinal))
+        {
+            actionId = callbackData[ConfirmationCallbackRejectPrefix.Length..].Trim();
+            approve = false;
+            return !string.IsNullOrWhiteSpace(actionId);
+        }
+
+        actionId = null;
+        approve = false;
+        return false;
+    }
+
+    private static bool TryExtractConfirmationPromptId(
+        string text,
+        out string? confirmationId)
+    {
+        confirmationId = null;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var approveMatch = ApproveCommandRegex.Match(text);
+        if (!approveMatch.Success)
+        {
+            return false;
+        }
+
+        var rejectMatch = RejectCommandRegex.Match(text);
+        if (!rejectMatch.Success)
+        {
+            return false;
+        }
+
+        var approveId = approveMatch.Groups[1].Value;
+        var rejectId = rejectMatch.Groups[1].Value;
+        if (!string.Equals(approveId, rejectId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        confirmationId = approveId;
         return true;
     }
 

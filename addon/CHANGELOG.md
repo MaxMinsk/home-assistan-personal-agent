@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.18
+
+- Add configurable memory retrieval mode: `before_invoke` (auto-injected vector recall) or `on_demand_tool` (explicit `search_conversation_memory` tool calls by the agent).
+- Expose retrieval mode diagnostics in `/status` and runtime/dialogue logs to make memory behavior transparent.
+- Add Telegram inline confirmation buttons (`Подтвердить` / `Отклонить`) with callback handling and keyboard cleanup after click.
+- Keep `/approve <id>` and `/reject <id>` as text fallback confirmation commands.
+- Improve `/approve` result formatting for `project_capsule_upsert`: human-readable summary instead of raw escaped JSON payload.
+- Extend configuration/docs/translations/tests for retrieval-mode switch, callback confirmations, and improved confirmation result rendering.
+
+
 ## 0.2.17
 
 - Operational add-on release to republish current `0.2.16` functionality (no code changes).

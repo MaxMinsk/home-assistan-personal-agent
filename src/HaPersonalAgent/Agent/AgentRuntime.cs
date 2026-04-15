@@ -30,6 +30,8 @@ namespace HaPersonalAgent.Agent;
 public sealed class AgentRuntime : IAgentRuntime
 {
     private const int ProjectCapsuleToolListLimit = 8;
+    private const int ConversationMemorySearchDefaultTopK = 4;
+    private const int ConversationMemorySearchMaxTopK = 8;
     private static readonly JsonSerializerOptions ToolJsonOptions = new(JsonSerializerDefaults.Web);
 
     private const string Instructions =
@@ -50,6 +52,7 @@ public sealed class AgentRuntime : IAgentRuntime
     private readonly IHomeAssistantMcpAgentToolProvider? _homeAssistantMcpToolProvider;
     private readonly HomeAssistantMcpStatusTool? _homeAssistantMcpStatusTool;
     private readonly LlmExecutionPlanner _executionPlanner;
+    private readonly BoundedChatHistoryProvider? _boundedChatHistoryProvider;
     private readonly ILogger<AgentRuntime> _logger;
     private readonly ILoggerFactory _loggerFactory;
     private readonly IOptions<LlmOptions> _llmOptions;
@@ -63,6 +66,7 @@ public sealed class AgentRuntime : IAgentRuntime
         LlmExecutionPlanner executionPlanner,
         ILoggerFactory loggerFactory,
         IServiceProvider serviceProvider,
+        BoundedChatHistoryProvider? boundedChatHistoryProvider = null,
         AgentStateRepository? stateRepository = null,
         IHomeAssistantMcpAgentToolProvider? homeAssistantMcpToolProvider = null,
         IConfirmationService? confirmationService = null,
@@ -71,6 +75,7 @@ public sealed class AgentRuntime : IAgentRuntime
         _llmOptions = llmOptions;
         _statusTool = statusTool;
         _executionPlanner = executionPlanner;
+        _boundedChatHistoryProvider = boundedChatHistoryProvider;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<AgentRuntime>();
         _serviceProvider = serviceProvider;
@@ -132,7 +137,7 @@ public sealed class AgentRuntime : IAgentRuntime
             executionPlan,
             cancellationToken);
         _logger.LogInformation(
-            "Agent run {CorrelationId} starting with provider {Provider}, model {Model}, profile {ExecutionProfile}, provider profile {ProviderProfile}, thinking requested {RequestedThinkingMode}, thinking effective {EffectiveThinkingMode}, thinking reason {ThinkingReason}, history messages {HistoryMessageCount}, persisted summary present {PersistedSummaryPresent}, persisted summary length {PersistedSummaryLength}, retrieved memories {RetrievedMemoryCount}, retrieved memory text length {RetrievedMemoryLength}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}, persisted summary refresh forced {ForcePersistedSummaryRefresh}, MCP status {McpStatus}, read-only MCP tools {ReadOnlyToolCount}, confirmation MCP tools {ConfirmationToolCount}.",
+            "Agent run {CorrelationId} starting with provider {Provider}, model {Model}, profile {ExecutionProfile}, provider profile {ProviderProfile}, thinking requested {RequestedThinkingMode}, thinking effective {EffectiveThinkingMode}, thinking reason {ThinkingReason}, history messages {HistoryMessageCount}, memory retrieval mode {MemoryRetrievalMode}, persisted summary present {PersistedSummaryPresent}, persisted summary length {PersistedSummaryLength}, retrieved memories {RetrievedMemoryCount}, retrieved memory text length {RetrievedMemoryLength}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}, persisted summary refresh forced {ForcePersistedSummaryRefresh}, MCP status {McpStatus}, read-only MCP tools {ReadOnlyToolCount}, confirmation MCP tools {ConfirmationToolCount}.",
             context.CorrelationId,
             health.Provider,
             health.Model,
@@ -142,6 +147,7 @@ public sealed class AgentRuntime : IAgentRuntime
             executionPlan.EffectiveThinkingMode,
             executionPlan.Reason,
             context.ConversationMessages.Count,
+            context.MemoryRetrievalMode,
             !string.IsNullOrWhiteSpace(context.PersistedSummary),
             context.PersistedSummary?.Length ?? 0,
             context.RetrievedMemoryCount,
@@ -319,6 +325,12 @@ public sealed class AgentRuntime : IAgentRuntime
                     homeAssistantMcpTools.ConfirmationRequiredTools));
             }
 
+            if (string.Equals(context.MemoryRetrievalMode, AgentOptions.MemoryRetrievalModeOnDemandTool, StringComparison.Ordinal)
+                && _boundedChatHistoryProvider is not null)
+            {
+                tools.Add(CreateConversationMemorySearchTool(context));
+            }
+
             if (_stateRepository is not null)
             {
                 tools.Add(CreateProjectCapsulesListTool(context));
@@ -332,7 +344,7 @@ public sealed class AgentRuntime : IAgentRuntime
         }
 
         return aiChatClient.AsAIAgent(
-            instructions: CreateInstructions(homeAssistantMcpTools, executionPlan),
+            instructions: CreateInstructions(homeAssistantMcpTools, executionPlan, context),
             name: "ha_personal_agent",
             description: "Learning-first personal assistant for Home Assistant.",
             tools: tools,
@@ -533,6 +545,79 @@ public sealed class AgentRuntime : IAgentRuntime
 
     private static string BuildSummarizationNotice(CompactionRunDiagnosticsSnapshot snapshot) =>
         $"[context-summary] Чтобы удержать бюджет контекста, я сжал раннюю часть диалога ({snapshot.SummarizationRequests} summarize step).";
+
+    private AIFunction CreateConversationMemorySearchTool(AgentContext context)
+    {
+        async Task<string> SearchConversationMemoryAsync(
+            string query,
+            int topK,
+            CancellationToken cancellationToken)
+        {
+            if (_boundedChatHistoryProvider is null)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    available = false,
+                    reason = "Bounded chat history provider is not registered.",
+                }, ToolJsonOptions);
+            }
+
+            if (string.IsNullOrWhiteSpace(context.ConversationKey))
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    available = false,
+                    reason = "Conversation scope is missing for this run.",
+                }, ToolJsonOptions);
+            }
+
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    available = true,
+                    count = 0,
+                    hits = Array.Empty<object>(),
+                    reason = "query must be non-empty.",
+                }, ToolJsonOptions);
+            }
+
+            var normalizedTopK = Math.Clamp(topK <= 0 ? ConversationMemorySearchDefaultTopK : topK, 1, ConversationMemorySearchMaxTopK);
+            var hits = await _boundedChatHistoryProvider.SearchAsync(
+                context.ConversationKey,
+                query,
+                normalizedTopK,
+                cancellationToken);
+            _logger.LogInformation(
+                "On-demand conversation memory search for run {CorrelationId}: mode {MemoryRetrievalMode}, topK {TopK}, query length {QueryLength}, hits {HitCount}.",
+                context.CorrelationId,
+                context.MemoryRetrievalMode,
+                normalizedTopK,
+                query.Length,
+                hits.Count);
+
+            return JsonSerializer.Serialize(new
+            {
+                available = true,
+                count = hits.Count,
+                query = NormalizeSingleLine(query, maxLength: 240),
+                topK = normalizedTopK,
+                hits = hits.Select(hit => new
+                {
+                    sourceMessageId = hit.SourceMessageId,
+                    role = hit.Role == AgentConversationRole.User ? "user" : "assistant",
+                    score = Math.Round(hit.Score, 4),
+                    text = NormalizeSingleLine(hit.Text, maxLength: 320),
+                }),
+            }, ToolJsonOptions);
+        }
+
+        return AIFunctionFactory.Create(
+            (Func<string, int, CancellationToken, Task<string>>)SearchConversationMemoryAsync,
+            name: "search_conversation_memory",
+            description: "Searches older vector-overflow memory for this conversation. Use when memory retrieval mode is on_demand_tool.",
+            serializerOptions: null);
+    }
 
     private AIFunction CreateProjectCapsulesListTool(AgentContext context)
     {
@@ -842,7 +927,8 @@ public sealed class AgentRuntime : IAgentRuntime
 
     private string CreateInstructions(
         HomeAssistantMcpAgentToolSet homeAssistantMcpTools,
-        LlmExecutionPlan executionPlan)
+        LlmExecutionPlan executionPlan,
+        AgentContext context)
     {
         var instructions = new StringBuilder(Instructions);
 
@@ -870,6 +956,24 @@ public sealed class AgentRuntime : IAgentRuntime
         {
             instructions.AppendLine();
             instructions.AppendLine("Home Assistant control workflow is unavailable in this run; explain that control requires confirmation.");
+        }
+
+        instructions.AppendLine();
+        instructions.AppendLine("Conversation memory retrieval mode: " + context.MemoryRetrievalMode + ".");
+        if (string.Equals(context.MemoryRetrievalMode, AgentOptions.MemoryRetrievalModeOnDemandTool, StringComparison.Ordinal))
+        {
+            if (_boundedChatHistoryProvider is null)
+            {
+                instructions.AppendLine("On-demand memory search tool is unavailable in this runtime.");
+            }
+            else
+            {
+                instructions.AppendLine("Older vector memory is not auto-injected in this mode; call search_conversation_memory when historical facts are needed.");
+            }
+        }
+        else
+        {
+            instructions.AppendLine("Older relevant vector memories are auto-injected as context before this run.");
         }
 
         instructions.AppendLine();

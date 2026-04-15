@@ -534,6 +534,7 @@ public class TelegramUpdateHandlerTests
             Assert.Contains("Context(stored): 0 messages", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("RawEvents(stored): 0 events", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("VectorMemory(stored): 0 entries", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("MemoryRetrieval: mode before_invoke, before-invoke True, on-demand-tool False", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("ProjectCapsules(stored): 0 entries", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("Context(loaded): 0 / 24 messages", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("PersistedSummary: present False", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
@@ -634,6 +635,91 @@ public class TelegramUpdateHandlerTests
             Assert.Empty(runtime.Calls);
             Assert.Single(confirmationService.ApprovedConfirmations);
             Assert.Equal("abc12345", confirmationService.ApprovedConfirmations.Single().ConfirmationId);
+            Assert.Contains("Выполнено", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Confirmation_prompt_from_agent_is_sent_with_inline_buttons()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var runtime = new FakeAgentRuntime(
+                """
+                Нужно подтверждение действия abc12345.
+                Тип: home_assistant_mcp
+                Действие: Тест
+                Риск: Тестовый риск
+                Подтвердить: /approve abc12345
+                Отклонить: /reject abc12345
+                Истекает: 2026-04-15 14:00:00 UTC
+                """);
+            var handler = CreateHandler(CreateRepository(databasePath), runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 31, chatId: 200, userId: 100, text: "включи свет"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Single(runtime.Calls);
+            Assert.Single(adapter.SentConfirmationMessages);
+            Assert.Equal(200, adapter.SentConfirmationMessages[0].ChatId);
+            Assert.Equal("abc12345", adapter.SentConfirmationMessages[0].ConfirmationId);
+            Assert.Contains("/approve abc12345", adapter.SentConfirmationMessages[0].Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Callback_approve_routes_to_confirmation_service_and_answers_callback()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var runtime = new FakeAgentRuntime("unused");
+            var confirmationService = new FakeConfirmationService(
+                new ConfirmationDecisionResult(
+                    ConfirmationDecisionOutcome.Completed,
+                    IsSuccess: true,
+                    "Выполнено действие abc12345.",
+                    "abc12345"));
+            var handler = CreateHandler(
+                CreateRepository(databasePath),
+                runtime,
+                confirmationService: confirmationService);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateCallbackUpdate(
+                    updateId: 32,
+                    callbackQueryId: "cb-1",
+                    chatId: 200,
+                    userId: 100,
+                    callbackData: "confirm:approve:abc12345"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Empty(runtime.Calls);
+            Assert.Single(confirmationService.ApprovedConfirmations);
+            Assert.Equal("abc12345", confirmationService.ApprovedConfirmations[0].ConfirmationId);
+            Assert.Single(adapter.ClearedInlineKeyboards);
+            Assert.Equal(200, adapter.ClearedInlineKeyboards[0].ChatId);
+            Assert.Single(adapter.AnsweredCallbackQueries);
+            Assert.Equal("cb-1", adapter.AnsweredCallbackQueries[0].CallbackQueryId);
+            Assert.Contains("Подтверждаю", adapter.AnsweredCallbackQueries[0].Text ?? string.Empty, StringComparison.Ordinal);
             Assert.Contains("Выполнено", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
         }
         finally
@@ -772,6 +858,38 @@ public class TelegramUpdateHandlerTests
             },
         };
 
+    private static Update CreateCallbackUpdate(
+        int updateId,
+        string callbackQueryId,
+        long chatId,
+        long userId,
+        string callbackData) =>
+        new()
+        {
+            Id = updateId,
+            CallbackQuery = new CallbackQuery
+            {
+                Id = callbackQueryId,
+                Data = callbackData,
+                From = new User
+                {
+                    Id = userId,
+                    IsBot = false,
+                    FirstName = "Test",
+                },
+                Message = new Message
+                {
+                    Id = 1,
+                    Date = DateTime.UtcNow,
+                    Chat = new Chat
+                    {
+                        Id = chatId,
+                        Type = ChatType.Private,
+                    },
+                },
+            },
+        };
+
     /// <summary>
     /// Что: fake agent runtime для тестов Telegram handler.
     /// Зачем: тесты не должны обращаться к Moonshot/OpenAI-compatible endpoint и тратить API quota.
@@ -892,7 +1010,10 @@ public class TelegramUpdateHandlerTests
     private sealed class FakeTelegramBotClientAdapter : ITelegramBotClientAdapter
     {
         public List<(long ChatId, string Text)> SentMessages { get; } = new();
+        public List<(long ChatId, string Text, string ConfirmationId)> SentConfirmationMessages { get; } = new();
         public List<long> SentTypingActions { get; } = new();
+        public List<(long ChatId, int MessageId)> ClearedInlineKeyboards { get; } = new();
+        public List<(string CallbackQueryId, string? Text, bool ShowAlert)> AnsweredCallbackQueries { get; } = new();
 
         public Task DeleteWebhookAsync(bool dropPendingUpdates, CancellationToken cancellationToken) =>
             Task.CompletedTask;
@@ -914,6 +1035,36 @@ public class TelegramUpdateHandlerTests
         public Task SendMessageAsync(long chatId, string text, CancellationToken cancellationToken)
         {
             SentMessages.Add((chatId, text));
+            return Task.CompletedTask;
+        }
+
+        public Task SendConfirmationMessageAsync(
+            long chatId,
+            string text,
+            string confirmationId,
+            CancellationToken cancellationToken)
+        {
+            SentConfirmationMessages.Add((chatId, text, confirmationId));
+            SentMessages.Add((chatId, text));
+            return Task.CompletedTask;
+        }
+
+        public Task ClearInlineKeyboardAsync(
+            long chatId,
+            int messageId,
+            CancellationToken cancellationToken)
+        {
+            ClearedInlineKeyboards.Add((chatId, messageId));
+            return Task.CompletedTask;
+        }
+
+        public Task AnswerCallbackQueryAsync(
+            string callbackQueryId,
+            string? text,
+            bool showAlert,
+            CancellationToken cancellationToken)
+        {
+            AnsweredCallbackQueries.Add((callbackQueryId, text, showAlert));
             return Task.CompletedTask;
         }
     }

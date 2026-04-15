@@ -384,6 +384,53 @@ public class DialogueServiceTests
     }
 
     [Fact]
+    public async Task On_demand_retrieval_mode_does_not_auto_inject_vector_memories_into_runtime_context()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var runtime = new FakeAgentRuntime(new[]
+            {
+                "noted one",
+                "noted two",
+                "noted three",
+            });
+            var service = CreateService(
+                repository,
+                runtime,
+                new AgentOptions
+                {
+                    StateDatabasePath = databasePath,
+                    ConversationContextMaxTurns = 1,
+                    MemoryRetrievalMode = AgentOptions.MemoryRetrievalModeOnDemandTool,
+                });
+            var conversation = DialogueConversation.Create("telegram", "200", "100");
+
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "alpha likes tea", "run-1"),
+                CancellationToken.None);
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "beta likes coffee", "run-2"),
+                CancellationToken.None);
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "remind me: alpha likes tea?", "run-3"),
+                CancellationToken.None);
+
+            Assert.Equal(3, runtime.Calls.Count);
+            Assert.Equal(2, runtime.Calls[2].Context.ConversationMessages.Count);
+            Assert.Equal(AgentOptions.MemoryRetrievalModeOnDemandTool, runtime.Calls[2].Context.MemoryRetrievalMode);
+            Assert.DoesNotContain("alpha likes tea", runtime.Calls[2].Context.RetrievedMemoryContext ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(0, runtime.Calls[2].Context.RetrievedMemoryCount);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Project_capsules_are_injected_into_runtime_memory_context()
     {
         var databasePath = CreateTemporaryDatabasePath();
@@ -473,6 +520,9 @@ public class DialogueServiceTests
             Assert.Equal(0, snapshot.ProjectCapsuleLastProcessedRawEventId);
             Assert.Null(snapshot.ProjectCapsuleLastExtractionAtUtc);
             Assert.Equal(0, snapshot.ProjectCapsuleExtractionRunsCount);
+            Assert.Equal(AgentOptions.MemoryRetrievalModeBeforeInvoke, snapshot.MemoryRetrievalMode);
+            Assert.True(snapshot.MemoryRetrievalBeforeInvokeEnabled);
+            Assert.False(snapshot.MemoryRetrievalOnDemandToolEnabled);
             Assert.Equal(24, snapshot.MaxContextMessages);
             Assert.Equal(3, snapshot.LoadedHistoryMessageCount);
             Assert.True(snapshot.PersistedSummaryPresent);

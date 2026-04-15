@@ -1,13 +1,14 @@
 using Telegram.Bot;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
+using Telegram.Bot.Types.ReplyMarkups;
 
 namespace HaPersonalAgent.Telegram;
 
 /// <summary>
 /// Что: thin adapter поверх библиотеки Telegram.Bot.
-/// Зачем: ограничиваем внешний SDK тремя операциями MVP: long polling, снятие webhook и отправка текста.
-/// Как: методы вызывают extension methods Telegram.Bot, не логируют token и не занимаются бизнес-логикой команд.
+/// Зачем: изолируем внешний SDK операциями long polling/update ack/отправки сообщений, чтобы бизнес-логика и тесты не зависели от Telegram.Bot типов.
+/// Как: методы делегируют в Telegram.Bot, не логируют token и не занимаются бизнес-логикой команд.
 /// </summary>
 public sealed class TelegramBotClientAdapter : ITelegramBotClientAdapter
 {
@@ -51,5 +52,52 @@ public sealed class TelegramBotClientAdapter : ITelegramBotClientAdapter
         await _client.SendMessage(
             chatId: chatId,
             text: text,
+            cancellationToken: cancellationToken);
+
+    public async Task SendConfirmationMessageAsync(
+        long chatId,
+        string text,
+        string confirmationId,
+        CancellationToken cancellationToken)
+    {
+        var replyMarkup = new InlineKeyboardMarkup(
+            new[]
+            {
+                new[]
+                {
+                    InlineKeyboardButton.WithCallbackData(
+                        "Подтвердить",
+                        $"confirm:approve:{confirmationId}"),
+                    InlineKeyboardButton.WithCallbackData(
+                        "Отклонить",
+                        $"confirm:reject:{confirmationId}"),
+                },
+            });
+        await _client.SendMessage(
+            chatId: chatId,
+            text: text,
+            replyMarkup: replyMarkup,
+            cancellationToken: cancellationToken);
+    }
+
+    public async Task ClearInlineKeyboardAsync(
+        long chatId,
+        int messageId,
+        CancellationToken cancellationToken) =>
+        await _client.EditMessageReplyMarkup(
+            chatId: chatId,
+            messageId: messageId,
+            replyMarkup: null,
+            cancellationToken: cancellationToken);
+
+    public async Task AnswerCallbackQueryAsync(
+        string callbackQueryId,
+        string? text,
+        bool showAlert,
+        CancellationToken cancellationToken) =>
+        await _client.AnswerCallbackQuery(
+            callbackQueryId: callbackQueryId,
+            text: text,
+            showAlert: showAlert,
             cancellationToken: cancellationToken);
 }

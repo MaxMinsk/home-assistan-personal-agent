@@ -8,6 +8,8 @@ namespace HaPersonalAgent.Configuration;
 public sealed class AgentOptions
 {
     public const string SectionName = "Agent";
+    public const string MemoryRetrievalModeBeforeInvoke = "before_invoke";
+    public const string MemoryRetrievalModeOnDemandTool = "on_demand_tool";
     public const string CapsuleExtractionModeManual = "manual";
     public const string CapsuleExtractionModeAutoBatched = "auto-batched";
 
@@ -19,7 +21,25 @@ public sealed class AgentOptions
 
     public int ConversationContextMaxTurns { get; set; } = 12;
 
+    public string MemoryRetrievalMode { get; set; } = MemoryRetrievalModeBeforeInvoke;
+
     public string CapsuleExtractionMode { get; set; } = CapsuleExtractionModeManual;
 
     public int CapsuleAutoBatchRawEventThreshold { get; set; } = 20;
+
+    public static string NormalizeMemoryRetrievalMode(string? mode)
+    {
+        if (string.Equals(mode?.Trim(), MemoryRetrievalModeOnDemandTool, StringComparison.OrdinalIgnoreCase))
+        {
+            return MemoryRetrievalModeOnDemandTool;
+        }
+
+        return MemoryRetrievalModeBeforeInvoke;
+    }
+
+    public static bool IsBeforeInvokeRetrieval(string? mode) =>
+        string.Equals(
+            NormalizeMemoryRetrievalMode(mode),
+            MemoryRetrievalModeBeforeInvoke,
+            StringComparison.Ordinal);
 }
