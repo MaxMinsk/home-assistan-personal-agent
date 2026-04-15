@@ -8,6 +8,7 @@ namespace HaPersonalAgent.Agent;
 public sealed record AgentContext(
     string CorrelationId,
     IReadOnlyList<AgentConversationMessage> ConversationMessages,
+    string? PersistedSummary = null,
     string? ConversationKey = null,
     string? Transport = null,
     string? ConversationId = null,
@@ -17,6 +18,7 @@ public sealed record AgentContext(
     public static AgentContext Create(
         string? correlationId = null,
         IReadOnlyList<AgentConversationMessage>? conversationMessages = null,
+        string? persistedSummary = null,
         string? conversationKey = null,
         string? transport = null,
         string? conversationId = null,
@@ -25,6 +27,7 @@ public sealed record AgentContext(
         new(
             string.IsNullOrWhiteSpace(correlationId) ? Guid.NewGuid().ToString("N") : correlationId,
             conversationMessages ?? Array.Empty<AgentConversationMessage>(),
+            string.IsNullOrWhiteSpace(persistedSummary) ? null : persistedSummary.Trim(),
             string.IsNullOrWhiteSpace(conversationKey) ? null : conversationKey.Trim(),
             string.IsNullOrWhiteSpace(transport) ? null : transport.Trim(),
             string.IsNullOrWhiteSpace(conversationId) ? null : conversationId.Trim(),

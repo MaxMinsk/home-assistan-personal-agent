@@ -2,7 +2,7 @@
 
 ## Контекст
 
-Этот документ фиксирует текущий memory flow в проекте **Home Assistant Personal Agent** после внедрения HAAG-034 (MAF compaction pipeline).
+Этот документ фиксирует текущий memory flow в проекте **Home Assistant Personal Agent** после внедрения HAAG-034/HAAG-039 (MAF compaction pipeline + persisted summary memory).
 
 Цель документа:
 
@@ -30,6 +30,13 @@
   - `content`
   - `created_utc`
 
+- `conversation_summary`
+  - `conversation_key` (PK)
+  - `summary`
+  - `updated_utc`
+  - `source_last_message_id`
+  - `summary_version`
+
 Отдельно (не memory turns):
 
 - `pending_confirmations`
@@ -47,6 +54,7 @@
 1. `TelegramUpdateHandler` (или другой transport) отправляет запрос в `DialogueService`.
 2. `DialogueService`:
    - считает `conversationKey`;
+   - читает persisted summary из `conversation_summary`;
    - читает последние `N*2` сообщений из `conversation_messages`;
    - формирует `AgentContext` и вызывает `AgentRuntime.SendAsync`.
 3. `AgentRuntime`:
@@ -66,20 +74,22 @@
 7. `DialogueService` сохраняет в SQLite только 2 сообщения:
    - `User` (входной текст)
    - `Assistant` (финальный текст, включая `[context-summary]`, если был)
-8. После сохранения `DialogueService` применяет `TrimConversationMessagesAsync` по лимиту (`ConversationContextMaxTurns * 2`).
+8. Если runtime вернул summary candidate, `DialogueService` обновляет `conversation_summary` (upsert, новая версия, `source_last_message_id`).
+9. После сохранения `DialogueService` применяет `TrimConversationMessagesAsync` по лимиту (`ConversationContextMaxTurns * 2`).
 
 ## Что важно для SQL-корректности после compaction
 
-После HAAG-034 SQL-модель не изменилась:
+После HAAG-039 SQL-модель разделена на два слоя:
 
-- нет новых таблиц под summary;
+- `conversation_messages` остается журналом фактических turns;
+- `conversation_summary` хранит сжатую память отдельно;
 - нет скрытых служебных сообщений compaction в `conversation_messages`;
-- сохраняется прежний контракт: один user turn + один assistant turn на успешный запрос;
 - internal tool-call/result и internal summary message groups не пишутся в SQL как отдельные turns.
 
 Единственное видимое изменение памяти:
 
 - если summarize-step сработал, в `Assistant.content` появляется пользовательский префикс `[context-summary]`.
+- если runtime отдал summary candidate, обновляется `conversation_summary`.
 
 Это намеренно: пользователь явно видит, что ранняя часть контекста была сжата.
 
@@ -91,14 +101,28 @@
 - внутренние tool-call/result payloads и internal compaction groups;
 - raw confirmation payload/result (они в `pending_confirmations`/`confirmation_audit`).
 
+## Как summary попадает в prompt
+
+Порядок сборки контекста в runtime:
+
+1. persisted summary как отдельное `System` сообщение;
+2. recent turns из `conversation_messages`;
+3. текущий `User` message.
+
+Это оставляет `conversation_messages` чистым журналом, а summary работает как отдельный memory слой.
+
 ## Тестовая верификация
 
-Покрытие после HAAG-034 включает SQL-проверки:
+Покрытие после HAAG-039 включает SQL-проверки:
 
 - `DialogueServiceTests.Compaction_notice_is_persisted_as_regular_assistant_turn_and_reused_from_sql_history`
   - проверяет, что `[context-summary]` хранится как обычный `Assistant` turn;
   - проверяет, что следующий run поднимает из SQL ровно эти turns.
 - `StorageTests.Conversation_messages_preserve_multiline_compaction_notice_content`
   - проверяет корректное сохранение multiline `Assistant.content` с `[context-summary]`.
+- `StorageTests.Conversation_summary_upsert_get_and_clear_roundtrip`
+  - проверяет таблицу `conversation_summary`: upsert/get/update/clear.
+- `DialogueServiceTests.Persisted_summary_candidate_is_saved_and_reused_in_next_runtime_context`
+  - проверяет, что summary сохраняется после run и используется в следующем run как `AgentContext.PersistedSummary`.
 
-Итог: compaction влияет на prompt assembly и пользовательский финальный ответ, но не ломает SQL storage contract памяти.
+Итог: compaction и persisted summary теперь работают вместе: краткосрочные turns живут в `conversation_messages`, а долгоживущая сжатая память - в `conversation_summary`.

@@ -13,6 +13,8 @@ namespace HaPersonalAgent.Dialogue;
 /// </summary>
 public sealed class DialogueService
 {
+    private const int MaxPersistedSummaryLength = 4_000;
+
     private readonly IAgentRuntime _agentRuntime;
     private readonly IOptions<AgentOptions> _agentOptions;
     private readonly ILogger<DialogueService> _logger;
@@ -38,12 +40,15 @@ public sealed class DialogueService
 
         var conversationKey = DialogueConversationKey.Create(request.Conversation);
         var maxMessages = GetMaxContextMessages();
+        var persistedSummary = await _stateRepository.GetConversationSummaryAsync(
+            conversationKey,
+            cancellationToken);
         var history = await _stateRepository.GetConversationMessagesAsync(
             conversationKey,
             maxMessages,
             cancellationToken);
         _logger.LogInformation(
-            "Dialogue request {CorrelationId} started for {ConversationKey} ({Transport}/{ConversationId}, participant {ParticipantId}) with profile {ExecutionProfile}, text length {TextLength}, history messages {HistoryMessageCount}.",
+            "Dialogue request {CorrelationId} started for {ConversationKey} ({Transport}/{ConversationId}, participant {ParticipantId}) with profile {ExecutionProfile}, text length {TextLength}, history messages {HistoryMessageCount}, persisted summary present {PersistedSummaryPresent}, persisted summary version {PersistedSummaryVersion}.",
             request.CorrelationId,
             conversationKey,
             request.Conversation.Transport,
@@ -51,7 +56,9 @@ public sealed class DialogueService
             request.Conversation.ParticipantId,
             request.ExecutionProfile,
             request.Text.Length,
-            history.Count);
+            history.Count,
+            persistedSummary is not null,
+            persistedSummary?.SummaryVersion ?? 0);
 
         var now = DateTimeOffset.UtcNow;
         AgentRuntimeResponse response;
@@ -62,6 +69,7 @@ public sealed class DialogueService
                 AgentContext.Create(
                     correlationId: request.CorrelationId,
                     conversationMessages: history,
+                    persistedSummary: persistedSummary?.Summary,
                     conversationKey: conversationKey,
                     transport: request.Conversation.Transport,
                     conversationId: request.Conversation.ConversationId,
@@ -104,6 +112,11 @@ public sealed class DialogueService
             conversationKey,
             maxMessages,
             cancellationToken);
+        await PersistSummaryCandidateIfNeededAsync(
+            conversationKey,
+            response.PersistedSummaryCandidate,
+            persistedSummary,
+            cancellationToken);
         _logger.LogInformation(
             "Dialogue request {CorrelationId} completed and persisted user/assistant turns for {ConversationKey}; response length {ResponseLength}.",
             request.CorrelationId,
@@ -120,6 +133,9 @@ public sealed class DialogueService
         ArgumentNullException.ThrowIfNull(conversation);
 
         await _stateRepository.ClearConversationMessagesAsync(
+            DialogueConversationKey.Create(conversation),
+            cancellationToken);
+        await _stateRepository.ClearConversationSummaryAsync(
             DialogueConversationKey.Create(conversation),
             cancellationToken);
         _logger.LogInformation(
@@ -146,5 +162,56 @@ public sealed class DialogueService
     {
         var maxTurns = Math.Clamp(_agentOptions.Value.ConversationContextMaxTurns, 0, 50);
         return maxTurns * 2;
+    }
+
+    private async Task PersistSummaryCandidateIfNeededAsync(
+        string conversationKey,
+        string? summaryCandidate,
+        ConversationSummaryMemory? currentSummary,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(summaryCandidate))
+        {
+            return;
+        }
+
+        var normalizedSummary = summaryCandidate.Trim();
+        if (normalizedSummary.Length > MaxPersistedSummaryLength)
+        {
+            normalizedSummary = normalizedSummary[..MaxPersistedSummaryLength];
+        }
+
+        if (currentSummary is not null
+            && string.Equals(currentSummary.Summary, normalizedSummary, StringComparison.Ordinal))
+        {
+            _logger.LogInformation(
+                "Persisted summary update skipped for {ConversationKey}: summary text is unchanged.",
+                conversationKey);
+            return;
+        }
+
+        var latestMessageId = await _stateRepository.GetLatestConversationMessageIdAsync(
+            conversationKey,
+            cancellationToken);
+        if (!latestMessageId.HasValue)
+        {
+            return;
+        }
+
+        var nextVersion = (currentSummary?.SummaryVersion ?? 0) + 1;
+        await _stateRepository.UpsertConversationSummaryAsync(
+            new ConversationSummaryMemory(
+                conversationKey,
+                normalizedSummary,
+                DateTimeOffset.UtcNow,
+                latestMessageId.Value,
+                nextVersion),
+            cancellationToken);
+        _logger.LogInformation(
+            "Persisted conversation summary updated for {ConversationKey}; version {SummaryVersion}, source last message id {SourceLastMessageId}, length {SummaryLength}.",
+            conversationKey,
+            nextVersion,
+            latestMessageId.Value,
+            normalizedSummary.Length);
     }
 }

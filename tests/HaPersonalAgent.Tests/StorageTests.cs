@@ -28,6 +28,7 @@ public class StorageTests
             Assert.True(File.Exists(databasePath));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "agent_state"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "conversation_messages"));
+            Assert.Equal(1L, await CountTablesAsync(databasePath, "conversation_summary"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "pending_confirmations"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "confirmation_audit"));
         }
@@ -168,6 +169,74 @@ public class StorageTests
             Assert.Single(messages);
             Assert.Equal(AgentConversationRole.Assistant, messages[0].Role);
             Assert.Equal(notice, messages[0].Text);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Conversation_summary_upsert_get_and_clear_roundtrip()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            await repository.AppendConversationMessagesAsync(
+                "telegram:1:2",
+                new[]
+                {
+                    new AgentConversationMessage(AgentConversationRole.User, "hello", DateTimeOffset.UtcNow),
+                    new AgentConversationMessage(AgentConversationRole.Assistant, "hi", DateTimeOffset.UtcNow),
+                },
+                CancellationToken.None);
+            var latestMessageId = await repository.GetLatestConversationMessageIdAsync(
+                "telegram:1:2",
+                CancellationToken.None);
+            Assert.True(latestMessageId.HasValue);
+
+            await repository.UpsertConversationSummaryAsync(
+                new ConversationSummaryMemory(
+                    "telegram:1:2",
+                    "summary-v1",
+                    DateTimeOffset.UtcNow,
+                    latestMessageId!.Value,
+                    SummaryVersion: 1),
+                CancellationToken.None);
+
+            var summary = await repository.GetConversationSummaryAsync(
+                "telegram:1:2",
+                CancellationToken.None);
+            Assert.NotNull(summary);
+            Assert.Equal("summary-v1", summary.Summary);
+            Assert.Equal(1, summary.SummaryVersion);
+
+            await repository.UpsertConversationSummaryAsync(
+                summary with
+                {
+                    Summary = "summary-v2",
+                    SummaryVersion = 2,
+                    UpdatedAtUtc = DateTimeOffset.UtcNow,
+                },
+                CancellationToken.None);
+
+            var updated = await repository.GetConversationSummaryAsync(
+                "telegram:1:2",
+                CancellationToken.None);
+            Assert.NotNull(updated);
+            Assert.Equal("summary-v2", updated.Summary);
+            Assert.Equal(2, updated.SummaryVersion);
+
+            await repository.ClearConversationSummaryAsync(
+                "telegram:1:2",
+                CancellationToken.None);
+
+            var cleared = await repository.GetConversationSummaryAsync(
+                "telegram:1:2",
+                CancellationToken.None);
+            Assert.Null(cleared);
         }
         finally
         {

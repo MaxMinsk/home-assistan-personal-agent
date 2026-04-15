@@ -60,6 +60,18 @@ public class DialogueServiceTests
                 DialogueConversationKey.Create(conversation),
                 new[] { new AgentConversationMessage(AgentConversationRole.User, "clear me", DateTimeOffset.UtcNow) },
                 CancellationToken.None);
+            var latestMessageId = await repository.GetLatestConversationMessageIdAsync(
+                DialogueConversationKey.Create(conversation),
+                CancellationToken.None);
+            Assert.True(latestMessageId.HasValue);
+            await repository.UpsertConversationSummaryAsync(
+                new ConversationSummaryMemory(
+                    DialogueConversationKey.Create(conversation),
+                    "summary-to-clear",
+                    DateTimeOffset.UtcNow,
+                    latestMessageId!.Value,
+                    SummaryVersion: 1),
+                CancellationToken.None);
 
             await service.ResetAsync(conversation, CancellationToken.None);
 
@@ -67,8 +79,12 @@ public class DialogueServiceTests
                 DialogueConversationKey.Create(conversation),
                 limit: 10,
                 CancellationToken.None);
+            var summary = await repository.GetConversationSummaryAsync(
+                DialogueConversationKey.Create(conversation),
+                CancellationToken.None);
 
             Assert.Empty(stored);
+            Assert.Null(summary);
         }
         finally
         {
@@ -163,6 +179,47 @@ public class DialogueServiceTests
         }
     }
 
+    [Fact]
+    public async Task Persisted_summary_candidate_is_saved_and_reused_in_next_runtime_context()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var runtime = new FakeAgentRuntime(new (string Text, string? SummaryCandidate)[]
+            {
+                ("Первый ответ.", "Persisted summary v1"),
+                ("Второй ответ.", null),
+            });
+            var service = CreateService(repository, runtime);
+            var conversation = DialogueConversation.Create("telegram", "200", "100");
+            var conversationKey = DialogueConversationKey.Create(conversation);
+
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "Первое сообщение", "run-1"),
+                CancellationToken.None);
+
+            var summaryAfterFirstRun = await repository.GetConversationSummaryAsync(
+                conversationKey,
+                CancellationToken.None);
+            Assert.NotNull(summaryAfterFirstRun);
+            Assert.Equal("Persisted summary v1", summaryAfterFirstRun.Summary);
+            Assert.Equal(1, summaryAfterFirstRun.SummaryVersion);
+
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "Второе сообщение", "run-2"),
+                CancellationToken.None);
+
+            Assert.Equal(2, runtime.Calls.Count);
+            Assert.Equal("Persisted summary v1", runtime.Calls[1].Context.PersistedSummary);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
     private static DialogueService CreateService(
         AgentStateRepository repository,
         FakeAgentRuntime runtime)
@@ -212,7 +269,7 @@ public class DialogueServiceTests
     /// </summary>
     private sealed class FakeAgentRuntime : IAgentRuntime
     {
-        private readonly Queue<string> _responseQueue;
+        private readonly Queue<(string Text, string? SummaryCandidate)> _responseQueue;
 
         public FakeAgentRuntime(string responseText)
             : this(new[] { responseText })
@@ -220,8 +277,13 @@ public class DialogueServiceTests
         }
 
         public FakeAgentRuntime(IEnumerable<string> responseTexts)
+            : this(responseTexts.Select(text => (Text: text, SummaryCandidate: (string?)null)))
         {
-            _responseQueue = new Queue<string>(responseTexts);
+        }
+
+        public FakeAgentRuntime(IEnumerable<(string Text, string? SummaryCandidate)> responseEntries)
+        {
+            _responseQueue = new Queue<(string Text, string? SummaryCandidate)>(responseEntries);
         }
 
         public List<(string Message, AgentContext Context)> Calls { get; } = new();
@@ -239,12 +301,14 @@ public class DialogueServiceTests
             {
                 throw new InvalidOperationException("No fake runtime responses left in queue.");
             }
+            var responseEntry = _responseQueue.Dequeue();
 
             return Task.FromResult(new AgentRuntimeResponse(
                 context.CorrelationId,
                 IsConfigured: true,
-                _responseQueue.Dequeue(),
-                GetHealth()));
+                responseEntry.Text,
+                GetHealth(),
+                responseEntry.SummaryCandidate));
         }
     }
 }

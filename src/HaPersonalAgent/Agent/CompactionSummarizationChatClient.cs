@@ -43,7 +43,7 @@ public sealed class CompactionSummarizationChatClient : DelegatingChatClient
 
         var response = await base.GetResponseAsync(messages, options, cancellationToken);
 
-        _diagnostics.RecordSummarizationResponse();
+        _diagnostics.RecordSummarizationResponse(response.Text);
         _logger.LogInformation(
             "Compaction summarization request completed for run {CorrelationId}; summary text length {SummaryLength}.",
             _correlationId,
@@ -63,13 +63,18 @@ public sealed class CompactionSummarizationChatClient : DelegatingChatClient
             _correlationId);
 
         var updateCount = 0;
+        var summaryText = new System.Text.StringBuilder();
         await foreach (var update in base.GetStreamingResponseAsync(messages, options, cancellationToken).WithCancellation(cancellationToken))
         {
             updateCount++;
+            if (!string.IsNullOrWhiteSpace(update.Text))
+            {
+                summaryText.Append(update.Text);
+            }
             yield return update;
         }
 
-        _diagnostics.RecordSummarizationResponse();
+        _diagnostics.RecordSummarizationResponse(summaryText.ToString());
         _logger.LogInformation(
             "Compaction summarization streaming request completed for run {CorrelationId}; update count {UpdateCount}.",
             _correlationId,

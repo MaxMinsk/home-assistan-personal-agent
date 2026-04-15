@@ -9,4 +9,5 @@ public sealed record AgentRuntimeResponse(
     string CorrelationId,
     bool IsConfigured,
     string Text,
-    AgentRuntimeHealth Health);
+    AgentRuntimeHealth Health,
+    string? PersistedSummaryCandidate = null);

@@ -59,6 +59,14 @@ public sealed class AgentStateRepository
                 CREATE INDEX IF NOT EXISTS idx_conversation_messages_key_id
                 ON conversation_messages (conversation_key, id);
 
+                CREATE TABLE IF NOT EXISTS conversation_summary (
+                    conversation_key TEXT PRIMARY KEY NOT NULL,
+                    summary TEXT NOT NULL,
+                    updated_utc TEXT NOT NULL,
+                    source_last_message_id INTEGER NOT NULL,
+                    summary_version INTEGER NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS pending_confirmations (
                     id TEXT PRIMARY KEY NOT NULL,
                     action_kind TEXT NOT NULL,
@@ -192,6 +200,112 @@ public sealed class AgentStateRepository
         }
 
         return messages;
+    }
+
+    public async Task<ConversationSummaryMemory?> GetConversationSummaryAsync(
+        string conversationKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT summary, updated_utc, source_last_message_id, summary_version
+            FROM conversation_summary
+            WHERE conversation_key = $conversationKey;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+        {
+            return null;
+        }
+
+        return new ConversationSummaryMemory(
+            conversationKey,
+            reader.GetString(0),
+            DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
+            reader.GetInt64(2),
+            reader.GetInt32(3));
+    }
+
+    public async Task UpsertConversationSummaryAsync(
+        ConversationSummaryMemory summaryMemory,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(summaryMemory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(summaryMemory.ConversationKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(summaryMemory.Summary);
+        if (summaryMemory.SourceLastMessageId <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(summaryMemory),
+                "SourceLastMessageId must be greater than zero.");
+        }
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO conversation_summary (
+                conversation_key,
+                summary,
+                updated_utc,
+                source_last_message_id,
+                summary_version)
+            VALUES (
+                $conversationKey,
+                $summary,
+                $updatedUtc,
+                $sourceLastMessageId,
+                $summaryVersion)
+            ON CONFLICT(conversation_key) DO UPDATE SET
+                summary = excluded.summary,
+                updated_utc = excluded.updated_utc,
+                source_last_message_id = excluded.source_last_message_id,
+                summary_version = excluded.summary_version;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", summaryMemory.ConversationKey);
+        command.Parameters.AddWithValue("$summary", summaryMemory.Summary);
+        command.Parameters.AddWithValue("$updatedUtc", summaryMemory.UpdatedAtUtc.ToString("O", CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("$sourceLastMessageId", summaryMemory.SourceLastMessageId);
+        command.Parameters.AddWithValue("$summaryVersion", summaryMemory.SummaryVersion);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task<long?> GetLatestConversationMessageIdAsync(
+        string conversationKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT MAX(id)
+            FROM conversation_messages
+            WHERE conversation_key = $conversationKey;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        if (value is null || value is DBNull)
+        {
+            return null;
+        }
+
+        return Convert.ToInt64(value, CultureInfo.InvariantCulture);
     }
 
     public async Task AppendConversationMessagesAsync(
@@ -471,6 +585,26 @@ public sealed class AgentStateRepository
         command.CommandText =
             """
             DELETE FROM conversation_messages
+            WHERE conversation_key = $conversationKey;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task ClearConversationSummaryAsync(
+        string conversationKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            DELETE FROM conversation_summary
             WHERE conversation_key = $conversationKey;
             """;
         command.Parameters.AddWithValue("$conversationKey", conversationKey);

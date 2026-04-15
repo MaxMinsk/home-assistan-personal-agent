@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.8
+
+- Add persisted summary memory in SQLite (`conversation_summary`) separated from regular dialogue turns.
+- Inject persisted summary into runtime prompt as a dedicated context layer before recent turns.
+- Persist compaction summarization output as a summary candidate for reuse across subsequent runs.
+- Extend `/resetContext` flow to clear both recent turns and persisted summary memory.
+- Add SQL and dialogue tests for summary upsert/get/clear and summary reuse on the next runtime call.
+- Tune compaction thresholds so summarize step does not trigger on every run with the default 24-message history window.
+
+
 ## 0.2.7
 
 - Operational release to publish the current stable code state and Home Assistant add-on image.

@@ -14,17 +14,22 @@ public sealed class CompactionRunDiagnostics
 {
     private int _summarizationRequests;
     private int _summarizationResponses;
+    private string? _latestSummaryText;
 
     public void RecordSummarizationRequest() =>
         Interlocked.Increment(ref _summarizationRequests);
 
-    public void RecordSummarizationResponse() =>
+    public void RecordSummarizationResponse(string? summaryText)
+    {
         Interlocked.Increment(ref _summarizationResponses);
+        Volatile.Write(ref _latestSummaryText, string.IsNullOrWhiteSpace(summaryText) ? null : summaryText.Trim());
+    }
 
     public CompactionRunDiagnosticsSnapshot Snapshot() =>
         new(
             SummarizationRequests: Volatile.Read(ref _summarizationRequests),
-            SummarizationResponses: Volatile.Read(ref _summarizationResponses));
+            SummarizationResponses: Volatile.Read(ref _summarizationResponses),
+            LatestSummaryText: Volatile.Read(ref _latestSummaryText));
 }
 
 /// <summary>
@@ -34,7 +39,8 @@ public sealed class CompactionRunDiagnostics
 /// </summary>
 public sealed record CompactionRunDiagnosticsSnapshot(
     int SummarizationRequests,
-    int SummarizationResponses)
+    int SummarizationResponses,
+    string? LatestSummaryText)
 {
     public bool SummarizationTriggered => SummarizationRequests > 0;
 }

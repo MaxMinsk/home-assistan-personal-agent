@@ -120,7 +120,7 @@ public sealed class AgentRuntime : IAgentRuntime
             executionPlan,
             cancellationToken);
         _logger.LogInformation(
-            "Agent run {CorrelationId} starting with provider {Provider}, model {Model}, profile {ExecutionProfile}, provider profile {ProviderProfile}, thinking requested {RequestedThinkingMode}, thinking effective {EffectiveThinkingMode}, thinking reason {ThinkingReason}, history messages {HistoryMessageCount}, MCP status {McpStatus}, read-only MCP tools {ReadOnlyToolCount}, confirmation MCP tools {ConfirmationToolCount}.",
+            "Agent run {CorrelationId} starting with provider {Provider}, model {Model}, profile {ExecutionProfile}, provider profile {ProviderProfile}, thinking requested {RequestedThinkingMode}, thinking effective {EffectiveThinkingMode}, thinking reason {ThinkingReason}, history messages {HistoryMessageCount}, persisted summary present {PersistedSummaryPresent}, persisted summary length {PersistedSummaryLength}, MCP status {McpStatus}, read-only MCP tools {ReadOnlyToolCount}, confirmation MCP tools {ConfirmationToolCount}.",
             context.CorrelationId,
             health.Provider,
             health.Model,
@@ -130,6 +130,8 @@ public sealed class AgentRuntime : IAgentRuntime
             executionPlan.EffectiveThinkingMode,
             executionPlan.Reason,
             context.ConversationMessages.Count,
+            !string.IsNullOrWhiteSpace(context.PersistedSummary),
+            context.PersistedSummary?.Length ?? 0,
             homeAssistantMcpTools.Status,
             homeAssistantMcpTools.ExposedToolCount,
             homeAssistantMcpTools.ConfirmationRequiredTools.Count);
@@ -199,12 +201,16 @@ public sealed class AgentRuntime : IAgentRuntime
         var responseText = compactionSnapshot.SummarizationTriggered
             ? BuildSummarizationNotice(compactionSnapshot) + Environment.NewLine + Environment.NewLine + response.Text
             : response.Text;
+        var persistedSummaryCandidate = string.IsNullOrWhiteSpace(compactionSnapshot.LatestSummaryText)
+            ? null
+            : compactionSnapshot.LatestSummaryText;
 
         return new AgentRuntimeResponse(
             context.CorrelationId,
             IsConfigured: true,
             responseText,
-            health);
+            health,
+            persistedSummaryCandidate);
     }
 
     private static AgentRuntimeResponse CreateProviderFailureResponse(
@@ -337,21 +343,24 @@ public sealed class AgentRuntime : IAgentRuntime
 
         return new PipelineCompactionStrategy(new CompactionStrategy[]
         {
-            new ToolResultCompactionStrategy(CompactionTriggers.MessagesExceed(18)),
+            // Пороги синхронизированы с default history window (24 messages = 12 turns):
+            // compaction не должен запускаться на каждом обычном ходе, только когда run реально разрастается
+            // (например tool-heavy loop, длинные ответы, или дальнейшее расширение history budget).
+            new ToolResultCompactionStrategy(CompactionTriggers.MessagesExceed(28)),
             new SummarizationCompactionStrategy(
                 summarizationChatClient,
-                CompactionTriggers.MessagesExceed(22),
-                minimumPreservedGroups: 8,
-                summarizationPrompt: CreateSummarizationPrompt(),
-                target: CompactionTriggers.MessagesExceed(14)),
-            new SlidingWindowCompactionStrategy(
-                CompactionTriggers.TurnsExceed(12),
-                minimumPreservedTurns: 6,
-                target: CompactionTriggers.TurnsExceed(8)),
-            new TruncationCompactionStrategy(
-                CompactionTriggers.MessagesExceed(40),
+                CompactionTriggers.MessagesExceed(32),
                 minimumPreservedGroups: 10,
-                target: CompactionTriggers.MessagesExceed(30)),
+                summarizationPrompt: CreateSummarizationPrompt(),
+                target: CompactionTriggers.MessagesExceed(24)),
+            new SlidingWindowCompactionStrategy(
+                CompactionTriggers.TurnsExceed(16),
+                minimumPreservedTurns: 8,
+                target: CompactionTriggers.TurnsExceed(12)),
+            new TruncationCompactionStrategy(
+                CompactionTriggers.MessagesExceed(48),
+                minimumPreservedGroups: 12,
+                target: CompactionTriggers.MessagesExceed(34)),
         });
     }
 
@@ -428,12 +437,13 @@ public sealed class AgentRuntime : IAgentRuntime
         var snapshot = diagnostics.Snapshot();
 
         _logger.LogInformation(
-            "Agent run {CorrelationId} compaction diagnostics: success {Success}, summarization requests {SummarizationRequests}, summarization responses {SummarizationResponses}, summarization triggered {SummarizationTriggered}.",
+            "Agent run {CorrelationId} compaction diagnostics: success {Success}, summarization requests {SummarizationRequests}, summarization responses {SummarizationResponses}, summarization triggered {SummarizationTriggered}, summary text length {SummaryTextLength}.",
             correlationId,
             success,
             snapshot.SummarizationRequests,
             snapshot.SummarizationResponses,
-            snapshot.SummarizationTriggered);
+            snapshot.SummarizationTriggered,
+            snapshot.LatestSummaryText?.Length ?? 0);
     }
 
     private static string BuildSummarizationNotice(CompactionRunDiagnosticsSnapshot snapshot) =>
@@ -507,7 +517,18 @@ public sealed class AgentRuntime : IAgentRuntime
 
     private static IReadOnlyList<AiChatMessage> CreateMessages(string message, AgentContext context)
     {
-        var messages = new List<AiChatMessage>(context.ConversationMessages.Count + 1);
+        var messages = new List<AiChatMessage>(context.ConversationMessages.Count + 2);
+
+        if (!string.IsNullOrWhiteSpace(context.PersistedSummary))
+        {
+            messages.Add(new AiChatMessage(
+                AiChatRole.System,
+                """
+                Persisted conversation summary from previous turns.
+                Use it as context, but always prioritize explicit user corrections and the newest dialogue turns.
+                Summary:
+                """ + Environment.NewLine + context.PersistedSummary));
+        }
 
         foreach (var conversationMessage in context.ConversationMessages)
         {
