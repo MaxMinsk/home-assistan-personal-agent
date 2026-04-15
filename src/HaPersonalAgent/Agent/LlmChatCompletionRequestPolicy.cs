@@ -68,7 +68,14 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
             return false;
         }
 
-        if (!TryApplyThinkingControl(root, executionPlan))
+        var patched = TryApplyThinkingControl(root, executionPlan);
+        if (!patched
+            && TryApplyToolStepReasoningSafetyFallback(root, executionPlan))
+        {
+            patched = true;
+        }
+
+        if (!patched)
         {
             return false;
         }
@@ -76,6 +83,93 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         patchedJson = root.ToJsonString(JsonOptions);
 
         return true;
+    }
+
+    private static bool TryApplyToolStepReasoningSafetyFallback(
+        JsonObject root,
+        LlmExecutionPlan executionPlan)
+    {
+        if (!string.Equals(executionPlan.RequestedThinkingMode, "auto", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!executionPlan.Capabilities.RequiresReasoningContentRoundTripForToolCalls
+            || executionPlan.Capabilities.ThinkingControlStyle != LlmThinkingControlStyle.OpenAiCompatibleThinkingObject)
+        {
+            return false;
+        }
+
+        if (!HasAssistantToolCallsWithoutReasoning(root))
+        {
+            return false;
+        }
+
+        root["thinking"] = new JsonObject
+        {
+            ["type"] = "disabled",
+        };
+
+        return true;
+    }
+
+    private static bool HasAssistantToolCallsWithoutReasoning(JsonObject root)
+    {
+        if (root["messages"] is not JsonArray messages)
+        {
+            return false;
+        }
+
+        foreach (var item in messages)
+        {
+            if (item is not JsonObject message)
+            {
+                continue;
+            }
+
+            if (!string.Equals(message["role"]?.GetValue<string>(), "assistant", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (message["tool_calls"] is not JsonArray toolCalls || toolCalls.Count == 0)
+            {
+                continue;
+            }
+
+            if (IsReasoningContentMissing(message["reasoning_content"]))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsReasoningContentMissing(JsonNode? reasoningContentNode)
+    {
+        if (reasoningContentNode is null)
+        {
+            return true;
+        }
+
+        if (reasoningContentNode is JsonArray array)
+        {
+            return array.Count == 0;
+        }
+
+        if (reasoningContentNode is JsonObject obj)
+        {
+            return obj.Count == 0;
+        }
+
+        if (reasoningContentNode is JsonValue value)
+        {
+            return !value.TryGetValue<string>(out var text)
+                || string.IsNullOrWhiteSpace(text);
+        }
+
+        return false;
     }
 
     private static bool TryApplyThinkingControl(

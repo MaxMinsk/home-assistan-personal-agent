@@ -1,3 +1,5 @@
+using HaPersonalAgent.Configuration;
+
 namespace HaPersonalAgent.Agent;
 
 /// <summary>
@@ -16,7 +18,16 @@ public sealed record LlmExecutionPlan(
 
     public bool ShouldPatchChatCompletionRequest =>
         Capabilities.ThinkingControlStyle != LlmThinkingControlStyle.None
-        && (EffectiveThinkingMode == LlmEffectiveThinkingMode.Disabled
-            || EffectiveThinkingMode == LlmEffectiveThinkingMode.Enabled
-                && Capabilities.SupportsExplicitThinkingEnable);
+        && (
+            EffectiveThinkingMode == LlmEffectiveThinkingMode.Disabled
+            || (
+                EffectiveThinkingMode == LlmEffectiveThinkingMode.Enabled
+                && Capabilities.SupportsExplicitThinkingEnable
+            )
+            || (
+                RequestedThinkingMode == LlmThinkingModes.Auto
+                && UsesTools
+                && Capabilities.RequiresReasoningContentRoundTripForToolCalls
+            )
+        );
 }

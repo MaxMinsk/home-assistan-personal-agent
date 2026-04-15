@@ -125,6 +125,88 @@ public class AgentRuntimeTests
     }
 
     [Fact]
+    public void Policy_disables_thinking_for_moonshot_auto_when_tool_call_history_has_no_reasoning_content()
+    {
+        var plan = CreatePlanner().CreatePlan(
+            new LlmOptions
+            {
+                Provider = "moonshot",
+                BaseUrl = "https://api.moonshot.ai/v1",
+                ThinkingMode = LlmThinkingModes.Auto,
+            },
+            LlmExecutionProfile.ToolEnabled);
+
+        var patched = LlmChatCompletionRequestPolicy.TryPatchRequestJson(
+            """
+            {
+              "model":"kimi-k2.5",
+              "messages":[
+                {"role":"user","content":"сколько градусов?"},
+                {
+                  "role":"assistant",
+                  "tool_calls":[
+                    {
+                      "id":"call_1",
+                      "type":"function",
+                      "function":{"name":"GetLiveContext","arguments":"{}"}
+                    }
+                  ]
+                },
+                {"role":"tool","tool_call_id":"call_1","content":"{\"temperature\":21}"}
+              ]
+            }
+            """,
+            plan,
+            out var patchedJson);
+
+        using var document = JsonDocument.Parse(patchedJson);
+
+        Assert.Equal(LlmEffectiveThinkingMode.ProviderDefault, plan.EffectiveThinkingMode);
+        Assert.True(patched);
+        Assert.Equal("disabled", document.RootElement.GetProperty("thinking").GetProperty("type").GetString());
+    }
+
+    [Fact]
+    public void Policy_keeps_provider_default_for_moonshot_auto_when_tool_call_history_has_reasoning_content()
+    {
+        var plan = CreatePlanner().CreatePlan(
+            new LlmOptions
+            {
+                Provider = "moonshot",
+                BaseUrl = "https://api.moonshot.ai/v1",
+                ThinkingMode = LlmThinkingModes.Auto,
+            },
+            LlmExecutionProfile.ToolEnabled);
+
+        var patched = LlmChatCompletionRequestPolicy.TryPatchRequestJson(
+            """
+            {
+              "model":"kimi-k2.5",
+              "messages":[
+                {"role":"user","content":"сколько градусов?"},
+                {
+                  "role":"assistant",
+                  "reasoning_content":"internal reasoning",
+                  "tool_calls":[
+                    {
+                      "id":"call_1",
+                      "type":"function",
+                      "function":{"name":"GetLiveContext","arguments":"{}"}
+                    }
+                  ]
+                },
+                {"role":"tool","tool_call_id":"call_1","content":"{\"temperature\":21}"}
+              ]
+            }
+            """,
+            plan,
+            out _);
+
+        Assert.Equal(LlmEffectiveThinkingMode.ProviderDefault, plan.EffectiveThinkingMode);
+        Assert.False(patched);
+    }
+
+    [Fact]
     public void Planner_respects_explicit_disabled_mode_for_moonshot()
     {
         var plan = CreatePlanner().CreatePlan(

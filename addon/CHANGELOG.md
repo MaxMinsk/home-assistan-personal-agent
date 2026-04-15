@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.4
+
+- Fix Moonshot/Kimi first tool-enabled turn failure (`HTTP 400 reasoning_content is missing`) by enabling request policy in `auto` tool profile and applying request-level safety fallback.
+- Add robust `reasoning_content` detection in request patching for multiple JSON shapes.
+- Add regression tests for tool-call history with/without `reasoning_content` to guarantee non-breaking behavior.
+
 ## 0.2.3
 
 - Add provider-agnostic LLM capability profiles and adaptive execution planner for `tool-enabled`, `pure chat`, and `deep reasoning` runs.
