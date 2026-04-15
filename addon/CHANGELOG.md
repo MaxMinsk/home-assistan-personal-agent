@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1
+
+- Use `SUPERVISOR_TOKEN` for the default `http://supervisor/core` Home Assistant MCP endpoint and keep long-lived tokens for direct Core URLs.
+- Add a transport-agnostic Home Assistant MCP status tool for the MAF agent instead of Telegram-specific natural-language shortcuts.
+- Add Moonshot/Kimi request policy that disables thinking for tool-compatible chat completions to avoid missing `reasoning_content` failures.
+- Return user-facing fallback messages for LLM provider errors without saving failed turns to dialogue memory.
+- Add safer runtime logs for agent runs, MCP discovery/tool loading, auth source selection, and confirmation execution without logging secrets or raw payloads.
+- Add backlog task for adaptive thinking/reasoning mode across tool-enabled, pure chat, and deep reasoning runs.
+
 ## 0.2.0
 
 - Add transport-agnostic dialogue layer so Telegram is an adapter over shared dialogue/runtime/memory contracts.

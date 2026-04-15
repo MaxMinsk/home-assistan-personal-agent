@@ -173,6 +173,38 @@ public class TelegramUpdateHandlerTests
     }
 
     [Fact]
+    public async Task Natural_language_mcp_status_question_goes_through_dialogue_agent()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var runtime = new FakeAgentRuntime("agent answer");
+            var handler = CreateHandler(
+                CreateRepository(databasePath),
+                runtime,
+                new FakeHomeAssistantMcpClient(HomeAssistantMcpDiscoveryResult.NotConfigured(
+                    new Uri("http://supervisor/core/api/mcp"),
+                    "HomeAssistant:LongLivedAccessToken is empty.")));
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 15, chatId: 200, userId: 100, text: "доступен mcp?"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Single(runtime.Calls);
+            Assert.Equal("доступен mcp?", runtime.Calls.Single().Message);
+            Assert.Equal("agent answer", adapter.SentMessages.Single().Text);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Approve_command_uses_confirmation_service_without_invoking_dialogue_agent()
     {
         var databasePath = CreateTemporaryDatabasePath();
@@ -194,7 +226,7 @@ public class TelegramUpdateHandlerTests
 
             await handler.HandleAsync(
                 adapter,
-                CreateTextUpdate(updateId: 15, chatId: 200, userId: 100, text: "/approve abc12345"),
+                CreateTextUpdate(updateId: 16, chatId: 200, userId: 100, text: "/approve abc12345"),
                 new TelegramOptions { AllowedUserIds = new long[] { 100 } },
                 CancellationToken.None);
 
@@ -202,6 +234,38 @@ public class TelegramUpdateHandlerTests
             Assert.Single(confirmationService.ApprovedConfirmations);
             Assert.Equal("abc12345", confirmationService.ApprovedConfirmations.Single().ConfirmationId);
             Assert.Contains("Выполнено", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Agent_runtime_exception_returns_user_facing_message_without_saving_context()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var runtime = new FakeAgentRuntime("unused")
+            {
+                ExceptionToThrow = new InvalidOperationException("provider failed"),
+            };
+            var handler = CreateHandler(repository, runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 17, chatId: 200, userId: 100, text: "hello"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            var stored = await repository.GetConversationMessagesAsync("telegram:200:100", 10, CancellationToken.None);
+
+            Assert.Contains("Не смог обработать", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Empty(stored);
         }
         finally
         {
@@ -304,6 +368,8 @@ public class TelegramUpdateHandlerTests
 
         public string NextResponseText { get; set; }
 
+        public Exception? ExceptionToThrow { get; set; }
+
         public List<(string Message, AgentContext Context)> Calls { get; } = new();
 
         public AgentRuntimeHealth GetHealth() =>
@@ -314,6 +380,11 @@ public class TelegramUpdateHandlerTests
             AgentContext context,
             CancellationToken cancellationToken)
         {
+            if (ExceptionToThrow is not null)
+            {
+                throw ExceptionToThrow;
+            }
+
             Calls.Add((message, context));
 
             return Task.FromResult(new AgentRuntimeResponse(

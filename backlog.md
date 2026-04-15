@@ -272,6 +272,7 @@ Acceptance criteria:
 - Добавить OpenAI API fallback как опцию.
 - Исследовать local model/Ollama только для read-only/low-risk сценариев.
 - Зафиксировать capability matrix: tools, streaming, approvals, context window, cost, latency.
+- Учесть `HAAG-032`: разные provider capabilities для thinking/reasoning mode и tool calling.
 
 ### HAAG-030: Agent Skills spike
 
@@ -292,3 +293,65 @@ Acceptance criteria:
 - Options validation с понятными ошибками.
 - Graceful shutdown для polling/workflows.
 - Логи без heartbeat noise и без секретов.
+
+### HAAG-032: Adaptive thinking/reasoning mode для LLM provider
+
+Цель: перестать держать Moonshot/Kimi `thinking` в одном глобальном режиме и выбирать стратегию reasoning по типу agent run: tool-enabled, pure chat или deep reasoning.
+
+Контекст:
+
+- У Kimi K2.5 `thinking` может быть включен по умолчанию.
+- При multi-step tool calling Moonshot требует, чтобы assistant tool-call history содержала provider-specific `reasoning_content`.
+- Текущая цепочка `Microsoft Agent Framework -> Microsoft.Extensions.AI -> OpenAI SDK -> Moonshot` не сохраняет `reasoning_content` как first-class поле в истории сообщений.
+- Поэтому workaround `thinking: { "type": "disabled" }` нужен для стабильных tool calls, но он не должен навсегда запрещать thinking для обычного диалога без tools.
+
+Учебная ценность MAF:
+
+- Понять, где лучше принимать runtime-level решения: в `AgentRuntime`, provider adapter, `IChatClient` middleware или agent run options.
+- Сравнить tool-enabled agent run и pure LLM run как разные execution profiles.
+- Проверить, как provider-specific capabilities вписываются в transport-agnostic dialogue layer.
+- Разобрать, как MAF хранит tool-call history и можно ли корректно прокинуть reasoning metadata между шагами.
+
+Домашняя ценность:
+
+- Стабильное управление домом через tools без HTTP 400 на Moonshot.
+- Возможность использовать более глубокие reasoning ответы для обычных вопросов, где tools не нужны.
+- Явное поведение в `/status` и логах: почему thinking включен или отключен в конкретном run.
+
+Предлагаемый дизайн:
+
+1. Ввести `LlmProviderCapabilities` или аналогичный provider profile:
+   - supports tools;
+   - supports streaming;
+   - supports reasoning/thinking;
+   - requires reasoning content round-trip for tool call history;
+   - supports raw provider extensions.
+2. Добавить настройки:
+   - `llm_thinking_mode`: `auto | disabled | enabled`;
+   - default для Moonshot: `auto`;
+   - Home Assistant add-on UI option для этой настройки.
+3. В `auto` режиме выбирать execution profile:
+   - tool-enabled run: disable thinking для Moonshot, пока нет корректного `reasoning_content` round-trip;
+   - pure chat/no tools: allow thinking, если provider это поддерживает;
+   - deep reasoning mode: отдельный no-tools profile, где агент явно не вызывает Home Assistant/file/control tools.
+4. Добавить явный deep reasoning entrypoint:
+   - возможно команда/префикс `/think` или transport-agnostic `DialogueMode.DeepReasoning`;
+   - deep reasoning не должен выполнять control actions и не должен иметь risky tools;
+   - если в deep reasoning пользователь просит состояние дома, агент должен объяснить, что для этого нужен tool-enabled режим.
+5. Логировать без секретов:
+   - selected provider;
+   - selected execution profile;
+   - thinking mode requested/effective;
+   - reason why thinking was disabled.
+6. Отразить effective mode в `/status` или diagnostic tool, не раскрывая prompt и raw provider payload.
+
+Acceptance criteria:
+
+- `LlmOptions` содержит настройку thinking mode и она настраивается через Home Assistant add-on UI.
+- Для Moonshot `auto + tools` добавляет `thinking: {"type":"disabled"}` и не ломает tool calling.
+- Для Moonshot `auto + pure chat` не добавляет forced disabled thinking.
+- Есть тесты на выбор execution profile: tool-enabled, pure chat, deep reasoning.
+- Есть тесты, что Telegram/Web UI не знают о provider-specific thinking policy.
+- Provider error fallback остается: HTTP 400/429 не роняет Telegram polling и не пишет failed turn в dialogue memory.
+- В логах виден effective thinking mode, но нет API keys, tokens, prompts и raw tool payloads.
+- В `agent_memory_analysis.md` или отдельной decision note описано, как reasoning output отличается от dialogue memory и почему reasoning trace не хранится как обычный контекст.

@@ -2,6 +2,7 @@ using HaPersonalAgent.Agent;
 using HaPersonalAgent.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Text.Json;
 
 namespace HaPersonalAgent.Tests;
 
@@ -61,6 +62,22 @@ public class AgentRuntimeTests
         Assert.DoesNotContain("moonshot-secret", statusText);
         Assert.DoesNotContain("telegram-secret", statusText);
         Assert.DoesNotContain("ha-secret", statusText);
+    }
+
+    [Fact]
+    public void Moonshot_policy_adds_disabled_thinking_to_chat_completion_body()
+    {
+        var patched = MoonshotThinkingDisabledPolicy.TryPatchRequestJson(
+            """
+            {"model":"kimi-k2.5","messages":[]}
+            """,
+            out var patchedJson);
+
+        using var document = JsonDocument.Parse(patchedJson);
+
+        Assert.True(patched);
+        Assert.Equal("kimi-k2.5", document.RootElement.GetProperty("model").GetString());
+        Assert.Equal("disabled", document.RootElement.GetProperty("thinking").GetProperty("type").GetString());
     }
 
     private static AgentRuntime CreateRuntime(LlmOptions llmOptions)

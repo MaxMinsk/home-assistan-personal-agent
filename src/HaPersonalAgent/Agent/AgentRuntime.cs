@@ -8,6 +8,7 @@ using Microsoft.Extensions.Options;
 using OpenAI;
 using OpenAI.Chat;
 using System.ClientModel;
+using System.ClientModel.Primitives;
 using System.Text;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using AiChatRole = Microsoft.Extensions.AI.ChatRole;
@@ -26,6 +27,7 @@ public sealed class AgentRuntime : IAgentRuntime
         You are Home Assistant Personal Agent, a learning-first assistant built to explore Microsoft Agent Framework.
         Keep answers concise and practical.
         Use the status tool when the user asks about application status, version, uptime, configuration mode, or health.
+        Use the home_assistant_mcp_status tool when the user asks whether MCP is available, why Home Assistant access fails, or which Home Assistant MCP tools are visible.
         Use Home Assistant MCP tools only for read-only questions about current home state, history, or diagnostics.
         For Home Assistant requests that change state, call propose_home_assistant_mcp_action when it is available.
         Never claim a Home Assistant control action was executed until the app reports completion after user approval.
@@ -34,6 +36,8 @@ public sealed class AgentRuntime : IAgentRuntime
 
     private readonly IConfirmationService? _confirmationService;
     private readonly IHomeAssistantMcpAgentToolProvider? _homeAssistantMcpToolProvider;
+    private readonly HomeAssistantMcpStatusTool? _homeAssistantMcpStatusTool;
+    private readonly ILogger<AgentRuntime> _logger;
     private readonly ILoggerFactory _loggerFactory;
     private readonly IOptions<LlmOptions> _llmOptions;
     private readonly IServiceProvider _serviceProvider;
@@ -45,14 +49,17 @@ public sealed class AgentRuntime : IAgentRuntime
         ILoggerFactory loggerFactory,
         IServiceProvider serviceProvider,
         IHomeAssistantMcpAgentToolProvider? homeAssistantMcpToolProvider = null,
-        IConfirmationService? confirmationService = null)
+        IConfirmationService? confirmationService = null,
+        HomeAssistantMcpStatusTool? homeAssistantMcpStatusTool = null)
     {
         _llmOptions = llmOptions;
         _statusTool = statusTool;
         _loggerFactory = loggerFactory;
+        _logger = loggerFactory.CreateLogger<AgentRuntime>();
         _serviceProvider = serviceProvider;
         _homeAssistantMcpToolProvider = homeAssistantMcpToolProvider;
         _confirmationService = confirmationService;
+        _homeAssistantMcpStatusTool = homeAssistantMcpStatusTool;
     }
 
     public AgentRuntimeHealth GetHealth()
@@ -96,6 +103,16 @@ public sealed class AgentRuntime : IAgentRuntime
         }
 
         await using var homeAssistantMcpTools = await CreateHomeAssistantMcpToolsAsync(cancellationToken);
+        _logger.LogInformation(
+            "Agent run {CorrelationId} starting with provider {Provider}, model {Model}, history messages {HistoryMessageCount}, MCP status {McpStatus}, read-only MCP tools {ReadOnlyToolCount}, confirmation MCP tools {ConfirmationToolCount}.",
+            context.CorrelationId,
+            health.Provider,
+            health.Model,
+            context.ConversationMessages.Count,
+            homeAssistantMcpTools.Status,
+            homeAssistantMcpTools.ExposedToolCount,
+            homeAssistantMcpTools.ConfirmationRequiredTools.Count);
+
         var agent = CreateAgent(_llmOptions.Value, homeAssistantMcpTools, context);
         var runOptions = new ChatClientAgentRunOptions(new ChatOptions())
         {
@@ -105,16 +122,64 @@ public sealed class AgentRuntime : IAgentRuntime
             },
         };
 
-        var response = await agent.RunAsync(
-            CreateMessages(message, context),
-            session: null,
-            options: runOptions,
-            cancellationToken);
+        AgentResponse response;
+        try
+        {
+            response = await agent.RunAsync(
+                CreateMessages(message, context),
+                session: null,
+                options: runOptions,
+                cancellationToken);
+        }
+        catch (ClientResultException exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "LLM provider request failed with HTTP status {Status}.",
+                exception.Status);
+
+            return CreateProviderFailureResponse(
+                context,
+                health,
+                exception.Status);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                exception,
+                "Agent runtime failed before returning a response.");
+
+            return CreateProviderFailureResponse(
+                context,
+                health,
+                status: null);
+        }
+
+        _logger.LogInformation(
+            "Agent run {CorrelationId} completed with response length {ResponseLength}.",
+            context.CorrelationId,
+            response.Text.Length);
 
         return new AgentRuntimeResponse(
             context.CorrelationId,
             IsConfigured: true,
             response.Text,
+            health);
+    }
+
+    private static AgentRuntimeResponse CreateProviderFailureResponse(
+        AgentContext context,
+        AgentRuntimeHealth health,
+        int? status)
+    {
+        var statusText = status.HasValue
+            ? $" HTTP {status.Value}"
+            : string.Empty;
+
+        return new AgentRuntimeResponse(
+            context.CorrelationId,
+            IsConfigured: false,
+            $"Не смог получить ответ от LLM provider{statusText}. Запрос не сохранен в историю диалога. Повтори запрос позже; если проверяешь Home Assistant MCP, можно также выполнить /status.",
             health);
     }
 
@@ -126,20 +191,28 @@ public sealed class AgentRuntime : IAgentRuntime
         var chatClient = new ChatClient(
             model: options.Model,
             credential: new ApiKeyCredential(options.ApiKey),
-            options: new OpenAIClientOptions
-            {
-                Endpoint = new Uri(options.BaseUrl),
-            });
+            options: CreateOpenAIClientOptions(options));
 
         var statusTool = AIFunctionFactory.Create(
             (Func<AgentStatusSnapshot>)_statusTool.GetStatus,
             name: "status",
             description: "Returns non-secret application version, uptime, configuration mode, and health details.",
             serializerOptions: null);
+
         var tools = new List<AITool>(homeAssistantMcpTools.Tools.Count + 2)
         {
             statusTool,
         };
+
+        if (_homeAssistantMcpStatusTool is not null)
+        {
+            tools.Add(AIFunctionFactory.Create(
+                (Func<CancellationToken, Task<HomeAssistantMcpDiscoveryResult>>)_homeAssistantMcpStatusTool.GetStatusAsync,
+                name: "home_assistant_mcp_status",
+                description: "Returns Home Assistant MCP reachability, auth state, endpoint, and discovered tools/prompts without revealing tokens.",
+                serializerOptions: null));
+        }
+
         tools.AddRange(homeAssistantMcpTools.Tools);
 
         if (_confirmationService is not null
@@ -157,6 +230,21 @@ public sealed class AgentRuntime : IAgentRuntime
             tools: tools,
             loggerFactory: _loggerFactory,
             services: _serviceProvider);
+    }
+
+    private static OpenAIClientOptions CreateOpenAIClientOptions(LlmOptions options)
+    {
+        var clientOptions = new OpenAIClientOptions
+        {
+            Endpoint = new Uri(options.BaseUrl),
+        };
+
+        if (IsMoonshotProvider(options))
+        {
+            clientOptions.AddPolicy(new MoonshotThinkingDisabledPolicy(), PipelinePosition.BeforeTransport);
+        }
+
+        return clientOptions;
     }
 
     private AIFunction CreateHomeAssistantActionProposalTool(
@@ -202,6 +290,9 @@ public sealed class AgentRuntime : IAgentRuntime
     {
         if (_homeAssistantMcpToolProvider is null)
         {
+            _logger.LogInformation(
+                "Home Assistant MCP tool provider is not registered; agent run will continue without Home Assistant tools.");
+
             return HomeAssistantMcpAgentToolSet.Unavailable(
                 HomeAssistantMcpStatus.NotConfigured,
                 "Home Assistant MCP tool provider is not registered.");
@@ -261,6 +352,10 @@ public sealed class AgentRuntime : IAgentRuntime
 
         return instructions.ToString();
     }
+
+    private static bool IsMoonshotProvider(LlmOptions options) =>
+        string.Equals(options.Provider, "moonshot", StringComparison.OrdinalIgnoreCase)
+        || options.BaseUrl.Contains("moonshot.ai", StringComparison.OrdinalIgnoreCase);
 
     private static string FormatToolList(
         IReadOnlyCollection<HomeAssistantMcpItemInfo> tools,

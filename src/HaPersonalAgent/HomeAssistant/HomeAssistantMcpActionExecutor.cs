@@ -18,6 +18,7 @@ public sealed class HomeAssistantMcpActionExecutor : IConfirmationActionExecutor
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    private readonly IHomeAssistantAuthTokenProvider _authTokenProvider;
     private readonly IHomeAssistantMcpToolConnector _connector;
     private readonly ILogger<HomeAssistantMcpActionExecutor> _logger;
     private readonly IOptions<HomeAssistantOptions> _options;
@@ -26,11 +27,13 @@ public sealed class HomeAssistantMcpActionExecutor : IConfirmationActionExecutor
     public HomeAssistantMcpActionExecutor(
         IOptions<HomeAssistantOptions> options,
         IHomeAssistantMcpToolConnector connector,
+        IHomeAssistantAuthTokenProvider authTokenProvider,
         HomeAssistantMcpToolPolicy policy,
         ILogger<HomeAssistantMcpActionExecutor> logger)
     {
         _options = options;
         _connector = connector;
+        _authTokenProvider = authTokenProvider;
         _policy = policy;
         _logger = logger;
     }
@@ -59,16 +62,24 @@ public sealed class HomeAssistantMcpActionExecutor : IConfirmationActionExecutor
             return ConfirmationActionExecutionResult.Failure(endpointReason ?? "Invalid Home Assistant MCP endpoint.");
         }
 
-        if (string.IsNullOrWhiteSpace(options.LongLivedAccessToken))
+        var authToken = _authTokenProvider.Resolve(endpoint);
+        if (!authToken.IsConfigured || string.IsNullOrWhiteSpace(authToken.Value))
         {
-            return ConfirmationActionExecutionResult.Failure("HomeAssistant:LongLivedAccessToken is empty.");
+            return ConfirmationActionExecutionResult.Failure(
+                authToken.Reason ?? "Home Assistant auth token is missing.");
         }
 
         try
         {
+            _logger.LogInformation(
+                "Executing approved Home Assistant MCP confirmation {ConfirmationId} with tool {ToolName} using auth source {AuthSource}.",
+                confirmation.Id,
+                confirmation.OperationName,
+                authToken.Source);
+
             await using var session = await _connector.ConnectToolsAsync(
                 endpoint,
-                options.LongLivedAccessToken.Trim(),
+                authToken.Value,
                 cancellationToken);
             var tool = session.Tools.FirstOrDefault(candidate =>
                 string.Equals(candidate.Name, confirmation.OperationName, StringComparison.Ordinal));
@@ -86,6 +97,11 @@ public sealed class HomeAssistantMcpActionExecutor : IConfirmationActionExecutor
             var arguments = ParseArguments(confirmation.PayloadJson);
             var result = await tool.InvokeAsync(new AIFunctionArguments(arguments), cancellationToken);
             var resultJson = JsonSerializer.Serialize(result, JsonOptions);
+
+            _logger.LogInformation(
+                "Home Assistant MCP confirmation {ConfirmationId} completed with tool {ToolName}.",
+                confirmation.Id,
+                confirmation.OperationName);
 
             return ConfirmationActionExecutionResult.Success(resultJson);
         }

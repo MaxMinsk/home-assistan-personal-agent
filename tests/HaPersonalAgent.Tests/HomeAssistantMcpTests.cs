@@ -2,6 +2,7 @@ using System.Net;
 using HaPersonalAgent.Configuration;
 using HaPersonalAgent.HomeAssistant;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -67,6 +68,46 @@ public class HomeAssistantMcpTests
         Assert.False(result.TokenConfigured);
         Assert.False(connector.WasCalled);
         Assert.Contains("LongLivedAccessToken", result.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Discovery_uses_supervisor_token_for_supervisor_proxy_endpoint()
+    {
+        var connector = new FakeMcpConnector();
+        var client = CreateClient(
+            new HomeAssistantOptions
+            {
+                Url = "http://supervisor/core",
+                LongLivedAccessToken = "ha-secret",
+            },
+            connector,
+            supervisorToken: "supervisor-secret");
+
+        var result = await client.DiscoverAsync(CancellationToken.None);
+
+        Assert.Equal(HomeAssistantMcpStatus.Reachable, result.Status);
+        Assert.Equal("supervisor-secret", connector.LastAccessToken);
+        Assert.DoesNotContain("supervisor-secret", result.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Discovery_uses_long_lived_token_for_direct_core_endpoint()
+    {
+        var connector = new FakeMcpConnector();
+        var client = CreateClient(
+            new HomeAssistantOptions
+            {
+                Url = "http://homeassistant.local:8123",
+                LongLivedAccessToken = "ha-secret",
+            },
+            connector,
+            supervisorToken: "supervisor-secret");
+
+        var result = await client.DiscoverAsync(CancellationToken.None);
+
+        Assert.Equal(HomeAssistantMcpStatus.Reachable, result.Status);
+        Assert.Equal("ha-secret", connector.LastAccessToken);
+        Assert.DoesNotContain("ha-secret", result.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -180,20 +221,36 @@ public class HomeAssistantMcpTests
 
     private static HomeAssistantMcpClient CreateClient(
         HomeAssistantOptions options,
-        IHomeAssistantMcpConnector connector) =>
+        IHomeAssistantMcpConnector connector,
+        string? supervisorToken = null) =>
         new(
             Options.Create(options),
             connector,
+            CreateAuthTokenProvider(options, supervisorToken),
             LoggerFactory.Create(_ => { }).CreateLogger<HomeAssistantMcpClient>());
 
     private static HomeAssistantMcpAgentToolProvider CreateToolProvider(
         HomeAssistantOptions options,
-        IHomeAssistantMcpToolConnector connector) =>
+        IHomeAssistantMcpToolConnector connector,
+        string? supervisorToken = null) =>
         new(
             Options.Create(options),
             connector,
+            CreateAuthTokenProvider(options, supervisorToken),
             new HomeAssistantMcpToolPolicy(),
             LoggerFactory.Create(_ => { }).CreateLogger<HomeAssistantMcpAgentToolProvider>());
+
+    private static HomeAssistantAuthTokenProvider CreateAuthTokenProvider(
+        HomeAssistantOptions options,
+        string? supervisorToken) =>
+        new(
+            Options.Create(options),
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["SUPERVISOR_TOKEN"] = supervisorToken,
+                })
+                .Build());
 
     private static AIFunction CreateTool(string name, string description) =>
         AIFunctionFactory.Create(
@@ -240,12 +297,15 @@ public class HomeAssistantMcpTests
 
         public bool WasCalled { get; private set; }
 
+        public string? LastAccessToken { get; private set; }
+
         public Task<HomeAssistantMcpDiscovery> DiscoverAsync(
             Uri endpoint,
             string accessToken,
             CancellationToken cancellationToken)
         {
             WasCalled = true;
+            LastAccessToken = accessToken;
 
             return _exception is null
                 ? Task.FromResult(_discovery)
@@ -271,12 +331,15 @@ public class HomeAssistantMcpTests
 
         public bool SessionDisposed { get; private set; }
 
+        public string? LastAccessToken { get; private set; }
+
         public Task<HomeAssistantMcpToolSession> ConnectToolsAsync(
             Uri endpoint,
             string accessToken,
             CancellationToken cancellationToken)
         {
             WasCalled = true;
+            LastAccessToken = accessToken;
 
             return Task.FromResult(new HomeAssistantMcpToolSession(
                 _tools,

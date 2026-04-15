@@ -20,7 +20,9 @@ public static class ServiceCollectionExtensions
             services => services.GetRequiredService<ModelContextProtocolHomeAssistantMcpConnector>());
         services.AddSingleton<IHomeAssistantMcpToolConnector>(
             services => services.GetRequiredService<ModelContextProtocolHomeAssistantMcpConnector>());
+        services.AddSingleton<IHomeAssistantAuthTokenProvider, HomeAssistantAuthTokenProvider>();
         services.AddSingleton<IHomeAssistantMcpClient, HomeAssistantMcpClient>();
+        services.AddSingleton<HomeAssistantMcpStatusTool>();
         services.AddSingleton<HomeAssistantMcpToolPolicy>();
         services.AddSingleton<IHomeAssistantMcpAgentToolProvider, HomeAssistantMcpAgentToolProvider>();
         services.AddSingleton<IConfirmationActionExecutor, HomeAssistantMcpActionExecutor>();

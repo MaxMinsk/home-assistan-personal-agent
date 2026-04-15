@@ -14,6 +14,7 @@ public sealed class HomeAssistantMcpAgentToolProvider : IHomeAssistantMcpAgentTo
 {
     private static readonly TimeSpan ToolLoadTimeout = TimeSpan.FromSeconds(5);
 
+    private readonly IHomeAssistantAuthTokenProvider _authTokenProvider;
     private readonly IHomeAssistantMcpToolConnector _connector;
     private readonly ILogger<HomeAssistantMcpAgentToolProvider> _logger;
     private readonly IOptions<HomeAssistantOptions> _options;
@@ -22,11 +23,13 @@ public sealed class HomeAssistantMcpAgentToolProvider : IHomeAssistantMcpAgentTo
     public HomeAssistantMcpAgentToolProvider(
         IOptions<HomeAssistantOptions> options,
         IHomeAssistantMcpToolConnector connector,
+        IHomeAssistantAuthTokenProvider authTokenProvider,
         HomeAssistantMcpToolPolicy policy,
         ILogger<HomeAssistantMcpAgentToolProvider> logger)
     {
         _options = options;
         _connector = connector;
+        _authTokenProvider = authTokenProvider;
         _policy = policy;
         _logger = logger;
     }
@@ -42,16 +45,26 @@ public sealed class HomeAssistantMcpAgentToolProvider : IHomeAssistantMcpAgentTo
                 out var endpointReason)
             || endpoint is null)
         {
+            _logger.LogWarning(
+                "Home Assistant MCP tool loading skipped because endpoint configuration is invalid: {Reason}",
+                endpointReason);
+
             return HomeAssistantMcpAgentToolSet.Unavailable(
                 HomeAssistantMcpStatus.InvalidConfiguration,
                 endpointReason ?? "Invalid MCP endpoint.");
         }
 
-        if (string.IsNullOrWhiteSpace(options.LongLivedAccessToken))
+        var authToken = _authTokenProvider.Resolve(endpoint);
+        if (!authToken.IsConfigured || string.IsNullOrWhiteSpace(authToken.Value))
         {
+            _logger.LogInformation(
+                "Home Assistant MCP tool loading skipped for {Endpoint}: {Reason}",
+                endpoint,
+                authToken.Reason);
+
             return HomeAssistantMcpAgentToolSet.Unavailable(
                 HomeAssistantMcpStatus.NotConfigured,
-                "HomeAssistant:LongLivedAccessToken is empty.");
+                authToken.Reason ?? "Home Assistant auth token is missing.");
         }
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -59,9 +72,14 @@ public sealed class HomeAssistantMcpAgentToolProvider : IHomeAssistantMcpAgentTo
 
         try
         {
+            _logger.LogInformation(
+                "Home Assistant MCP tool loading starting for {Endpoint} using auth source {AuthSource}.",
+                endpoint,
+                authToken.Source);
+
             var session = await _connector.ConnectToolsAsync(
                 endpoint,
-                options.LongLivedAccessToken.Trim(),
+                authToken.Value,
                 timeout.Token);
             var classifiedTools = session.Tools
                 .Select(tool => new
@@ -86,12 +104,24 @@ public sealed class HomeAssistantMcpAgentToolProvider : IHomeAssistantMcpAgentTo
             {
                 await session.DisposeAsync();
 
+                _logger.LogInformation(
+                    "Home Assistant MCP tools loaded: total {TotalToolCount}, read-only exposed {ReadOnlyToolCount}, confirmation-required {ConfirmationToolCount}.",
+                    session.Tools.Count,
+                    0,
+                    confirmationRequiredTools.Length);
+
                 return HomeAssistantMcpAgentToolSet.Available(
                     Array.Empty<Microsoft.Extensions.AI.AIFunction>(),
                     confirmationRequiredTools,
                     totalToolCount: session.Tools.Count,
                     ownsSession: null);
             }
+
+            _logger.LogInformation(
+                "Home Assistant MCP tools loaded: total {TotalToolCount}, read-only exposed {ReadOnlyToolCount}, confirmation-required {ConfirmationToolCount}.",
+                session.Tools.Count,
+                exposedTools.Length,
+                confirmationRequiredTools.Length);
 
             return HomeAssistantMcpAgentToolSet.Available(
                 exposedTools,
@@ -101,25 +131,40 @@ public sealed class HomeAssistantMcpAgentToolProvider : IHomeAssistantMcpAgentTo
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
+            _logger.LogWarning(
+                "Home Assistant MCP tool loading timed out after {TimeoutSeconds}s.",
+                ToolLoadTimeout.TotalSeconds);
+
             return HomeAssistantMcpAgentToolSet.Unavailable(
                 HomeAssistantMcpStatus.Unreachable,
                 "MCP tool loading timed out.");
         }
         catch (HttpRequestException exception) when (exception.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
         {
+            _logger.LogWarning(
+                exception,
+                "Home Assistant MCP tool loading auth failed for {Endpoint} using auth source {AuthSource}.",
+                endpoint,
+                authToken.Source);
+
             return HomeAssistantMcpAgentToolSet.Unavailable(
                 HomeAssistantMcpStatus.AuthFailed,
                 "Home Assistant rejected the MCP token.");
         }
         catch (HttpRequestException exception) when (exception.StatusCode is HttpStatusCode.NotFound)
         {
+            _logger.LogWarning(
+                exception,
+                "Home Assistant MCP Server integration was not found at {Endpoint}.",
+                endpoint);
+
             return HomeAssistantMcpAgentToolSet.Unavailable(
                 HomeAssistantMcpStatus.IntegrationMissing,
                 "Home Assistant MCP Server integration was not found at the configured endpoint.");
         }
         catch (HttpRequestException exception)
         {
-            _logger.LogDebug(
+            _logger.LogWarning(
                 exception,
                 "Home Assistant MCP tool loading failed with HTTP status {StatusCode}",
                 exception.StatusCode);
@@ -130,7 +175,7 @@ public sealed class HomeAssistantMcpAgentToolProvider : IHomeAssistantMcpAgentTo
         }
         catch (Exception exception)
         {
-            _logger.LogDebug(exception, "Home Assistant MCP tool loading failed.");
+            _logger.LogWarning(exception, "Home Assistant MCP tool loading failed.");
 
             return HomeAssistantMcpAgentToolSet.Unavailable(
                 HomeAssistantMcpStatus.Error,

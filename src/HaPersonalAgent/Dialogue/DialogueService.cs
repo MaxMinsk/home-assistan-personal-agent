@@ -44,16 +44,33 @@ public sealed class DialogueService
             cancellationToken);
 
         var now = DateTimeOffset.UtcNow;
-        var response = await _agentRuntime.SendAsync(
-            request.Text,
-            AgentContext.Create(
-                correlationId: request.CorrelationId,
-                conversationMessages: history,
-                conversationKey: conversationKey,
-                transport: request.Conversation.Transport,
-                conversationId: request.Conversation.ConversationId,
-                participantId: request.Conversation.ParticipantId),
-            cancellationToken);
+        AgentRuntimeResponse response;
+        try
+        {
+            response = await _agentRuntime.SendAsync(
+                request.Text,
+                AgentContext.Create(
+                    correlationId: request.CorrelationId,
+                    conversationMessages: history,
+                    conversationKey: conversationKey,
+                    transport: request.Conversation.Transport,
+                    conversationId: request.Conversation.ConversationId,
+                    participantId: request.Conversation.ParticipantId),
+                cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                exception,
+                "Agent runtime failed for dialogue request {CorrelationId}.",
+                request.CorrelationId);
+
+            return new AgentRuntimeResponse(
+                request.CorrelationId,
+                IsConfigured: false,
+                "Не смог обработать сообщение из-за внутренней ошибки агента. Запрос не сохранен в историю диалога.",
+                _agentRuntime.GetHealth());
+        }
 
         if (!response.IsConfigured)
         {
