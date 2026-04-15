@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.7
+
+- Operational release to publish the current stable code state and Home Assistant add-on image.
+
+
 ## 0.2.6
 
 - Align memory compaction with MAF patterns via `CompactionProvider` + `PipelineCompactionStrategy` (`ToolResult`, `Summarization`, `SlidingWindow`, `Truncation`).

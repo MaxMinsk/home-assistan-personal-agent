@@ -1,5 +1,5 @@
 name: Home Assistant Personal Agent
-version: "0.2.6"
+version: "0.2.7"
 slug: ha_personal_agent
 description: Learning-first Microsoft Agent Framework assistant for Home Assistant.
 url: https://github.com/MaxMinsk/home-assistan-personal-agent/tree/main/addon
