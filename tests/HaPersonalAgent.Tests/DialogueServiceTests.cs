@@ -221,6 +221,44 @@ public class DialogueServiceTests
     }
 
     [Fact]
+    public async Task Persisted_summary_candidate_is_merged_with_existing_summary_instead_of_overwrite()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var runtime = new FakeAgentRuntime(new (string Text, string? SummaryCandidate)[]
+            {
+                ("Первый ответ.", "Собака быстро адаптировалась к дому."),
+                ("Второй ответ.", "Пользователь тренирует выдержку на прогулке."),
+            });
+            var service = CreateService(repository, runtime);
+            var conversation = DialogueConversation.Create("telegram", "200", "100");
+            var conversationKey = DialogueConversationKey.Create(conversation);
+
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "Первое сообщение", "run-1"),
+                CancellationToken.None);
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "Второе сообщение", "run-2"),
+                CancellationToken.None);
+
+            var summary = await repository.GetConversationSummaryAsync(
+                conversationKey,
+                CancellationToken.None);
+            Assert.NotNull(summary);
+            Assert.Equal(2, summary.SummaryVersion);
+            Assert.Contains("Собака быстро адаптировалась к дому.", summary.Summary, StringComparison.Ordinal);
+            Assert.Contains("Пользователь тренирует выдержку на прогулке.", summary.Summary, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Context_snapshot_reports_message_counts_and_summary_numbers()
     {
         var databasePath = CreateTemporaryDatabasePath();

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.11
+
+- Fix persisted summary refresh behavior: merge new summarize output with existing summary instead of replacing it with a single recent chunk.
+- Add regression test coverage for summary merge on repeated compaction refresh.
+- Ignore local `references/` and `sdks_comparision.md` artifacts in git.
+
 ## 0.2.10
 
 - Fix rolling summary refresh strategy: summarize now runs when summary is missing or when enough new messages accumulated after the last summary.
