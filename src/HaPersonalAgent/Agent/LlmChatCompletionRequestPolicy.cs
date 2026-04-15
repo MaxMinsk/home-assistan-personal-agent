@@ -3,6 +3,7 @@ using System.ClientModel.Primitives;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Logging;
 
 namespace HaPersonalAgent.Agent;
 
@@ -16,10 +17,14 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly LlmExecutionPlan _executionPlan;
+    private readonly ILogger<LlmChatCompletionRequestPolicy>? _logger;
 
-    public LlmChatCompletionRequestPolicy(LlmExecutionPlan executionPlan)
+    public LlmChatCompletionRequestPolicy(
+        LlmExecutionPlan executionPlan,
+        ILogger<LlmChatCompletionRequestPolicy>? logger = null)
     {
         _executionPlan = executionPlan;
+        _logger = logger;
     }
 
     public override void Process(
@@ -45,8 +50,18 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         LlmExecutionPlan executionPlan,
         out string patchedJson)
     {
+        return TryPatchRequestJson(json, executionPlan, out patchedJson, out _);
+    }
+
+    internal static bool TryPatchRequestJson(
+        string json,
+        LlmExecutionPlan executionPlan,
+        out string patchedJson,
+        out LlmRequestPatchKind patchKind)
+    {
         ArgumentNullException.ThrowIfNull(executionPlan);
 
+        patchKind = LlmRequestPatchKind.None;
         patchedJson = json;
         if (!executionPlan.ShouldPatchChatCompletionRequest)
         {
@@ -68,15 +83,17 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
             return false;
         }
 
-        var patched = TryApplyThinkingControl(root, executionPlan);
+        var patched = TryApplyThinkingControl(root, executionPlan, out patchKind);
         if (!patched
             && TryApplyToolStepReasoningSafetyFallback(root, executionPlan))
         {
             patched = true;
+            patchKind = LlmRequestPatchKind.AutoToolStepSafetyDisable;
         }
 
         if (!patched)
         {
+            patchKind = LlmRequestPatchKind.None;
             return false;
         }
 
@@ -174,8 +191,11 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
 
     private static bool TryApplyThinkingControl(
         JsonObject root,
-        LlmExecutionPlan executionPlan)
+        LlmExecutionPlan executionPlan,
+        out LlmRequestPatchKind patchKind)
     {
+        patchKind = LlmRequestPatchKind.None;
+
         if (executionPlan.Capabilities.ThinkingControlStyle != LlmThinkingControlStyle.OpenAiCompatibleThinkingObject)
         {
             return false;
@@ -192,6 +212,10 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         {
             return false;
         }
+
+        patchKind = type == "disabled"
+            ? LlmRequestPatchKind.ForcedThinkingDisable
+            : LlmRequestPatchKind.ForcedThinkingEnable;
 
         root["thinking"] = new JsonObject
         {
@@ -212,9 +236,10 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         message.Request.Content.WriteTo(stream, cancellationToken);
         var json = Encoding.UTF8.GetString(stream.ToArray());
 
-        if (TryPatchRequestJson(json, _executionPlan, out var patchedJson))
+        if (TryPatchRequestJson(json, _executionPlan, out var patchedJson, out var patchKind))
         {
             message.Request.Content = BinaryContent.Create(BinaryData.FromString(patchedJson));
+            LogPatchDecision(patchKind);
         }
     }
 
@@ -231,9 +256,34 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         await message.Request.Content.WriteToAsync(stream, cancellationToken);
         var json = Encoding.UTF8.GetString(stream.ToArray());
 
-        if (TryPatchRequestJson(json, _executionPlan, out var patchedJson))
+        if (TryPatchRequestJson(json, _executionPlan, out var patchedJson, out var patchKind))
         {
             message.Request.Content = BinaryContent.Create(BinaryData.FromString(patchedJson));
+            LogPatchDecision(patchKind);
+        }
+    }
+
+    private void LogPatchDecision(LlmRequestPatchKind patchKind)
+    {
+        if (_logger is null)
+        {
+            return;
+        }
+
+        switch (patchKind)
+        {
+            case LlmRequestPatchKind.AutoToolStepSafetyDisable:
+                _logger.LogWarning(
+                    "LLM request patch applied safety fallback: thinking disabled for this tool-step request because assistant tool-call history has missing reasoning_content.");
+                break;
+            case LlmRequestPatchKind.ForcedThinkingDisable:
+                _logger.LogInformation(
+                    "LLM request patch forced thinking disabled by execution plan.");
+                break;
+            case LlmRequestPatchKind.ForcedThinkingEnable:
+                _logger.LogInformation(
+                    "LLM request patch forced thinking enabled by execution plan.");
+                break;
         }
     }
 
@@ -241,4 +291,12 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         string.Equals(request.Method, "POST", StringComparison.OrdinalIgnoreCase)
         && request.Uri is { } uri
         && uri.AbsolutePath.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase);
+
+    internal enum LlmRequestPatchKind
+    {
+        None,
+        ForcedThinkingDisable,
+        ForcedThinkingEnable,
+        AutoToolStepSafetyDisable,
+    }
 }

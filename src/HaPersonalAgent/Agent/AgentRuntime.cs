@@ -208,7 +208,7 @@ public sealed class AgentRuntime : IAgentRuntime
         var chatClient = new ChatClient(
             model: options.Model,
             credential: new ApiKeyCredential(options.ApiKey),
-            options: CreateOpenAIClientOptions(options, executionPlan));
+            options: CreateOpenAIClientOptions(options, executionPlan, _loggerFactory));
         IChatClient aiChatClient = chatClient.AsIChatClient();
         if (executionPlan.UsesTools
             && executionPlan.Capabilities.RequiresReasoningContentRoundTripForToolCalls)
@@ -260,7 +260,8 @@ public sealed class AgentRuntime : IAgentRuntime
 
     private static OpenAIClientOptions CreateOpenAIClientOptions(
         LlmOptions options,
-        LlmExecutionPlan executionPlan)
+        LlmExecutionPlan executionPlan,
+        ILoggerFactory loggerFactory)
     {
         var clientOptions = new OpenAIClientOptions
         {
@@ -270,7 +271,9 @@ public sealed class AgentRuntime : IAgentRuntime
         if (executionPlan.ShouldPatchChatCompletionRequest)
         {
             clientOptions.AddPolicy(
-                new LlmChatCompletionRequestPolicy(executionPlan),
+                new LlmChatCompletionRequestPolicy(
+                    executionPlan,
+                    loggerFactory.CreateLogger<LlmChatCompletionRequestPolicy>()),
                 PipelinePosition.BeforeTransport);
         }
 

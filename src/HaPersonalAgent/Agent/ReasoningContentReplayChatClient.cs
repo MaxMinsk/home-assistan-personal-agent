@@ -29,21 +29,48 @@ public sealed class ReasoningContentReplayChatClient : DelegatingChatClient
         ArgumentNullException.ThrowIfNull(messages);
 
         var replayReadyMessages = CloneMessages(messages);
+        var (requestToolCallMessageCount, requestMissingReasoningCount) =
+            CountAssistantToolCallReasoningMessages(replayReadyMessages);
+        if (requestToolCallMessageCount > 0)
+        {
+            _logger.LogInformation(
+                "Reasoning replay middleware request diagnostics: assistant tool-call messages {ToolCallMessageCount}, missing reasoning {MissingReasoningCount}, cache entries {CacheEntryCount}.",
+                requestToolCallMessageCount,
+                requestMissingReasoningCount,
+                _reasoningByToolSignature.Count);
+        }
+
         var replayedCount = ReplayReasoningContent(replayReadyMessages);
         if (replayedCount > 0)
         {
-            _logger.LogDebug(
+            _logger.LogInformation(
                 "Reasoning replay middleware injected reasoning content into {ReplayedMessageCount} assistant tool-call history messages.",
                 replayedCount);
         }
+        else if (requestMissingReasoningCount > 0)
+        {
+            _logger.LogWarning(
+                "Reasoning replay middleware could not inject reasoning content into {MissingReasoningCount} assistant tool-call history messages; provider may reject this tool step without request-level fallback.",
+                requestMissingReasoningCount);
+        }
 
         var response = await base.GetResponseAsync(replayReadyMessages, options, cancellationToken);
+        var (responseToolCallMessageCount, responseMissingReasoningCount) =
+            CountAssistantToolCallReasoningMessages(response.Messages);
         var capturedCount = CaptureReasoningContent(response);
-        if (capturedCount > 0)
+        if (responseToolCallMessageCount > 0)
         {
-            _logger.LogDebug(
-                "Reasoning replay middleware captured reasoning content from {CapturedMessageCount} assistant tool-call messages.",
-                capturedCount);
+            _logger.LogInformation(
+                "Reasoning replay middleware response diagnostics: assistant tool-call messages {ToolCallMessageCount}, captured reasoning {CapturedMessageCount}, missing reasoning {MissingReasoningCount}, cache entries {CacheEntryCount}.",
+                responseToolCallMessageCount,
+                capturedCount,
+                responseMissingReasoningCount,
+                _reasoningByToolSignature.Count);
+        }
+        if (responseToolCallMessageCount > 0 && capturedCount == 0)
+        {
+            _logger.LogWarning(
+                "Reasoning replay middleware did not capture reasoning content from provider response with assistant tool-call messages.");
         }
 
         return response;
@@ -128,6 +155,38 @@ public sealed class ReasoningContentReplayChatClient : DelegatingChatClient
         }
 
         return clonedMessages;
+    }
+
+    private static (int ToolCallMessageCount, int MissingReasoningCount) CountAssistantToolCallReasoningMessages(
+        IEnumerable<ChatMessage> messages)
+    {
+        var toolCallMessageCount = 0;
+        var missingReasoningCount = 0;
+
+        foreach (var message in messages)
+        {
+            if (message.Role != ChatRole.Assistant)
+            {
+                continue;
+            }
+
+            if (!message.Contents.OfType<FunctionCallContent>().Any())
+            {
+                continue;
+            }
+
+            toolCallMessageCount++;
+
+            var hasReasoning = message.Contents
+                .OfType<TextReasoningContent>()
+                .Any(content => !string.IsNullOrWhiteSpace(content.Text));
+            if (!hasReasoning)
+            {
+                missingReasoningCount++;
+            }
+        }
+
+        return (toolCallMessageCount, missingReasoningCount);
     }
 
     private static string? TryCreateToolSignature(ChatMessage message)

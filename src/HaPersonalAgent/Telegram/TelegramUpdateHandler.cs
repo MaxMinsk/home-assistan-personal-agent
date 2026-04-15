@@ -4,6 +4,7 @@ using HaPersonalAgent.Confirmation;
 using HaPersonalAgent.Dialogue;
 using HaPersonalAgent.HomeAssistant;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Telegram.Bot.Types;
 
 namespace HaPersonalAgent.Telegram;
@@ -23,6 +24,8 @@ public sealed class TelegramUpdateHandler
     private readonly IConfirmationService? _confirmationService;
     private readonly AgentStatusTool _statusTool;
     private readonly IAgentRuntime _agentRuntime;
+    private readonly LlmExecutionPlanner _executionPlanner;
+    private readonly IOptions<LlmOptions> _llmOptions;
     private readonly ILogger<TelegramUpdateHandler> _logger;
 
     public TelegramUpdateHandler(
@@ -30,6 +33,8 @@ public sealed class TelegramUpdateHandler
         IHomeAssistantMcpClient homeAssistantMcpClient,
         AgentStatusTool statusTool,
         IAgentRuntime agentRuntime,
+        LlmExecutionPlanner executionPlanner,
+        IOptions<LlmOptions> llmOptions,
         ILogger<TelegramUpdateHandler> logger,
         IConfirmationService? confirmationService = null)
     {
@@ -37,6 +42,8 @@ public sealed class TelegramUpdateHandler
         _homeAssistantMcpClient = homeAssistantMcpClient;
         _statusTool = statusTool;
         _agentRuntime = agentRuntime;
+        _executionPlanner = executionPlanner;
+        _llmOptions = llmOptions;
         _logger = logger;
         _confirmationService = confirmationService;
     }
@@ -58,6 +65,15 @@ public sealed class TelegramUpdateHandler
         }
 
         var userId = message.From.Id;
+        var chatId = message.Chat.Id;
+        var text = message.Text.Trim();
+        _logger.LogInformation(
+            "Telegram update {TelegramUpdateId} received from user {TelegramUserId} in chat {TelegramChatId}; text length {TextLength}.",
+            update.Id,
+            userId,
+            chatId,
+            text.Length);
+
         if (!IsAllowed(telegramOptions, userId))
         {
             _logger.LogWarning(
@@ -67,12 +83,13 @@ public sealed class TelegramUpdateHandler
             return;
         }
 
-        var chatId = message.Chat.Id;
         var conversation = CreateConversation(chatId, userId);
-        var text = message.Text.Trim();
 
         if (IsCommand(text, "/start"))
         {
+            _logger.LogInformation(
+                "Telegram update {TelegramUpdateId} routed to /start command.",
+                update.Id);
             await client.SendMessageAsync(
                 chatId,
                 "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /resetContext очистит контекст этого чата. Для действий с домом используй /approve <id> или /reject <id>, когда агент попросит подтверждение.",
@@ -82,6 +99,9 @@ public sealed class TelegramUpdateHandler
 
         if (IsCommand(text, "/status"))
         {
+            _logger.LogInformation(
+                "Telegram update {TelegramUpdateId} routed to /status command.",
+                update.Id);
             await client.SendMessageAsync(
                 chatId,
                 await FormatStatusAsync(cancellationToken),
@@ -91,6 +111,10 @@ public sealed class TelegramUpdateHandler
 
         if (IsCommand(text, "/resetContext"))
         {
+            _logger.LogInformation(
+                "Telegram update {TelegramUpdateId} routed to /resetContext command for conversation {ConversationKey}.",
+                update.Id,
+                DialogueConversationKey.Create(conversation));
             await _dialogueService.ResetAsync(conversation, cancellationToken);
             await client.SendMessageAsync(
                 chatId,
@@ -101,6 +125,10 @@ public sealed class TelegramUpdateHandler
 
         if (TryReadCommandArgument(text, "/approve", out var approveActionId))
         {
+            _logger.LogInformation(
+                "Telegram update {TelegramUpdateId} routed to /approve command with action id {ConfirmationId}.",
+                update.Id,
+                approveActionId);
             await HandleConfirmationCommandAsync(
                 client,
                 chatId,
@@ -113,6 +141,10 @@ public sealed class TelegramUpdateHandler
 
         if (TryReadCommandArgument(text, "/reject", out var rejectActionId))
         {
+            _logger.LogInformation(
+                "Telegram update {TelegramUpdateId} routed to /reject command with action id {ConfirmationId}.",
+                update.Id,
+                rejectActionId);
             await HandleConfirmationCommandAsync(
                 client,
                 chatId,
@@ -127,6 +159,9 @@ public sealed class TelegramUpdateHandler
         {
             if (string.IsNullOrWhiteSpace(deepReasoningText))
             {
+                _logger.LogInformation(
+                    "Telegram update {TelegramUpdateId} routed to /think command without payload.",
+                    update.Id);
                 await client.SendMessageAsync(
                     chatId,
                     "Укажи вопрос: /think <вопрос>. В этом режиме tools отключены.",
@@ -134,6 +169,10 @@ public sealed class TelegramUpdateHandler
                 return;
             }
 
+            _logger.LogInformation(
+                "Telegram update {TelegramUpdateId} routed to deep reasoning profile; text length {TextLength}.",
+                update.Id,
+                deepReasoningText.Length);
             await HandleAgentMessageAsync(
                 client,
                 update.Id,
@@ -145,6 +184,10 @@ public sealed class TelegramUpdateHandler
             return;
         }
 
+        _logger.LogInformation(
+            "Telegram update {TelegramUpdateId} routed to tool-enabled profile; text length {TextLength}.",
+            update.Id,
+            text.Length);
         await HandleAgentMessageAsync(
             client,
             update.Id,
@@ -186,6 +229,12 @@ public sealed class TelegramUpdateHandler
         var result = approve
             ? await _confirmationService.ApproveAsync(conversation, actionId, cancellationToken)
             : await _confirmationService.RejectAsync(conversation, actionId, cancellationToken);
+        _logger.LogInformation(
+            "Confirmation command {Command} for action {ConfirmationId} completed with outcome {Outcome} and success {IsSuccess}.",
+            approve ? "/approve" : "/reject",
+            actionId,
+            result.Outcome,
+            result.IsSuccess);
 
         await client.SendMessageAsync(
             chatId,
@@ -202,6 +251,12 @@ public sealed class TelegramUpdateHandler
         LlmExecutionProfile executionProfile,
         CancellationToken cancellationToken)
     {
+        _logger.LogInformation(
+            "Dialogue request telegram-{TelegramUpdateId} started for chat {TelegramChatId} with profile {ExecutionProfile}; text length {TextLength}.",
+            updateId,
+            chatId,
+            executionProfile,
+            text.Length);
         var response = await _dialogueService.SendUserMessageAsync(
             DialogueRequest.Create(
                 conversation,
@@ -209,6 +264,12 @@ public sealed class TelegramUpdateHandler
                 correlationId: $"telegram-{updateId}",
                 executionProfile: executionProfile),
             cancellationToken);
+        _logger.LogInformation(
+            "Dialogue request telegram-{TelegramUpdateId} completed for chat {TelegramChatId}; configured {IsConfigured}; response length {ResponseLength}.",
+            updateId,
+            chatId,
+            response.IsConfigured,
+            response.Text.Length);
 
         await client.SendMessageAsync(
             chatId,
@@ -220,16 +281,25 @@ public sealed class TelegramUpdateHandler
     {
         var status = _statusTool.GetStatus();
         var runtimeHealth = _agentRuntime.GetHealth();
+        var toolEnabledPlan = _executionPlanner.CreatePlan(_llmOptions.Value, LlmExecutionProfile.ToolEnabled);
+        var deepReasoningPlan = _executionPlanner.CreatePlan(_llmOptions.Value, LlmExecutionProfile.DeepReasoning);
         var mcpDiscovery = await _homeAssistantMcpClient.DiscoverAsync(cancellationToken);
         var runtimeText = runtimeHealth.IsConfigured
             ? "configured"
             : $"not configured ({runtimeHealth.Reason})";
+        var toolReasoningActive = IsReasoningActive(toolEnabledPlan);
+        var deepReasoningActive = IsReasoningActive(deepReasoningPlan);
 
         return string.Join(
             Environment.NewLine,
             $"{status.ApplicationName} {status.Version}",
             $"Runtime: {runtimeText}",
             $"LLM: {runtimeHealth.Provider} / {runtimeHealth.Model} / thinking {runtimeHealth.ThinkingMode}",
+            $"ReasoningActive(tool-enabled): {toolReasoningActive}",
+            $"ReasoningPlan(tool-enabled): requested {toolEnabledPlan.RequestedThinkingMode}, effective {FormatThinkingMode(toolEnabledPlan.EffectiveThinkingMode)}, patch {toolEnabledPlan.ShouldPatchChatCompletionRequest}",
+            $"ReasoningSafetyFallback(tool-enabled): {ShouldUseReasoningSafetyFallback(toolEnabledPlan)}",
+            $"ReasoningActive(deep): {deepReasoningActive}",
+            $"ReasoningPlan(deep): requested {deepReasoningPlan.RequestedThinkingMode}, effective {FormatThinkingMode(deepReasoningPlan.EffectiveThinkingMode)}, patch {deepReasoningPlan.ShouldPatchChatCompletionRequest}",
             $"Uptime: {status.Uptime}",
             $"Configuration: {status.ConfigurationMode}",
             $"HA MCP: {FormatMcpStatus(mcpDiscovery)}",
@@ -294,4 +364,22 @@ public sealed class TelegramUpdateHandler
 
         return normalized[..(MaxTelegramMessageLength - 32)] + "\n\n[ответ обрезан]";
     }
+
+    private static bool IsReasoningActive(LlmExecutionPlan plan) =>
+        plan.EffectiveThinkingMode != LlmEffectiveThinkingMode.Disabled;
+
+    private static bool ShouldUseReasoningSafetyFallback(LlmExecutionPlan plan) =>
+        string.Equals(plan.RequestedThinkingMode, LlmThinkingModes.Auto, StringComparison.Ordinal)
+        && plan.UsesTools
+        && plan.Capabilities.RequiresReasoningContentRoundTripForToolCalls
+        && plan.Capabilities.ThinkingControlStyle == LlmThinkingControlStyle.OpenAiCompatibleThinkingObject;
+
+    private static string FormatThinkingMode(LlmEffectiveThinkingMode mode) =>
+        mode switch
+        {
+            LlmEffectiveThinkingMode.Disabled => "disabled",
+            LlmEffectiveThinkingMode.Enabled => "enabled",
+            _ => "provider-default",
+        };
+
 }

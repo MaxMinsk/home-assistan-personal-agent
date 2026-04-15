@@ -42,6 +42,16 @@ public sealed class DialogueService
             conversationKey,
             maxMessages,
             cancellationToken);
+        _logger.LogInformation(
+            "Dialogue request {CorrelationId} started for {ConversationKey} ({Transport}/{ConversationId}, participant {ParticipantId}) with profile {ExecutionProfile}, text length {TextLength}, history messages {HistoryMessageCount}.",
+            request.CorrelationId,
+            conversationKey,
+            request.Conversation.Transport,
+            request.Conversation.ConversationId,
+            request.Conversation.ParticipantId,
+            request.ExecutionProfile,
+            request.Text.Length,
+            history.Count);
 
         var now = DateTimeOffset.UtcNow;
         AgentRuntimeResponse response;
@@ -75,6 +85,9 @@ public sealed class DialogueService
 
         if (!response.IsConfigured)
         {
+            _logger.LogInformation(
+                "Dialogue request {CorrelationId} completed without persisted turn because runtime is not configured or provider call failed.",
+                request.CorrelationId);
             return response;
         }
 
@@ -91,6 +104,11 @@ public sealed class DialogueService
             conversationKey,
             maxMessages,
             cancellationToken);
+        _logger.LogInformation(
+            "Dialogue request {CorrelationId} completed and persisted user/assistant turns for {ConversationKey}; response length {ResponseLength}.",
+            request.CorrelationId,
+            conversationKey,
+            response.Text.Length);
 
         return response;
     }
@@ -104,6 +122,9 @@ public sealed class DialogueService
         await _stateRepository.ClearConversationMessagesAsync(
             DialogueConversationKey.Create(conversation),
             cancellationToken);
+        _logger.LogInformation(
+            "Dialogue context reset for {ConversationKey}.",
+            DialogueConversationKey.Create(conversation));
     }
 
     public Task RecordSystemNotificationAsync(

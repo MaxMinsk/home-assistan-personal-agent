@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.5
+
+- Add detailed Telegram diagnostics for long polling iterations, update routing, and dialogue request lifecycle.
+- Expand `/status` with reasoning diagnostics (`ReasoningActive`, requested/effective reasoning plan, request patch, safety fallback visibility).
+- Add request-patch decision logs for forced/safety thinking overrides in chat completions.
+- Add reasoning replay middleware diagnostics to show tool-step reasoning capture/replay coverage and failure reasons.
+- Add dialogue persistence diagnostics that explain when turns are saved or intentionally skipped.
+
 ## 0.2.4
 
 - Fix Moonshot/Kimi first tool-enabled turn failure (`HTTP 400 reasoning_content is missing`) by enabling request policy in `auto` tool profile and applying request-level safety fallback.

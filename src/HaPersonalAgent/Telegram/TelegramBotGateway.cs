@@ -61,9 +61,11 @@ public sealed class TelegramBotGateway : BackgroundService
     {
         var offset = await _stateRepository.GetTelegramUpdateOffsetAsync(stoppingToken);
         var webhookDeleted = false;
+        var iteration = 0;
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            iteration++;
             try
             {
                 if (!webhookDeleted)
@@ -80,8 +82,20 @@ public sealed class TelegramBotGateway : BackgroundService
                     AllowedUpdates,
                     stoppingToken);
 
+                if (updates.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "Telegram polling iteration {Iteration} received {UpdateCount} updates at offset {Offset}.",
+                        iteration,
+                        updates.Count,
+                        offset);
+                }
+
                 foreach (var update in updates)
                 {
+                    _logger.LogInformation(
+                        "Telegram polling is processing update {TelegramUpdateId}.",
+                        update.Id);
                     await _updateHandler.HandleAsync(client, update, options, stoppingToken);
 
                     offset = update.Id + 1L;

@@ -166,6 +166,8 @@ public class TelegramUpdateHandlerTests
 
             Assert.Contains("HA MCP: reachable (1 tools, 1 prompts)", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("thinking auto", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("ReasoningActive(tool-enabled): True", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("ReasoningPlan(tool-enabled): requested auto, effective provider-default", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
         }
         finally
         {
@@ -313,6 +315,10 @@ public class TelegramUpdateHandlerTests
             Options.Create(new TelegramOptions { AllowedUserIds = new long[] { 100 } }),
             Options.Create(new LlmOptions { ApiKey = "configured" }),
             Options.Create(new HomeAssistantOptions()));
+        var llmOptions = Options.Create(new LlmOptions
+        {
+            ApiKey = "configured",
+        });
         var loggerFactory = LoggerFactory.Create(_ => { });
         var dialogueService = new DialogueService(
             runtime,
@@ -327,6 +333,8 @@ public class TelegramUpdateHandlerTests
                 "HomeAssistant:LongLivedAccessToken is empty.")),
             new AgentStatusTool(statusProvider),
             runtime,
+            new LlmExecutionPlanner(new LlmProviderCapabilitiesResolver()),
+            llmOptions,
             loggerFactory.CreateLogger<TelegramUpdateHandler>(),
             confirmationService);
     }
