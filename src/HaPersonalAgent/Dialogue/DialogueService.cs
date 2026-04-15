@@ -99,12 +99,13 @@ public sealed class DialogueService
             return response;
         }
 
+        var assistantTextForPersistence = GetAssistantTextForPersistence(response.Text);
         await _stateRepository.AppendConversationMessagesAsync(
             conversationKey,
             new[]
             {
                 new AgentConversationMessage(AgentConversationRole.User, request.Text, now),
-                new AgentConversationMessage(AgentConversationRole.Assistant, response.Text, DateTimeOffset.UtcNow),
+                new AgentConversationMessage(AgentConversationRole.Assistant, assistantTextForPersistence, DateTimeOffset.UtcNow),
             },
             cancellationToken);
 
@@ -141,6 +142,18 @@ public sealed class DialogueService
         _logger.LogInformation(
             "Dialogue context reset for {ConversationKey}.",
             DialogueConversationKey.Create(conversation));
+    }
+
+    public async Task<ConversationSummaryMemory?> GetPersistedSummaryAsync(
+        DialogueConversation conversation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+
+        var conversationKey = DialogueConversationKey.Create(conversation);
+        return await _stateRepository.GetConversationSummaryAsync(
+            conversationKey,
+            cancellationToken);
     }
 
     public Task RecordSystemNotificationAsync(
@@ -213,5 +226,34 @@ public sealed class DialogueService
             nextVersion,
             latestMessageId.Value,
             normalizedSummary.Length);
+    }
+
+    private static string GetAssistantTextForPersistence(string responseText)
+    {
+        if (!responseText.StartsWith("[context-summary]", StringComparison.Ordinal))
+        {
+            return responseText;
+        }
+
+        const string windowsSeparator = "\r\n\r\n";
+        const string unixSeparator = "\n\n";
+
+        var separatorIndex = responseText.IndexOf(windowsSeparator, StringComparison.Ordinal);
+        var separatorLength = windowsSeparator.Length;
+        if (separatorIndex < 0)
+        {
+            separatorIndex = responseText.IndexOf(unixSeparator, StringComparison.Ordinal);
+            separatorLength = unixSeparator.Length;
+        }
+
+        if (separatorIndex < 0)
+        {
+            return responseText;
+        }
+
+        var content = responseText[(separatorIndex + separatorLength)..].TrimStart('\r', '\n');
+        return string.IsNullOrWhiteSpace(content)
+            ? responseText
+            : content;
     }
 }

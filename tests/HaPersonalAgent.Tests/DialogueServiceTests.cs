@@ -127,7 +127,7 @@ public class DialogueServiceTests
     }
 
     [Fact]
-    public async Task Compaction_notice_is_persisted_as_regular_assistant_turn_and_reused_from_sql_history()
+    public async Task Compaction_notice_is_visible_to_user_but_not_persisted_in_sql_history()
     {
         var databasePath = CreateTemporaryDatabasePath();
 
@@ -142,7 +142,7 @@ public class DialogueServiceTests
             var service = CreateService(repository, runtime);
             var conversation = DialogueConversation.Create("telegram", "200", "100");
 
-            await service.SendUserMessageAsync(
+            var firstResponse = await service.SendUserMessageAsync(
                 DialogueRequest.Create(conversation, "Привет", "run-1"),
                 CancellationToken.None);
 
@@ -158,20 +158,18 @@ public class DialogueServiceTests
             Assert.Equal(4, stored.Count);
             Assert.Equal("Привет", stored[0].Text);
             Assert.Equal(AgentConversationRole.User, stored[0].Role);
-            Assert.StartsWith("[context-summary]", stored[1].Text, StringComparison.Ordinal);
+            Assert.Equal("Текущий ответ.", stored[1].Text);
             Assert.Equal(AgentConversationRole.Assistant, stored[1].Role);
             Assert.Equal("Что дальше?", stored[2].Text);
             Assert.Equal(AgentConversationRole.User, stored[2].Role);
             Assert.Equal("Продолжаем диалог.", stored[3].Text);
             Assert.Equal(AgentConversationRole.Assistant, stored[3].Role);
+            Assert.StartsWith("[context-summary]", firstResponse.Text, StringComparison.Ordinal);
 
             Assert.Equal(2, runtime.Calls.Count);
             Assert.Equal(2, runtime.Calls[1].Context.ConversationMessages.Count);
             Assert.Equal("Привет", runtime.Calls[1].Context.ConversationMessages[0].Text);
-            Assert.StartsWith(
-                "[context-summary]",
-                runtime.Calls[1].Context.ConversationMessages[1].Text,
-                StringComparison.Ordinal);
+            Assert.Equal("Текущий ответ.", runtime.Calls[1].Context.ConversationMessages[1].Text);
         }
         finally
         {

@@ -92,7 +92,7 @@ public sealed class TelegramUpdateHandler
                 update.Id);
             await client.SendMessageAsync(
                 chatId,
-                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /resetContext очистит контекст этого чата. Для действий с домом используй /approve <id> или /reject <id>, когда агент попросит подтверждение.",
+                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /resetContext очистит контекст этого чата, /showSummarized покажет persisted summary. Для действий с домом используй /approve <id> или /reject <id>, когда агент попросит подтверждение.",
                 cancellationToken);
             return;
         }
@@ -119,6 +119,20 @@ public sealed class TelegramUpdateHandler
             await client.SendMessageAsync(
                 chatId,
                 "Контекст этого чата очищен.",
+                cancellationToken);
+            return;
+        }
+
+        if (IsCommand(text, "/showSummarized"))
+        {
+            _logger.LogInformation(
+                "Telegram update {TelegramUpdateId} routed to /showSummarized command for conversation {ConversationKey}.",
+                update.Id,
+                DialogueConversationKey.Create(conversation));
+            await HandleShowSummarizedCommandAsync(
+                client,
+                chatId,
+                conversation,
                 cancellationToken);
             return;
         }
@@ -239,6 +253,35 @@ public sealed class TelegramUpdateHandler
         await client.SendMessageAsync(
             chatId,
             NormalizeTelegramText(result.Message),
+            cancellationToken);
+    }
+
+    private async Task HandleShowSummarizedCommandAsync(
+        ITelegramBotClientAdapter client,
+        long chatId,
+        DialogueConversation conversation,
+        CancellationToken cancellationToken)
+    {
+        var summary = await _dialogueService.GetPersistedSummaryAsync(conversation, cancellationToken);
+        if (summary is null)
+        {
+            await client.SendMessageAsync(
+                chatId,
+                "Persisted summary для этого чата пока отсутствует.",
+                cancellationToken);
+            return;
+        }
+
+        var response = string.Join(
+            Environment.NewLine,
+            $"Summary version: {summary.SummaryVersion}",
+            $"Updated (UTC): {summary.UpdatedAtUtc:O}",
+            $"Source last message id: {summary.SourceLastMessageId}",
+            string.Empty,
+            summary.Summary);
+        await client.SendMessageAsync(
+            chatId,
+            NormalizeTelegramText(response),
             cancellationToken);
     }
 

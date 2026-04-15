@@ -73,7 +73,7 @@
    - `[context-summary] ...`
 7. `DialogueService` сохраняет в SQLite только 2 сообщения:
    - `User` (входной текст)
-   - `Assistant` (финальный текст, включая `[context-summary]`, если был)
+   - `Assistant` (очищенный текст без технического префикса `[context-summary]`)
 8. Если runtime вернул summary candidate, `DialogueService` обновляет `conversation_summary` (upsert, новая версия, `source_last_message_id`).
 9. После сохранения `DialogueService` применяет `TrimConversationMessagesAsync` по лимиту (`ConversationContextMaxTurns * 2`).
 
@@ -88,7 +88,7 @@
 
 Единственное видимое изменение памяти:
 
-- если summarize-step сработал, в `Assistant.content` появляется пользовательский префикс `[context-summary]`.
+- если summarize-step сработал, пользователь видит префикс `[context-summary]` в ответе transport-слоя, но этот префикс не сохраняется в `conversation_messages`.
 - если runtime отдал summary candidate, обновляется `conversation_summary`.
 
 Это намеренно: пользователь явно видит, что ранняя часть контекста была сжата.
@@ -120,6 +120,8 @@
   - проверяет, что следующий run поднимает из SQL ровно эти turns.
 - `StorageTests.Conversation_messages_preserve_multiline_compaction_notice_content`
   - проверяет корректное сохранение multiline `Assistant.content` с `[context-summary]`.
+- `DialogueServiceTests.Compaction_notice_is_visible_to_user_but_not_persisted_in_sql_history`
+  - проверяет, что пользователь видит `[context-summary]`, но в SQL сохраняется только чистый assistant текст.
 - `StorageTests.Conversation_summary_upsert_get_and_clear_roundtrip`
   - проверяет таблицу `conversation_summary`: upsert/get/update/clear.
 - `DialogueServiceTests.Persisted_summary_candidate_is_saved_and_reused_in_next_runtime_context`

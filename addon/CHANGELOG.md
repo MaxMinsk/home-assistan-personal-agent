@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.9
+
+- Add Telegram command `/showSummarized` to inspect persisted conversation summary for the current chat.
+- Keep `[context-summary]` visible to the user response but stop persisting this marker in `conversation_messages`.
+- Add dialogue/Telegram tests for persisted summary command behavior and cleaned assistant turn persistence.
+- Update memory flow docs for persisted summary read path and non-persistent summary marker behavior.
+
+
 ## 0.2.8
 
 - Add persisted summary memory in SQLite (`conversation_summary`) separated from regular dialogue turns.
