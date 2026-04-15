@@ -78,31 +78,71 @@
 
 ## Thinking / reasoning flow
 
-### 1) Планирование режима
+### Кто что делает (по классам)
 
-`LlmExecutionPlanner` на каждый run учитывает:
+- `LlmProviderCapabilitiesResolver`:
+  определяет профиль провайдера (`SupportsReasoning`, `RequiresReasoningContentRoundTripForToolCalls`, `ThinkingControlStyle`).
+- `LlmExecutionPlanner`:
+  по `llm_thinking_mode + profile + capabilities` вычисляет `LlmExecutionPlan`.
+- `LlmExecutionPlan`:
+  хранит итог (`RequestedThinkingMode`, `EffectiveThinkingMode`) и решает, нужен ли request patch (`ShouldPatchChatCompletionRequest`).
+- `LlmChatCompletionRequestPolicy`:
+  последний guard перед HTTP-запросом в `/chat/completions`; может проставить `thinking` или safety-fallback.
+- `ReasoningContentReplayChatClient`:
+  middleware над `IChatClient`, который в рамках одного run делает capture/replay `TextReasoningContent` между tool-step вызовами.
+- `AgentRuntime`:
+  связывает все вместе: создает plan, подключает policy, оборачивает chat client replay middleware, запускает MAF agent.
 
-- `llm_thinking_mode` (`auto|disabled|enabled`);
-- execution profile (`ToolEnabled|PureChat|DeepReasoning`);
-- provider capabilities (включая round-trip требования для tool calls).
+### Точный порядок вызова (ToolEnabled run)
 
-Итог: `LlmExecutionPlan` с `EffectiveThinkingMode` и причиной (для логов).
+1. `AgentRuntime.SendAsync` строит `executionPlan` через `LlmExecutionPlanner`.
+2. `AgentRuntime.CreateOpenAIClientOptions` добавляет `LlmChatCompletionRequestPolicy`, если `executionPlan.ShouldPatchChatCompletionRequest == true`.
+3. `AgentRuntime.CreateAgent` оборачивает chat client в `ReasoningContentReplayChatClient`, если profile с tools и провайдер требует reasoning round-trip для tool-calls.
+4. MAF (`ChatClientAgent.RunAsync`) делает один или несколько вызовов `IChatClient.GetResponseAsync`.
+5. На каждом таком вызове:
+   - `ReasoningContentReplayChatClient` получает message history и пытается подставить сохраненный reasoning в assistant tool-call сообщения (replay);
+   - перед фактической отправкой HTTP срабатывает `LlmChatCompletionRequestPolicy`:
+     - forced режим: ставит `thinking.type=disabled|enabled`, если plan так требует;
+     - safety режим: в `auto + tools` может поставить `thinking.type=disabled`, если видит assistant `tool_calls` без `reasoning_content`;
+   - после ответа провайдера `ReasoningContentReplayChatClient` пытается извлечь `TextReasoningContent` из assistant tool-call сообщения и сохранить в in-memory cache (capture) для следующего шага.
+6. После завершения run возвращается только final text; reasoning metadata в persistence не пишется.
 
-### 2) Request patch policy
+### Что значит `/status` по reasoning
 
-`LlmChatCompletionRequestPolicy` может изменить исходный JSON request перед отправкой:
+`/status` сейчас показывает:
 
-- выставить `thinking.type=disabled` или `enabled` (если поддерживается);
-- применить safety fallback для `auto` + tools, когда в history есть assistant `tool_calls` без `reasoning_content`.
+- `ReasoningActive(tool-enabled)`:
+  true, если effective mode не `disabled` (то есть `provider-default` или `enabled`).
+- `ReasoningPlan(tool-enabled)`:
+  requested/effective + включен ли request patch.
+- `ReasoningSafetyFallback(tool-enabled)`:
+  может ли этот профиль в принципе применить safety fallback (capability-level), а не факт, что fallback уже применился в конкретном запросе.
+- аналогичный блок для `deep` profile.
 
-### 3) Per-run reasoning replay
+### Как читать новые логи reasoning
 
-`ReasoningContentReplayChatClient` в рамках одного run:
+- `Agent run ... thinking requested/effective/reason ...`:
+  решение planner на старте run.
+- `LLM request patch forced thinking ...`:
+  policy принудительно проставил режим thinking.
+- `LLM request patch applied safety fallback ...`:
+  policy отключил thinking для конкретного tool-step запроса из-за missing `reasoning_content`.
+- `Reasoning replay middleware ... request diagnostics`:
+  сколько assistant tool-call сообщений пришло на вход шага и сколько из них без reasoning.
+- `Reasoning replay middleware ... response diagnostics`:
+  смогли ли мы захватить reasoning из ответа провайдера.
+- `Agent run ... reasoning diagnostics: ...`:
+  итоговый сводный лог по run (policy/replay counters + признаки `provider reasoning observed`, `safety fallback applied`, `replay needed`).
 
-- после ответа модели пытается захватить `TextReasoningContent` из assistant tool-call сообщения;
-- перед следующим tool-step пробует подставить его обратно в соответствующее assistant history message.
+### Важный нюанс про `auto`
 
-Важно: это **ephemeral** state run-а, не persistence.
+`llm_thinking_mode=auto` не означает «всегда видимый reasoning-трейс в каждом ответе».
+
+Это означает:
+
+- planner обычно оставляет `provider-default`;
+- на tool-step safety policy может временно выключить thinking для стабильности;
+- провайдер может сам решать, в каких ответах отдавать reasoning metadata.
 
 ## Почему был `HTTP 400` и как исправлено в `v0.2.4`
 

@@ -110,6 +110,59 @@ public class DialogueServiceTests
         }
     }
 
+    [Fact]
+    public async Task Compaction_notice_is_persisted_as_regular_assistant_turn_and_reused_from_sql_history()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var runtime = new FakeAgentRuntime(new[]
+            {
+                "[context-summary] Чтобы удержать бюджет контекста, я сжал раннюю часть диалога (1 summarize step)." + Environment.NewLine + Environment.NewLine + "Текущий ответ.",
+                "Продолжаем диалог.",
+            });
+            var service = CreateService(repository, runtime);
+            var conversation = DialogueConversation.Create("telegram", "200", "100");
+
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "Привет", "run-1"),
+                CancellationToken.None);
+
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "Что дальше?", "run-2"),
+                CancellationToken.None);
+
+            var stored = await repository.GetConversationMessagesAsync(
+                DialogueConversationKey.Create(conversation),
+                limit: 10,
+                CancellationToken.None);
+
+            Assert.Equal(4, stored.Count);
+            Assert.Equal("Привет", stored[0].Text);
+            Assert.Equal(AgentConversationRole.User, stored[0].Role);
+            Assert.StartsWith("[context-summary]", stored[1].Text, StringComparison.Ordinal);
+            Assert.Equal(AgentConversationRole.Assistant, stored[1].Role);
+            Assert.Equal("Что дальше?", stored[2].Text);
+            Assert.Equal(AgentConversationRole.User, stored[2].Role);
+            Assert.Equal("Продолжаем диалог.", stored[3].Text);
+            Assert.Equal(AgentConversationRole.Assistant, stored[3].Role);
+
+            Assert.Equal(2, runtime.Calls.Count);
+            Assert.Equal(2, runtime.Calls[1].Context.ConversationMessages.Count);
+            Assert.Equal("Привет", runtime.Calls[1].Context.ConversationMessages[0].Text);
+            Assert.StartsWith(
+                "[context-summary]",
+                runtime.Calls[1].Context.ConversationMessages[1].Text,
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
     private static DialogueService CreateService(
         AgentStateRepository repository,
         FakeAgentRuntime runtime)
@@ -159,12 +212,17 @@ public class DialogueServiceTests
     /// </summary>
     private sealed class FakeAgentRuntime : IAgentRuntime
     {
+        private readonly Queue<string> _responseQueue;
+
         public FakeAgentRuntime(string responseText)
+            : this(new[] { responseText })
         {
-            ResponseText = responseText;
         }
 
-        public string ResponseText { get; }
+        public FakeAgentRuntime(IEnumerable<string> responseTexts)
+        {
+            _responseQueue = new Queue<string>(responseTexts);
+        }
 
         public List<(string Message, AgentContext Context)> Calls { get; } = new();
 
@@ -177,11 +235,15 @@ public class DialogueServiceTests
             CancellationToken cancellationToken)
         {
             Calls.Add((message, context));
+            if (_responseQueue.Count == 0)
+            {
+                throw new InvalidOperationException("No fake runtime responses left in queue.");
+            }
 
             return Task.FromResult(new AgentRuntimeResponse(
                 context.CorrelationId,
                 IsConfigured: true,
-                ResponseText,
+                _responseQueue.Dequeue(),
                 GetHealth()));
         }
     }

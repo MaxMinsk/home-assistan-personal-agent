@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.6
+
+- Align memory compaction with MAF patterns via `CompactionProvider` + `PipelineCompactionStrategy` (`ToolResult`, `Summarization`, `SlidingWindow`, `Truncation`).
+- Add per-run compaction diagnostics and explicit `[context-summary]` notice in assistant response when summarize-step is applied.
+- Add per-request LLM diagnostics middleware and run-level reasoning diagnostics aggregation for clearer tool/thinking troubleshooting.
+- Add SQL-focused memory regression tests proving compaction notice is persisted as a normal assistant turn and reused from `conversation_messages`.
+- Add `memory_flow.md` and refresh reasoning/docs/backlog notes for MAF-first reference alignment.
+
+
 ## 0.2.5
 
 - Add detailed Telegram diagnostics for long polling iterations, update routing, and dialogue request lifecycle.

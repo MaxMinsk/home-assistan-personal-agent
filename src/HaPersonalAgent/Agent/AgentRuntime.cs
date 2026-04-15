@@ -2,6 +2,7 @@ using HaPersonalAgent.Configuration;
 using HaPersonalAgent.Confirmation;
 using HaPersonalAgent.HomeAssistant;
 using Microsoft.Agents.AI;
+using Microsoft.Agents.AI.Compaction;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -12,6 +13,8 @@ using System.ClientModel.Primitives;
 using System.Text;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using AiChatRole = Microsoft.Extensions.AI.ChatRole;
+
+#pragma warning disable MAAI001 // Microsoft.Agents.AI.Compaction is preview in current package.
 
 namespace HaPersonalAgent.Agent;
 
@@ -111,6 +114,8 @@ public sealed class AgentRuntime : IAgentRuntime
         }
 
         var executionPlan = _executionPlanner.CreatePlan(_llmOptions.Value, context.ExecutionProfile);
+        var reasoningDiagnostics = new ReasoningRunDiagnostics();
+        var compactionDiagnostics = new CompactionRunDiagnostics();
         await using var homeAssistantMcpTools = await CreateHomeAssistantMcpToolsAsync(
             executionPlan,
             cancellationToken);
@@ -129,7 +134,13 @@ public sealed class AgentRuntime : IAgentRuntime
             homeAssistantMcpTools.ExposedToolCount,
             homeAssistantMcpTools.ConfirmationRequiredTools.Count);
 
-        var agent = CreateAgent(_llmOptions.Value, homeAssistantMcpTools, context, executionPlan);
+        var agent = CreateAgent(
+            _llmOptions.Value,
+            homeAssistantMcpTools,
+            context,
+            executionPlan,
+            reasoningDiagnostics,
+            compactionDiagnostics);
         var runOptions = new ChatClientAgentRunOptions(new ChatOptions())
         {
             AdditionalProperties = new AdditionalPropertiesDictionary
@@ -139,6 +150,7 @@ public sealed class AgentRuntime : IAgentRuntime
         };
 
         AgentResponse response;
+        AgentRuntimeResponse? failureResponse = null;
         try
         {
             response = await agent.RunAsync(
@@ -154,10 +166,13 @@ public sealed class AgentRuntime : IAgentRuntime
                 "LLM provider request failed with HTTP status {Status}.",
                 exception.Status);
 
-            return CreateProviderFailureResponse(
+            failureResponse = CreateProviderFailureResponse(
                 context,
                 health,
                 exception.Status);
+            LogReasoningDiagnostics(context.CorrelationId, executionPlan, reasoningDiagnostics, success: false);
+            LogCompactionDiagnostics(context.CorrelationId, compactionDiagnostics, success: false);
+            return failureResponse;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -165,21 +180,30 @@ public sealed class AgentRuntime : IAgentRuntime
                 exception,
                 "Agent runtime failed before returning a response.");
 
-            return CreateProviderFailureResponse(
+            failureResponse = CreateProviderFailureResponse(
                 context,
                 health,
                 status: null);
+            LogReasoningDiagnostics(context.CorrelationId, executionPlan, reasoningDiagnostics, success: false);
+            LogCompactionDiagnostics(context.CorrelationId, compactionDiagnostics, success: false);
+            return failureResponse;
         }
 
         _logger.LogInformation(
             "Agent run {CorrelationId} completed with response length {ResponseLength}.",
             context.CorrelationId,
             response.Text.Length);
+        LogReasoningDiagnostics(context.CorrelationId, executionPlan, reasoningDiagnostics, success: true);
+        LogCompactionDiagnostics(context.CorrelationId, compactionDiagnostics, success: true);
+        var compactionSnapshot = compactionDiagnostics.Snapshot();
+        var responseText = compactionSnapshot.SummarizationTriggered
+            ? BuildSummarizationNotice(compactionSnapshot) + Environment.NewLine + Environment.NewLine + response.Text
+            : response.Text;
 
         return new AgentRuntimeResponse(
             context.CorrelationId,
             IsConfigured: true,
-            response.Text,
+            responseText,
             health);
     }
 
@@ -203,20 +227,44 @@ public sealed class AgentRuntime : IAgentRuntime
         LlmOptions options,
         HomeAssistantMcpAgentToolSet homeAssistantMcpTools,
         AgentContext context,
-        LlmExecutionPlan executionPlan)
+        LlmExecutionPlan executionPlan,
+        ReasoningRunDiagnostics reasoningDiagnostics,
+        CompactionRunDiagnostics compactionDiagnostics)
     {
         var chatClient = new ChatClient(
             model: options.Model,
             credential: new ApiKeyCredential(options.ApiKey),
-            options: CreateOpenAIClientOptions(options, executionPlan, _loggerFactory));
+            options: CreateOpenAIClientOptions(
+                options,
+                executionPlan,
+                _loggerFactory,
+                reasoningDiagnostics));
         IChatClient aiChatClient = chatClient.AsIChatClient();
         if (executionPlan.UsesTools
             && executionPlan.Capabilities.RequiresReasoningContentRoundTripForToolCalls)
         {
             aiChatClient = new ReasoningContentReplayChatClient(
                 aiChatClient,
-                _loggerFactory.CreateLogger<ReasoningContentReplayChatClient>());
+                _loggerFactory.CreateLogger<ReasoningContentReplayChatClient>(),
+                reasoningDiagnostics);
         }
+
+        aiChatClient = new LlmRequestLoggingChatClient(
+            aiChatClient,
+            context.CorrelationId,
+            executionPlan,
+            _loggerFactory.CreateLogger<LlmRequestLoggingChatClient>());
+
+        aiChatClient = aiChatClient.AsBuilder()
+            .UseAIContextProviders(new CompactionProvider(
+                CreateCompactionPipeline(
+                    chatClient,
+                    options,
+                    context,
+                    compactionDiagnostics),
+                stateKey: "ha_compaction_pipeline",
+                loggerFactory: _loggerFactory))
+            .Build();
 
         var statusTool = AIFunctionFactory.Create(
             (Func<AgentStatusSnapshot>)_statusTool.GetStatus,
@@ -258,10 +306,68 @@ public sealed class AgentRuntime : IAgentRuntime
             services: _serviceProvider);
     }
 
+    /// <summary>
+    /// Что: собирает compaction pipeline по MAF-паттерну для входящего контекста диалога.
+    /// Зачем: HAAG-034 требует перейти от ad-hoc trimming к стандартным стратегиям MAF с atomic grouping tool-call/result.
+    /// Как: применяет стратегии от мягкой к агрессивной: ToolResult - Summarization - SlidingWindow - Truncation.
+    /// Ссылки:
+    /// - https://github.com/microsoft/agent-framework/blob/main/dotnet/samples/02-agents/Agents/Agent_Step18_CompactionPipeline/Program.cs
+    /// - https://github.com/microsoft/agent-framework/blob/main/docs/decisions/0019-python-context-compaction-strategy.md
+    /// </summary>
+    private CompactionStrategy CreateCompactionPipeline(
+        ChatClient primaryChatClient,
+        LlmOptions llmOptions,
+        AgentContext context,
+        CompactionRunDiagnostics compactionDiagnostics)
+    {
+        var summarizationExecutionPlan = _executionPlanner.CreatePlan(
+            llmOptions,
+            LlmExecutionProfile.PureChat);
+        IChatClient summarizationChatClient = primaryChatClient.AsIChatClient();
+        summarizationChatClient = new LlmRequestLoggingChatClient(
+            summarizationChatClient,
+            context.CorrelationId,
+            summarizationExecutionPlan,
+            _loggerFactory.CreateLogger<LlmRequestLoggingChatClient>());
+        summarizationChatClient = new CompactionSummarizationChatClient(
+            summarizationChatClient,
+            context.CorrelationId,
+            compactionDiagnostics,
+            _loggerFactory.CreateLogger<CompactionSummarizationChatClient>());
+
+        return new PipelineCompactionStrategy(new CompactionStrategy[]
+        {
+            new ToolResultCompactionStrategy(CompactionTriggers.MessagesExceed(18)),
+            new SummarizationCompactionStrategy(
+                summarizationChatClient,
+                CompactionTriggers.MessagesExceed(22),
+                minimumPreservedGroups: 8,
+                summarizationPrompt: CreateSummarizationPrompt(),
+                target: CompactionTriggers.MessagesExceed(14)),
+            new SlidingWindowCompactionStrategy(
+                CompactionTriggers.TurnsExceed(12),
+                minimumPreservedTurns: 6,
+                target: CompactionTriggers.TurnsExceed(8)),
+            new TruncationCompactionStrategy(
+                CompactionTriggers.MessagesExceed(40),
+                minimumPreservedGroups: 10,
+                target: CompactionTriggers.MessagesExceed(30)),
+        });
+    }
+
+    private static string CreateSummarizationPrompt() =>
+        """
+        Summarize older conversation context in concise Russian.
+        Preserve user intent, confirmed facts, unfinished tasks, and constraints.
+        Do not include secrets, tokens, raw identifiers, or full tool outputs.
+        Keep the summary practical for the next assistant step.
+        """;
+
     private static OpenAIClientOptions CreateOpenAIClientOptions(
         LlmOptions options,
         LlmExecutionPlan executionPlan,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        ReasoningRunDiagnostics reasoningDiagnostics)
     {
         var clientOptions = new OpenAIClientOptions
         {
@@ -273,12 +379,65 @@ public sealed class AgentRuntime : IAgentRuntime
             clientOptions.AddPolicy(
                 new LlmChatCompletionRequestPolicy(
                     executionPlan,
-                    loggerFactory.CreateLogger<LlmChatCompletionRequestPolicy>()),
+                    loggerFactory.CreateLogger<LlmChatCompletionRequestPolicy>(),
+                    reasoningDiagnostics),
                 PipelinePosition.BeforeTransport);
         }
 
         return clientOptions;
     }
+
+    private void LogReasoningDiagnostics(
+        string correlationId,
+        LlmExecutionPlan executionPlan,
+        ReasoningRunDiagnostics diagnostics,
+        bool success)
+    {
+        var snapshot = diagnostics.Snapshot();
+
+        _logger.LogInformation(
+            "Agent run {CorrelationId} reasoning diagnostics: success {Success}, requested {RequestedThinkingMode}, effective {EffectiveThinkingMode}, patch pipeline enabled {PatchPipelineEnabled}, provider reasoning observed {ProviderReasoningObserved}, replay needed {ReplayNeeded}, safety fallback applied {SafetyFallbackApplied}; policy requests {PolicyRequests}, policy no-patch {PolicyNoPatch}, policy forced disable {PolicyForcedDisable}, policy forced enable {PolicyForcedEnable}, policy auto safety disable {PolicyAutoSafetyDisable}; replay requests {ReplayRequests}, replay request tool-call messages {ReplayRequestToolCalls}, replay request missing reasoning {ReplayRequestMissingReasoning}, replay injected {ReplayInjected}, replay responses {ReplayResponses}, replay response tool-call messages {ReplayResponseToolCalls}, replay response missing reasoning {ReplayResponseMissingReasoning}, replay captured {ReplayCaptured}.",
+            correlationId,
+            success,
+            executionPlan.RequestedThinkingMode,
+            executionPlan.EffectiveThinkingMode,
+            executionPlan.ShouldPatchChatCompletionRequest,
+            snapshot.ProviderReasoningObserved,
+            snapshot.ReplayWasNeeded,
+            snapshot.SafetyFallbackApplied,
+            snapshot.PolicyObservedRequests,
+            snapshot.PolicyNoPatchRequests,
+            snapshot.PolicyForcedDisablePatches,
+            snapshot.PolicyForcedEnablePatches,
+            snapshot.PolicyAutoSafetyDisablePatches,
+            snapshot.ReplayRequestsObserved,
+            snapshot.ReplayRequestToolCallMessages,
+            snapshot.ReplayRequestMissingToolCallReasoningMessages,
+            snapshot.ReplayInjectedMessages,
+            snapshot.ReplayResponsesObserved,
+            snapshot.ReplayResponseToolCallMessages,
+            snapshot.ReplayResponseMissingToolCallReasoningMessages,
+            snapshot.ReplayCapturedMessages);
+    }
+
+    private void LogCompactionDiagnostics(
+        string correlationId,
+        CompactionRunDiagnostics diagnostics,
+        bool success)
+    {
+        var snapshot = diagnostics.Snapshot();
+
+        _logger.LogInformation(
+            "Agent run {CorrelationId} compaction diagnostics: success {Success}, summarization requests {SummarizationRequests}, summarization responses {SummarizationResponses}, summarization triggered {SummarizationTriggered}.",
+            correlationId,
+            success,
+            snapshot.SummarizationRequests,
+            snapshot.SummarizationResponses,
+            snapshot.SummarizationTriggered);
+    }
+
+    private static string BuildSummarizationNotice(CompactionRunDiagnosticsSnapshot snapshot) =>
+        $"[context-summary] Чтобы удержать бюджет контекста, я сжал раннюю часть диалога ({snapshot.SummarizationRequests} summarize step).";
 
     private AIFunction CreateHomeAssistantActionProposalTool(
         AgentContext context,
@@ -436,3 +595,5 @@ public sealed class AgentRuntime : IAgentRuntime
             ? value
             : value[..maxLength];
 }
+
+#pragma warning restore MAAI001

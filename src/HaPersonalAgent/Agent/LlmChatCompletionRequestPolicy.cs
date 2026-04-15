@@ -18,13 +18,16 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
 
     private readonly LlmExecutionPlan _executionPlan;
     private readonly ILogger<LlmChatCompletionRequestPolicy>? _logger;
+    private readonly ReasoningRunDiagnostics? _diagnostics;
 
     public LlmChatCompletionRequestPolicy(
         LlmExecutionPlan executionPlan,
-        ILogger<LlmChatCompletionRequestPolicy>? logger = null)
+        ILogger<LlmChatCompletionRequestPolicy>? logger = null,
+        ReasoningRunDiagnostics? diagnostics = null)
     {
         _executionPlan = executionPlan;
         _logger = logger;
+        _diagnostics = diagnostics;
     }
 
     public override void Process(
@@ -236,11 +239,15 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         message.Request.Content.WriteTo(stream, cancellationToken);
         var json = Encoding.UTF8.GetString(stream.ToArray());
 
-        if (TryPatchRequestJson(json, _executionPlan, out var patchedJson, out var patchKind))
+        var patched = TryPatchRequestJson(json, _executionPlan, out var patchedJson, out var patchKind);
+        _diagnostics?.RecordPolicyPatchDecision(patchKind);
+
+        if (patched)
         {
             message.Request.Content = BinaryContent.Create(BinaryData.FromString(patchedJson));
-            LogPatchDecision(patchKind);
         }
+
+        LogPatchDecision(patchKind, patched);
     }
 
     private async ValueTask PatchRequestAsync(
@@ -256,19 +263,34 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         await message.Request.Content.WriteToAsync(stream, cancellationToken);
         var json = Encoding.UTF8.GetString(stream.ToArray());
 
-        if (TryPatchRequestJson(json, _executionPlan, out var patchedJson, out var patchKind))
+        var patched = TryPatchRequestJson(json, _executionPlan, out var patchedJson, out var patchKind);
+        _diagnostics?.RecordPolicyPatchDecision(patchKind);
+
+        if (patched)
         {
             message.Request.Content = BinaryContent.Create(BinaryData.FromString(patchedJson));
-            LogPatchDecision(patchKind);
         }
+
+        LogPatchDecision(patchKind, patched);
     }
 
-    private void LogPatchDecision(LlmRequestPatchKind patchKind)
+    private void LogPatchDecision(
+        LlmRequestPatchKind patchKind,
+        bool patched)
     {
         if (_logger is null)
         {
             return;
         }
+
+        _logger.LogInformation(
+            "LLM request patch decision: patched {Patched}, patch kind {PatchKind}, requested thinking {RequestedThinkingMode}, effective thinking {EffectiveThinkingMode}, profile {ExecutionProfile}, provider profile {ProviderProfile}.",
+            patched,
+            patchKind,
+            _executionPlan.RequestedThinkingMode,
+            _executionPlan.EffectiveThinkingMode,
+            _executionPlan.Profile,
+            _executionPlan.Capabilities.ProviderKey);
 
         switch (patchKind)
         {
@@ -283,6 +305,10 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
             case LlmRequestPatchKind.ForcedThinkingEnable:
                 _logger.LogInformation(
                     "LLM request patch forced thinking enabled by execution plan.");
+                break;
+            default:
+                _logger.LogInformation(
+                    "LLM request patch left request body unchanged for this call.");
                 break;
         }
     }

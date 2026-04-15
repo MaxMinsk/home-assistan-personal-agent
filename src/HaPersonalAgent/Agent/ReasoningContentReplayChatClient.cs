@@ -11,14 +11,17 @@ namespace HaPersonalAgent.Agent;
 public sealed class ReasoningContentReplayChatClient : DelegatingChatClient
 {
     private readonly Dictionary<string, string> _reasoningByToolSignature = new(StringComparer.Ordinal);
+    private readonly ReasoningRunDiagnostics? _diagnostics;
     private readonly ILogger<ReasoningContentReplayChatClient> _logger;
 
     public ReasoningContentReplayChatClient(
         IChatClient innerClient,
-        ILogger<ReasoningContentReplayChatClient> logger)
+        ILogger<ReasoningContentReplayChatClient> logger,
+        ReasoningRunDiagnostics? diagnostics = null)
         : base(innerClient)
     {
         _logger = logger;
+        _diagnostics = diagnostics;
     }
 
     public override async Task<ChatResponse> GetResponseAsync(
@@ -31,6 +34,9 @@ public sealed class ReasoningContentReplayChatClient : DelegatingChatClient
         var replayReadyMessages = CloneMessages(messages);
         var (requestToolCallMessageCount, requestMissingReasoningCount) =
             CountAssistantToolCallReasoningMessages(replayReadyMessages);
+        _diagnostics?.RecordReplayRequest(
+            requestToolCallMessageCount,
+            requestMissingReasoningCount);
         if (requestToolCallMessageCount > 0)
         {
             _logger.LogInformation(
@@ -47,7 +53,8 @@ public sealed class ReasoningContentReplayChatClient : DelegatingChatClient
                 "Reasoning replay middleware injected reasoning content into {ReplayedMessageCount} assistant tool-call history messages.",
                 replayedCount);
         }
-        else if (requestMissingReasoningCount > 0)
+        _diagnostics?.RecordReplayInjection(replayedCount);
+        if (replayedCount == 0 && requestMissingReasoningCount > 0)
         {
             _logger.LogWarning(
                 "Reasoning replay middleware could not inject reasoning content into {MissingReasoningCount} assistant tool-call history messages; provider may reject this tool step without request-level fallback.",
@@ -57,7 +64,13 @@ public sealed class ReasoningContentReplayChatClient : DelegatingChatClient
         var response = await base.GetResponseAsync(replayReadyMessages, options, cancellationToken);
         var (responseToolCallMessageCount, responseMissingReasoningCount) =
             CountAssistantToolCallReasoningMessages(response.Messages);
+        var responseHasAssistantReasoning = HasAssistantReasoningContent(response.Messages);
         var capturedCount = CaptureReasoningContent(response);
+        _diagnostics?.RecordReplayResponse(
+            responseToolCallMessageCount,
+            responseMissingReasoningCount,
+            capturedCount,
+            responseHasAssistantReasoning);
         if (responseToolCallMessageCount > 0)
         {
             _logger.LogInformation(
@@ -187,6 +200,26 @@ public sealed class ReasoningContentReplayChatClient : DelegatingChatClient
         }
 
         return (toolCallMessageCount, missingReasoningCount);
+    }
+
+    private static bool HasAssistantReasoningContent(IEnumerable<ChatMessage> messages)
+    {
+        foreach (var message in messages)
+        {
+            if (message.Role != ChatRole.Assistant)
+            {
+                continue;
+            }
+
+            if (message.Contents
+                .OfType<TextReasoningContent>()
+                .Any(content => !string.IsNullOrWhiteSpace(content.Text)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string? TryCreateToolSignature(ChatMessage message)

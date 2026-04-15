@@ -144,6 +144,38 @@ public class StorageTests
     }
 
     [Fact]
+    public async Task Conversation_messages_preserve_multiline_compaction_notice_content()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var notice = "[context-summary] Ранний контекст сжат." + Environment.NewLine + Environment.NewLine + "Ответ пользователю.";
+            await repository.AppendConversationMessagesAsync(
+                "telegram:1:2",
+                new[]
+                {
+                    new AgentConversationMessage(AgentConversationRole.Assistant, notice, DateTimeOffset.UtcNow),
+                },
+                CancellationToken.None);
+
+            var messages = await repository.GetConversationMessagesAsync(
+                "telegram:1:2",
+                limit: 10,
+                CancellationToken.None);
+
+            Assert.Single(messages);
+            Assert.Equal(AgentConversationRole.Assistant, messages[0].Role);
+            Assert.Equal(notice, messages[0].Text);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Pending_confirmation_persists_and_status_updates_once()
     {
         var databasePath = CreateTemporaryDatabasePath();
