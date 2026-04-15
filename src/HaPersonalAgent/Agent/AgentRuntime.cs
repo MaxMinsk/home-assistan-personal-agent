@@ -120,7 +120,7 @@ public sealed class AgentRuntime : IAgentRuntime
             executionPlan,
             cancellationToken);
         _logger.LogInformation(
-            "Agent run {CorrelationId} starting with provider {Provider}, model {Model}, profile {ExecutionProfile}, provider profile {ProviderProfile}, thinking requested {RequestedThinkingMode}, thinking effective {EffectiveThinkingMode}, thinking reason {ThinkingReason}, history messages {HistoryMessageCount}, persisted summary present {PersistedSummaryPresent}, persisted summary length {PersistedSummaryLength}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}, MCP status {McpStatus}, read-only MCP tools {ReadOnlyToolCount}, confirmation MCP tools {ConfirmationToolCount}.",
+            "Agent run {CorrelationId} starting with provider {Provider}, model {Model}, profile {ExecutionProfile}, provider profile {ProviderProfile}, thinking requested {RequestedThinkingMode}, thinking effective {EffectiveThinkingMode}, thinking reason {ThinkingReason}, history messages {HistoryMessageCount}, persisted summary present {PersistedSummaryPresent}, persisted summary length {PersistedSummaryLength}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}, persisted summary refresh forced {ForcePersistedSummaryRefresh}, MCP status {McpStatus}, read-only MCP tools {ReadOnlyToolCount}, confirmation MCP tools {ConfirmationToolCount}.",
             context.CorrelationId,
             health.Provider,
             health.Model,
@@ -134,6 +134,7 @@ public sealed class AgentRuntime : IAgentRuntime
             context.PersistedSummary?.Length ?? 0,
             context.MessagesSincePersistedSummary,
             context.ShouldRefreshPersistedSummary,
+            context.ForcePersistedSummaryRefresh,
             homeAssistantMcpTools.Status,
             homeAssistantMcpTools.ExposedToolCount,
             homeAssistantMcpTools.ConfirmationRequiredTools.Count);
@@ -352,12 +353,21 @@ public sealed class AgentRuntime : IAgentRuntime
         // либо summary отсутствует, либо накопился новый "хвост" сообщений после последнего summary.
         if (context.ShouldRefreshPersistedSummary)
         {
+            var summarizationTrigger = context.ForcePersistedSummaryRefresh
+                ? CompactionTriggers.MessagesExceed(2)
+                : CompactionTriggers.MessagesExceed(24);
+            var summarizationTarget = context.ForcePersistedSummaryRefresh
+                ? CompactionTriggers.MessagesExceed(2)
+                : CompactionTriggers.MessagesExceed(24);
+            var minimumPreservedGroups = context.ForcePersistedSummaryRefresh
+                ? 2
+                : 10;
             strategies.Add(new SummarizationCompactionStrategy(
                 summarizationChatClient,
-                CompactionTriggers.MessagesExceed(24),
-                minimumPreservedGroups: 10,
+                summarizationTrigger,
+                minimumPreservedGroups: minimumPreservedGroups,
                 summarizationPrompt: CreateSummarizationPrompt(),
-                target: CompactionTriggers.MessagesExceed(24)));
+                target: summarizationTarget));
         }
 
         strategies.AddRange(new CompactionStrategy[]
@@ -377,7 +387,7 @@ public sealed class AgentRuntime : IAgentRuntime
 
     private static string CreateSummarizationPrompt() =>
         """
-        Build persisted conversation memory in concise Russian.
+        Build persisted long-term conversation memory in Russian.
         Return only this markdown structure:
 
         ## Контекст пользователя
@@ -393,13 +403,16 @@ public sealed class AgentRuntime : IAgentRuntime
         - ...
 
         Rules:
-        - Keep only facts useful for future turns.
-        - Include still-relevant facts from prior summary when present.
+        - This is memory for future runs, not a short recap.
+        - Preserve durable context from prior summary when it is still relevant.
+        - Prefer concrete entities, values, commitments, and decisions.
+        - Keep only facts useful for future turns; remove obvious noise.
         - Do not copy long quotes from dialogue.
         - Do not ask questions and do not address the user directly.
         - Do not include role labels, timestamps, message ids, tokens, secrets, or raw tool outputs.
+        - For sections with data, provide 2-6 concise bullets.
         - If no data for a section, write one bullet: "- нет данных".
-        - Keep the full summary under 1200 characters.
+        - Target 1500-2800 characters, hard max 3200.
         """;
 
     private static OpenAIClientOptions CreateOpenAIClientOptions(

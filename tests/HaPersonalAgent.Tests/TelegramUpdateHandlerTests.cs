@@ -145,7 +145,7 @@ public class TelegramUpdateHandlerTests
 
             await handler.HandleAsync(
                 adapter,
-                CreateTextUpdate(updateId: 19, chatId: 200, userId: 100, text: "/showSummarized"),
+                CreateTextUpdate(updateId: 19, chatId: 200, userId: 100, text: "/showSummary"),
                 new TelegramOptions { AllowedUserIds = new long[] { 100 } },
                 CancellationToken.None);
 
@@ -174,13 +174,102 @@ public class TelegramUpdateHandlerTests
 
             await handler.HandleAsync(
                 adapter,
-                CreateTextUpdate(updateId: 20, chatId: 200, userId: 100, text: "/showSummarized"),
+                CreateTextUpdate(updateId: 20, chatId: 200, userId: 100, text: "/showSummary"),
                 new TelegramOptions { AllowedUserIds = new long[] { 100 } },
                 CancellationToken.None);
 
             Assert.Empty(runtime.Calls);
             Assert.Single(adapter.SentMessages);
             Assert.Contains("persisted summary", adapter.SentMessages.Single().Text, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Refresh_summary_forces_rebuild_and_returns_updated_snapshot()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var now = DateTimeOffset.UtcNow;
+            await repository.AppendConversationMessagesAsync(
+                "telegram:200:100",
+                new[]
+                {
+                    new AgentConversationMessage(AgentConversationRole.User, "u1", now),
+                    new AgentConversationMessage(AgentConversationRole.Assistant, "a1", now),
+                },
+                CancellationToken.None);
+            var latestMessageId = await repository.GetLatestConversationMessageIdAsync(
+                "telegram:200:100",
+                CancellationToken.None);
+            Assert.True(latestMessageId.HasValue);
+            await repository.UpsertConversationSummaryAsync(
+                new ConversationSummaryMemory(
+                    "telegram:200:100",
+                    "старый summary",
+                    now,
+                    latestMessageId!.Value,
+                    SummaryVersion: 1),
+                CancellationToken.None);
+
+            var runtime = new FakeAgentRuntime("service response")
+            {
+                NextSummaryCandidate = "новый summary",
+            };
+            var handler = CreateHandler(repository, runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 21, chatId: 200, userId: 100, text: "/refreshSummary"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            var stored = await repository.GetConversationMessagesAsync("telegram:200:100", 10, CancellationToken.None);
+            var refreshedSummary = await repository.GetConversationSummaryAsync("telegram:200:100", CancellationToken.None);
+
+            Assert.Single(runtime.Calls);
+            Assert.Equal(LlmExecutionProfile.PureChat, runtime.Calls.Single().Context.ExecutionProfile);
+            Assert.True(runtime.Calls.Single().Context.ForcePersistedSummaryRefresh);
+            Assert.Equal(2, stored.Count);
+            Assert.NotNull(refreshedSummary);
+            Assert.Equal(2, refreshedSummary.SummaryVersion);
+            Assert.Equal("новый summary", refreshedSummary.Summary);
+            Assert.Contains("пересобран", adapter.SentMessages.Single().Text, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Summary version: 2", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Refresh_summary_returns_noop_when_history_is_empty()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var runtime = new FakeAgentRuntime("unused");
+            var handler = CreateHandler(repository, runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 22, chatId: 200, userId: 100, text: "/refreshSummary"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Empty(runtime.Calls);
+            Assert.Contains("нет истории", adapter.SentMessages.Single().Text, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
@@ -482,6 +571,8 @@ public class TelegramUpdateHandlerTests
 
         public string NextResponseText { get; set; }
 
+        public string? NextSummaryCandidate { get; set; }
+
         public Exception? ExceptionToThrow { get; set; }
 
         public List<(string Message, AgentContext Context)> Calls { get; } = new();
@@ -505,7 +596,8 @@ public class TelegramUpdateHandlerTests
                 context.CorrelationId,
                 IsConfigured: true,
                 NextResponseText,
-                GetHealth()));
+                GetHealth(),
+                NextSummaryCandidate));
         }
     }
 

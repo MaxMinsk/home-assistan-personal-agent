@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.13
+
+- Add Telegram command `/refreshSummary` to force immediate persisted summary rebuild for the current chat.
+- Rename summary inspection command from `/showSummarized` to `/showSummary` for consistent command naming with refresh flow.
+- Add forced summary refresh path in dialogue/runtime (`PureChat` service run, compaction summarize trigger override) without appending extra dialogue turns.
+- Relax and enrich persisted summary prompt so memory keeps more durable context/facts instead of overly short snapshots.
+- Add regression tests for forced refresh behavior in dialogue and Telegram handlers.
+
 ## 0.2.12
 
 - Fix persisted summary quality: stop paragraph-wise append/merge and store a single canonical summary snapshot per refresh.

@@ -92,7 +92,7 @@ public sealed class TelegramUpdateHandler
                 update.Id);
             await client.SendMessageAsync(
                 chatId,
-                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /resetContext очистит контекст этого чата, /showSummarized покажет persisted summary. Для действий с домом используй /approve <id> или /reject <id>, когда агент попросит подтверждение.",
+                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary. Для действий с домом используй /approve <id> или /reject <id>, когда агент попросит подтверждение.",
                 cancellationToken);
             return;
         }
@@ -123,14 +123,29 @@ public sealed class TelegramUpdateHandler
             return;
         }
 
-        if (IsCommand(text, "/showSummarized"))
+        if (IsCommand(text, "/showSummary"))
         {
             _logger.LogInformation(
-                "Telegram update {TelegramUpdateId} routed to /showSummarized command for conversation {ConversationKey}.",
+                "Telegram update {TelegramUpdateId} routed to /showSummary command for conversation {ConversationKey}.",
                 update.Id,
                 DialogueConversationKey.Create(conversation));
-            await HandleShowSummarizedCommandAsync(
+            await HandleShowSummaryCommandAsync(
                 client,
+                chatId,
+                conversation,
+                cancellationToken);
+            return;
+        }
+
+        if (IsCommand(text, "/refreshSummary"))
+        {
+            _logger.LogInformation(
+                "Telegram update {TelegramUpdateId} routed to /refreshSummary command for conversation {ConversationKey}.",
+                update.Id,
+                DialogueConversationKey.Create(conversation));
+            await HandleRefreshSummaryCommandAsync(
+                client,
+                update.Id,
                 chatId,
                 conversation,
                 cancellationToken);
@@ -256,7 +271,7 @@ public sealed class TelegramUpdateHandler
             cancellationToken);
     }
 
-    private async Task HandleShowSummarizedCommandAsync(
+    private async Task HandleShowSummaryCommandAsync(
         ITelegramBotClientAdapter client,
         long chatId,
         DialogueConversation conversation,
@@ -272,13 +287,31 @@ public sealed class TelegramUpdateHandler
             return;
         }
 
-        var response = string.Join(
-            Environment.NewLine,
-            $"Summary version: {summary.SummaryVersion}",
-            $"Updated (UTC): {summary.UpdatedAtUtc:O}",
-            $"Source last message id: {summary.SourceLastMessageId}",
-            string.Empty,
-            summary.Summary);
+        var response = FormatPersistedSummary(summary);
+        await client.SendMessageAsync(
+            chatId,
+            NormalizeTelegramText(response),
+            cancellationToken);
+    }
+
+    private async Task HandleRefreshSummaryCommandAsync(
+        ITelegramBotClientAdapter client,
+        int updateId,
+        long chatId,
+        DialogueConversation conversation,
+        CancellationToken cancellationToken)
+    {
+        var result = await _dialogueService.RefreshPersistedSummaryAsync(
+            conversation,
+            correlationId: $"telegram-{updateId}-refresh-summary",
+            cancellationToken);
+        var response = result.Summary is null
+            ? result.Message
+            : string.Join(
+                Environment.NewLine,
+                result.Message,
+                string.Empty,
+                FormatPersistedSummary(result.Summary));
         await client.SendMessageAsync(
             chatId,
             NormalizeTelegramText(response),
@@ -430,5 +463,14 @@ public sealed class TelegramUpdateHandler
             LlmEffectiveThinkingMode.Enabled => "enabled",
             _ => "provider-default",
         };
+
+    private static string FormatPersistedSummary(ConversationSummaryMemory summary) =>
+        string.Join(
+            Environment.NewLine,
+            $"Summary version: {summary.SummaryVersion}",
+            $"Updated (UTC): {summary.UpdatedAtUtc:O}",
+            $"Source last message id: {summary.SourceLastMessageId}",
+            string.Empty,
+            summary.Summary);
 
 }

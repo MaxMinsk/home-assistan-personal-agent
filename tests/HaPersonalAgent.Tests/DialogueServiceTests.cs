@@ -358,6 +358,103 @@ public class DialogueServiceTests
         }
     }
 
+    [Fact]
+    public async Task Refresh_persisted_summary_forces_runtime_refresh_without_storing_new_turns()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var now = DateTimeOffset.UtcNow;
+            await repository.AppendConversationMessagesAsync(
+                "telegram:200:100",
+                new[]
+                {
+                    new AgentConversationMessage(AgentConversationRole.User, "Привет", now),
+                    new AgentConversationMessage(AgentConversationRole.Assistant, "Здравствуйте", now),
+                },
+                CancellationToken.None);
+            var latestMessageId = await repository.GetLatestConversationMessageIdAsync(
+                "telegram:200:100",
+                CancellationToken.None);
+            Assert.True(latestMessageId.HasValue);
+            await repository.UpsertConversationSummaryAsync(
+                new ConversationSummaryMemory(
+                    "telegram:200:100",
+                    "старый summary",
+                    now,
+                    latestMessageId!.Value,
+                    SummaryVersion: 1),
+                CancellationToken.None);
+
+            var runtime = new FakeAgentRuntime(new (string Text, string? SummaryCandidate)[]
+            {
+                ("service response", "новый summary"),
+            });
+            var service = CreateService(repository, runtime);
+            var conversation = DialogueConversation.Create("telegram", "200", "100");
+
+            var result = await service.RefreshPersistedSummaryAsync(
+                conversation,
+                correlationId: "refresh-1",
+                CancellationToken.None);
+
+            var stored = await repository.GetConversationMessagesAsync(
+                "telegram:200:100",
+                10,
+                CancellationToken.None);
+            var summary = await repository.GetConversationSummaryAsync(
+                "telegram:200:100",
+                CancellationToken.None);
+
+            Assert.Single(runtime.Calls);
+            Assert.Equal(LlmExecutionProfile.PureChat, runtime.Calls[0].Context.ExecutionProfile);
+            Assert.True(runtime.Calls[0].Context.ShouldRefreshPersistedSummary);
+            Assert.True(runtime.Calls[0].Context.ForcePersistedSummaryRefresh);
+            Assert.Equal(2, stored.Count);
+            Assert.NotNull(summary);
+            Assert.Equal("новый summary", summary.Summary);
+            Assert.Equal(2, summary.SummaryVersion);
+            Assert.True(result.IsConfigured);
+            Assert.True(result.IsUpdated);
+            Assert.NotNull(result.Summary);
+            Assert.Equal("новый summary", result.Summary!.Summary);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Refresh_persisted_summary_returns_noop_when_history_is_empty()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var runtime = new FakeAgentRuntime("unused");
+            var service = CreateService(repository, runtime);
+            var conversation = DialogueConversation.Create("telegram", "200", "100");
+
+            var result = await service.RefreshPersistedSummaryAsync(
+                conversation,
+                correlationId: "refresh-empty",
+                CancellationToken.None);
+
+            Assert.Empty(runtime.Calls);
+            Assert.True(result.IsConfigured);
+            Assert.False(result.IsUpdated);
+            Assert.Contains("нет истории", result.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
     private static DialogueService CreateService(
         AgentStateRepository repository,
         FakeAgentRuntime runtime)

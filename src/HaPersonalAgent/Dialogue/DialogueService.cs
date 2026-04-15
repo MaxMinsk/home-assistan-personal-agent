@@ -169,6 +169,140 @@ public sealed class DialogueService
             cancellationToken);
     }
 
+    public async Task<PersistedSummaryRefreshResult> RefreshPersistedSummaryAsync(
+        DialogueConversation conversation,
+        string correlationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+
+        var conversationKey = DialogueConversationKey.Create(conversation);
+        var maxMessages = GetMaxContextMessages();
+        var persistedSummary = await _stateRepository.GetConversationSummaryAsync(
+            conversationKey,
+            cancellationToken);
+        var latestMessageId = await _stateRepository.GetLatestConversationMessageIdAsync(
+            conversationKey,
+            cancellationToken);
+        var messagesSincePersistedSummary = CountMessagesSinceSummary(
+            persistedSummary,
+            latestMessageId);
+        var history = await _stateRepository.GetConversationMessagesAsync(
+            conversationKey,
+            maxMessages,
+            cancellationToken);
+        if (history.Count == 0)
+        {
+            return new PersistedSummaryRefreshResult(
+                IsConfigured: true,
+                IsUpdated: false,
+                "В этом чате пока нет истории для пересборки summary.",
+                persistedSummary);
+        }
+
+        _logger.LogInformation(
+            "Persisted summary refresh {CorrelationId} started for {ConversationKey}; history messages {HistoryMessageCount}, persisted summary present {PersistedSummaryPresent}, persisted summary version {PersistedSummaryVersion}, messages since persisted summary {MessagesSincePersistedSummary}.",
+            correlationId,
+            conversationKey,
+            history.Count,
+            persistedSummary is not null,
+            persistedSummary?.SummaryVersion ?? 0,
+            messagesSincePersistedSummary);
+
+        AgentRuntimeResponse response;
+        try
+        {
+            response = await _agentRuntime.SendAsync(
+                "Service request: refresh persisted conversation summary memory for this dialogue context.",
+                AgentContext.Create(
+                    correlationId: correlationId,
+                    conversationMessages: history,
+                    persistedSummary: persistedSummary?.Summary,
+                    shouldRefreshPersistedSummary: true,
+                    forcePersistedSummaryRefresh: true,
+                    messagesSincePersistedSummary: Math.Max(
+                        messagesSincePersistedSummary,
+                        PersistedSummaryRefreshMessageThreshold),
+                    conversationKey: conversationKey,
+                    transport: conversation.Transport,
+                    conversationId: conversation.ConversationId,
+                    participantId: conversation.ParticipantId,
+                    executionProfile: LlmExecutionProfile.PureChat),
+                cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                exception,
+                "Persisted summary refresh {CorrelationId} failed for {ConversationKey}.",
+                correlationId,
+                conversationKey);
+            return new PersistedSummaryRefreshResult(
+                IsConfigured: false,
+                IsUpdated: false,
+                "Не удалось пересобрать persisted summary из-за внутренней ошибки агента.",
+                persistedSummary);
+        }
+
+        if (!response.IsConfigured)
+        {
+            _logger.LogInformation(
+                "Persisted summary refresh {CorrelationId} finished without update because runtime is not configured.",
+                correlationId);
+            return new PersistedSummaryRefreshResult(
+                IsConfigured: false,
+                IsUpdated: false,
+                response.Text,
+                persistedSummary);
+        }
+
+        if (string.IsNullOrWhiteSpace(response.PersistedSummaryCandidate))
+        {
+            _logger.LogInformation(
+                "Persisted summary refresh {CorrelationId} returned no summary candidate for {ConversationKey}.",
+                correlationId,
+                conversationKey);
+            return new PersistedSummaryRefreshResult(
+                IsConfigured: true,
+                IsUpdated: false,
+                "Не удалось получить новый persisted summary. Попробуй позже.",
+                persistedSummary);
+        }
+
+        await PersistSummaryCandidateIfNeededAsync(
+            conversationKey,
+            response.PersistedSummaryCandidate,
+            persistedSummary,
+            cancellationToken);
+        var refreshedSummary = await _stateRepository.GetConversationSummaryAsync(
+            conversationKey,
+            cancellationToken);
+        if (refreshedSummary is null)
+        {
+            return new PersistedSummaryRefreshResult(
+                IsConfigured: true,
+                IsUpdated: false,
+                "Persisted summary не появился после refresh. Попробуй позже.");
+        }
+
+        var isUpdated = refreshedSummary.SummaryVersion > (persistedSummary?.SummaryVersion ?? 0);
+        _logger.LogInformation(
+            "Persisted summary refresh {CorrelationId} completed for {ConversationKey}; updated {IsUpdated}, version {SummaryVersion}, source last message id {SourceLastMessageId}.",
+            correlationId,
+            conversationKey,
+            isUpdated,
+            refreshedSummary.SummaryVersion,
+            refreshedSummary.SourceLastMessageId);
+
+        return new PersistedSummaryRefreshResult(
+            IsConfigured: true,
+            IsUpdated: isUpdated,
+            Message: isUpdated
+                ? "Persisted summary пересобран."
+                : "Persisted summary уже актуален, изменений нет.",
+            refreshedSummary);
+    }
+
     public async Task<DialogueContextSnapshot> GetContextSnapshotAsync(
         DialogueConversation conversation,
         CancellationToken cancellationToken)
