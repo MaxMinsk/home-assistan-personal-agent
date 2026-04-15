@@ -120,7 +120,7 @@ public sealed class AgentRuntime : IAgentRuntime
             executionPlan,
             cancellationToken);
         _logger.LogInformation(
-            "Agent run {CorrelationId} starting with provider {Provider}, model {Model}, profile {ExecutionProfile}, provider profile {ProviderProfile}, thinking requested {RequestedThinkingMode}, thinking effective {EffectiveThinkingMode}, thinking reason {ThinkingReason}, history messages {HistoryMessageCount}, persisted summary present {PersistedSummaryPresent}, persisted summary length {PersistedSummaryLength}, MCP status {McpStatus}, read-only MCP tools {ReadOnlyToolCount}, confirmation MCP tools {ConfirmationToolCount}.",
+            "Agent run {CorrelationId} starting with provider {Provider}, model {Model}, profile {ExecutionProfile}, provider profile {ProviderProfile}, thinking requested {RequestedThinkingMode}, thinking effective {EffectiveThinkingMode}, thinking reason {ThinkingReason}, history messages {HistoryMessageCount}, persisted summary present {PersistedSummaryPresent}, persisted summary length {PersistedSummaryLength}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}, MCP status {McpStatus}, read-only MCP tools {ReadOnlyToolCount}, confirmation MCP tools {ConfirmationToolCount}.",
             context.CorrelationId,
             health.Provider,
             health.Model,
@@ -132,6 +132,8 @@ public sealed class AgentRuntime : IAgentRuntime
             context.ConversationMessages.Count,
             !string.IsNullOrWhiteSpace(context.PersistedSummary),
             context.PersistedSummary?.Length ?? 0,
+            context.MessagesSincePersistedSummary,
+            context.ShouldRefreshPersistedSummary,
             homeAssistantMcpTools.Status,
             homeAssistantMcpTools.ExposedToolCount,
             homeAssistantMcpTools.ConfirmationRequiredTools.Count);
@@ -340,19 +342,26 @@ public sealed class AgentRuntime : IAgentRuntime
             context.CorrelationId,
             compactionDiagnostics,
             _loggerFactory.CreateLogger<CompactionSummarizationChatClient>());
-
-        return new PipelineCompactionStrategy(new CompactionStrategy[]
+        var strategies = new List<CompactionStrategy>
         {
-            // Пороги синхронизированы с default history window (24 messages = 12 turns):
-            // compaction не должен запускаться на каждом обычном ходе, только когда run реально разрастается
-            // (например tool-heavy loop, длинные ответы, или дальнейшее расширение history budget).
+            // Tool result compaction остается первым, чтобы не разрывать связки вызов/результат.
             new ToolResultCompactionStrategy(CompactionTriggers.MessagesExceed(28)),
-            new SummarizationCompactionStrategy(
+        };
+
+        // Summarization запускается, когда DialogueService запрашивает refresh rolling summary:
+        // либо summary отсутствует, либо накопился новый "хвост" сообщений после последнего summary.
+        if (context.ShouldRefreshPersistedSummary)
+        {
+            strategies.Add(new SummarizationCompactionStrategy(
                 summarizationChatClient,
-                CompactionTriggers.MessagesExceed(32),
+                CompactionTriggers.MessagesExceed(24),
                 minimumPreservedGroups: 10,
                 summarizationPrompt: CreateSummarizationPrompt(),
-                target: CompactionTriggers.MessagesExceed(24)),
+                target: CompactionTriggers.MessagesExceed(24)));
+        }
+
+        strategies.AddRange(new CompactionStrategy[]
+        {
             new SlidingWindowCompactionStrategy(
                 CompactionTriggers.TurnsExceed(16),
                 minimumPreservedTurns: 8,
@@ -362,6 +371,8 @@ public sealed class AgentRuntime : IAgentRuntime
                 minimumPreservedGroups: 12,
                 target: CompactionTriggers.MessagesExceed(34)),
         });
+
+        return new PipelineCompactionStrategy(strategies);
     }
 
     private static string CreateSummarizationPrompt() =>

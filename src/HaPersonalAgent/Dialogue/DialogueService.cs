@@ -14,6 +14,7 @@ namespace HaPersonalAgent.Dialogue;
 public sealed class DialogueService
 {
     private const int MaxPersistedSummaryLength = 4_000;
+    private const int PersistedSummaryRefreshMessageThreshold = 12;
 
     private readonly IAgentRuntime _agentRuntime;
     private readonly IOptions<AgentOptions> _agentOptions;
@@ -43,12 +44,20 @@ public sealed class DialogueService
         var persistedSummary = await _stateRepository.GetConversationSummaryAsync(
             conversationKey,
             cancellationToken);
+        var latestMessageId = await _stateRepository.GetLatestConversationMessageIdAsync(
+            conversationKey,
+            cancellationToken);
+        var messagesSincePersistedSummary = CountMessagesSinceSummary(
+            persistedSummary,
+            latestMessageId);
+        var shouldRefreshPersistedSummary = persistedSummary is null
+            || messagesSincePersistedSummary >= PersistedSummaryRefreshMessageThreshold;
         var history = await _stateRepository.GetConversationMessagesAsync(
             conversationKey,
             maxMessages,
             cancellationToken);
         _logger.LogInformation(
-            "Dialogue request {CorrelationId} started for {ConversationKey} ({Transport}/{ConversationId}, participant {ParticipantId}) with profile {ExecutionProfile}, text length {TextLength}, history messages {HistoryMessageCount}, persisted summary present {PersistedSummaryPresent}, persisted summary version {PersistedSummaryVersion}.",
+            "Dialogue request {CorrelationId} started for {ConversationKey} ({Transport}/{ConversationId}, participant {ParticipantId}) with profile {ExecutionProfile}, text length {TextLength}, history messages {HistoryMessageCount}, persisted summary present {PersistedSummaryPresent}, persisted summary version {PersistedSummaryVersion}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}.",
             request.CorrelationId,
             conversationKey,
             request.Conversation.Transport,
@@ -58,7 +67,9 @@ public sealed class DialogueService
             request.Text.Length,
             history.Count,
             persistedSummary is not null,
-            persistedSummary?.SummaryVersion ?? 0);
+            persistedSummary?.SummaryVersion ?? 0,
+            messagesSincePersistedSummary,
+            shouldRefreshPersistedSummary);
 
         var now = DateTimeOffset.UtcNow;
         AgentRuntimeResponse response;
@@ -70,6 +81,8 @@ public sealed class DialogueService
                     correlationId: request.CorrelationId,
                     conversationMessages: history,
                     persistedSummary: persistedSummary?.Summary,
+                    shouldRefreshPersistedSummary: shouldRefreshPersistedSummary,
+                    messagesSincePersistedSummary: messagesSincePersistedSummary,
                     conversationKey: conversationKey,
                     transport: request.Conversation.Transport,
                     conversationId: request.Conversation.ConversationId,
@@ -154,6 +167,37 @@ public sealed class DialogueService
         return await _stateRepository.GetConversationSummaryAsync(
             conversationKey,
             cancellationToken);
+    }
+
+    public async Task<DialogueContextSnapshot> GetContextSnapshotAsync(
+        DialogueConversation conversation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+
+        var conversationKey = DialogueConversationKey.Create(conversation);
+        var maxMessages = GetMaxContextMessages();
+        var storedMessageCount = await _stateRepository.GetConversationMessageCountAsync(
+            conversationKey,
+            cancellationToken);
+        var summary = await _stateRepository.GetConversationSummaryAsync(
+            conversationKey,
+            cancellationToken);
+        var latestMessageId = await _stateRepository.GetLatestConversationMessageIdAsync(
+            conversationKey,
+            cancellationToken);
+        var messagesSinceSummary = CountMessagesSinceSummary(summary, latestMessageId);
+
+        return new DialogueContextSnapshot(
+            conversationKey,
+            StoredMessageCount: storedMessageCount,
+            MaxContextMessages: maxMessages,
+            LoadedHistoryMessageCount: Math.Min(storedMessageCount, maxMessages),
+            MessagesSincePersistedSummary: messagesSinceSummary,
+            PersistedSummaryPresent: summary is not null,
+            PersistedSummaryLength: summary?.Summary.Length ?? 0,
+            PersistedSummaryVersion: summary?.SummaryVersion ?? 0,
+            PersistedSummarySourceLastMessageId: summary?.SourceLastMessageId ?? 0);
     }
 
     public Task RecordSystemNotificationAsync(
@@ -255,5 +299,25 @@ public sealed class DialogueService
         return string.IsNullOrWhiteSpace(content)
             ? responseText
             : content;
+    }
+
+    private static int CountMessagesSinceSummary(
+        ConversationSummaryMemory? summary,
+        long? latestMessageId)
+    {
+        if (summary is null || !latestMessageId.HasValue)
+        {
+            return 0;
+        }
+
+        var delta = latestMessageId.Value - summary.SourceLastMessageId;
+        if (delta <= 0)
+        {
+            return 0;
+        }
+
+        return delta >= int.MaxValue
+            ? int.MaxValue
+            : (int)delta;
     }
 }

@@ -211,6 +211,109 @@ public class DialogueServiceTests
 
             Assert.Equal(2, runtime.Calls.Count);
             Assert.Equal("Persisted summary v1", runtime.Calls[1].Context.PersistedSummary);
+            Assert.False(runtime.Calls[1].Context.ShouldRefreshPersistedSummary);
+            Assert.Equal(0, runtime.Calls[1].Context.MessagesSincePersistedSummary);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Context_snapshot_reports_message_counts_and_summary_numbers()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var service = CreateService(repository, new FakeAgentRuntime("unused"));
+            var conversation = DialogueConversation.Create("telegram", "200", "100");
+            var key = DialogueConversationKey.Create(conversation);
+            var now = DateTimeOffset.UtcNow;
+
+            await repository.AppendConversationMessagesAsync(
+                key,
+                new[]
+                {
+                    new AgentConversationMessage(AgentConversationRole.User, "m1", now),
+                    new AgentConversationMessage(AgentConversationRole.Assistant, "m2", now),
+                    new AgentConversationMessage(AgentConversationRole.User, "m3", now),
+                },
+                CancellationToken.None);
+
+            var latestMessageId = await repository.GetLatestConversationMessageIdAsync(
+                key,
+                CancellationToken.None);
+            Assert.True(latestMessageId.HasValue);
+            await repository.UpsertConversationSummaryAsync(
+                new ConversationSummaryMemory(
+                    key,
+                    "summary-1",
+                    now,
+                    SourceLastMessageId: 1,
+                    SummaryVersion: 2),
+                CancellationToken.None);
+
+            var snapshot = await service.GetContextSnapshotAsync(conversation, CancellationToken.None);
+
+            Assert.Equal(key, snapshot.ConversationKey);
+            Assert.Equal(3, snapshot.StoredMessageCount);
+            Assert.Equal(24, snapshot.MaxContextMessages);
+            Assert.Equal(3, snapshot.LoadedHistoryMessageCount);
+            Assert.True(snapshot.PersistedSummaryPresent);
+            Assert.Equal("summary-1".Length, snapshot.PersistedSummaryLength);
+            Assert.Equal(2, snapshot.PersistedSummaryVersion);
+            Assert.Equal(1, snapshot.PersistedSummarySourceLastMessageId);
+            Assert.Equal(latestMessageId.Value - 1, snapshot.MessagesSincePersistedSummary);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Persisted_summary_refresh_is_requested_after_enough_new_messages()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var runtime = new FakeAgentRuntime("ok");
+            var service = CreateService(repository, runtime);
+            var conversation = DialogueConversation.Create("telegram", "200", "100");
+            var key = DialogueConversationKey.Create(conversation);
+            var now = DateTimeOffset.UtcNow;
+
+            var seedMessages = Enumerable.Range(1, 14)
+                .Select(index => new AgentConversationMessage(
+                    index % 2 == 0 ? AgentConversationRole.Assistant : AgentConversationRole.User,
+                    $"m{index}",
+                    now))
+                .ToArray();
+            await repository.AppendConversationMessagesAsync(
+                key,
+                seedMessages,
+                CancellationToken.None);
+            await repository.UpsertConversationSummaryAsync(
+                new ConversationSummaryMemory(
+                    key,
+                    "stale-summary",
+                    now,
+                    SourceLastMessageId: 1,
+                    SummaryVersion: 1),
+                CancellationToken.None);
+
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "новый вопрос", "run-refresh"),
+                CancellationToken.None);
+
+            Assert.Single(runtime.Calls);
+            Assert.True(runtime.Calls[0].Context.ShouldRefreshPersistedSummary);
+            Assert.True(runtime.Calls[0].Context.MessagesSincePersistedSummary >= 12);
         }
         finally
         {

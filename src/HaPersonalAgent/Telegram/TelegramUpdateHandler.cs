@@ -104,7 +104,7 @@ public sealed class TelegramUpdateHandler
                 update.Id);
             await client.SendMessageAsync(
                 chatId,
-                await FormatStatusAsync(cancellationToken),
+                await FormatStatusAsync(conversation, cancellationToken),
                 cancellationToken);
             return;
         }
@@ -320,13 +320,16 @@ public sealed class TelegramUpdateHandler
             cancellationToken);
     }
 
-    private async Task<string> FormatStatusAsync(CancellationToken cancellationToken)
+    private async Task<string> FormatStatusAsync(
+        DialogueConversation conversation,
+        CancellationToken cancellationToken)
     {
         var status = _statusTool.GetStatus();
         var runtimeHealth = _agentRuntime.GetHealth();
         var toolEnabledPlan = _executionPlanner.CreatePlan(_llmOptions.Value, LlmExecutionProfile.ToolEnabled);
         var deepReasoningPlan = _executionPlanner.CreatePlan(_llmOptions.Value, LlmExecutionProfile.DeepReasoning);
         var mcpDiscovery = await _homeAssistantMcpClient.DiscoverAsync(cancellationToken);
+        var contextSnapshot = await _dialogueService.GetContextSnapshotAsync(conversation, cancellationToken);
         var runtimeText = runtimeHealth.IsConfigured
             ? "configured"
             : $"not configured ({runtimeHealth.Reason})";
@@ -346,6 +349,9 @@ public sealed class TelegramUpdateHandler
             $"Uptime: {status.Uptime}",
             $"Configuration: {status.ConfigurationMode}",
             $"HA MCP: {FormatMcpStatus(mcpDiscovery)}",
+            $"Context(stored): {contextSnapshot.StoredMessageCount} messages",
+            $"Context(loaded): {contextSnapshot.LoadedHistoryMessageCount} / {contextSnapshot.MaxContextMessages} messages",
+            $"PersistedSummary: present {contextSnapshot.PersistedSummaryPresent}, version {contextSnapshot.PersistedSummaryVersion}, length {contextSnapshot.PersistedSummaryLength}, sourceLastMessageId {contextSnapshot.PersistedSummarySourceLastMessageId}, messagesSinceSummary {contextSnapshot.MessagesSincePersistedSummary}",
             $"Telegram allowlist users: {status.Configuration.AllowedTelegramUserCount}");
     }
 

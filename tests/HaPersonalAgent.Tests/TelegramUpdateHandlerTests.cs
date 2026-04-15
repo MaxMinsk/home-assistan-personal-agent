@@ -242,6 +242,9 @@ public class TelegramUpdateHandlerTests
             Assert.Contains("thinking auto", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("ReasoningActive(tool-enabled): True", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("ReasoningPlan(tool-enabled): requested auto, effective provider-default", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("Context(stored): 0 messages", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("Context(loaded): 0 / 24 messages", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("PersistedSummary: present False", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
         }
         finally
         {

@@ -202,6 +202,33 @@ public sealed class AgentStateRepository
         return messages;
     }
 
+    public async Task<int> GetConversationMessageCountAsync(
+        string conversationKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT COUNT(*)
+            FROM conversation_messages
+            WHERE conversation_key = $conversationKey;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        if (value is null || value is DBNull)
+        {
+            return 0;
+        }
+
+        return Convert.ToInt32(value, CultureInfo.InvariantCulture);
+    }
+
     public async Task<ConversationSummaryMemory?> GetConversationSummaryAsync(
         string conversationKey,
         CancellationToken cancellationToken)

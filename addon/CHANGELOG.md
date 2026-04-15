@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.10
+
+- Fix rolling summary refresh strategy: summarize now runs when summary is missing or when enough new messages accumulated after the last summary.
+- Add context counters to Telegram `/status` (stored/loaded message counts, summary version/length/source id, messages since summary).
+- Add context snapshot API in dialogue/storage layers and expand tests for summary refresh/context diagnostics.
+
 ## 0.2.9
 
 - Add Telegram command `/showSummarized` to inspect persisted conversation summary for the current chat.
