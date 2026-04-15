@@ -15,6 +15,7 @@ public class ConfigurationTests
     {
         var llmOptions = new LlmOptions();
         var agentOptions = new AgentOptions();
+        var telegramOptions = new TelegramOptions();
         var homeAssistantOptions = new HomeAssistantOptions();
 
         Assert.Equal("moonshot", llmOptions.Provider);
@@ -26,6 +27,8 @@ public class ConfigurationTests
         Assert.Equal(AgentOptions.MemoryRetrievalModeBeforeInvoke, agentOptions.MemoryRetrievalMode);
         Assert.Equal(AgentOptions.CapsuleExtractionModeManual, agentOptions.CapsuleExtractionMode);
         Assert.Equal(20, agentOptions.CapsuleAutoBatchRawEventThreshold);
+        Assert.False(telegramOptions.ReasoningPreviewEnabled);
+        Assert.Equal(7, telegramOptions.ReasoningPreviewDelaySeconds);
         Assert.Equal("http://supervisor/core", homeAssistantOptions.Url);
         Assert.Equal("/api/mcp", homeAssistantOptions.McpEndpoint);
     }
@@ -58,6 +61,8 @@ public class ConfigurationTests
                 {
                   "telegram_bot_token": "telegram-secret",
                   "allowed_telegram_user_ids": [123, "456"],
+                  "reasoning_preview_enabled": true,
+                  "reasoning_preview_delay_seconds": 9,
                   "ha_url": "http://homeassistant.local:8123",
                   "ha_long_lived_access_token": "ha-secret",
                   "mcp_endpoint": "/api/mcp",
@@ -86,6 +91,8 @@ public class ConfigurationTests
 
             Assert.Equal("telegram-secret", telegramOptions.BotToken);
             Assert.Equal(new long[] { 123, 456 }, telegramOptions.AllowedUserIds);
+            Assert.True(telegramOptions.ReasoningPreviewEnabled);
+            Assert.Equal(9, telegramOptions.ReasoningPreviewDelaySeconds);
             Assert.Equal("moonshot-secret", llmOptions.ApiKey);
             Assert.Equal("kimi-k2.5", llmOptions.Model);
             Assert.Equal(LlmThinkingModes.Disabled, llmOptions.ThinkingMode);

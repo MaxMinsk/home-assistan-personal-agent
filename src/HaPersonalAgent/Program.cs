@@ -40,7 +40,11 @@ if (args.Length > 0 && string.Equals(args[0], "ask", StringComparison.OrdinalIgn
     }
 
     var runtime = host.Services.GetRequiredService<IAgentRuntime>();
-    var response = await runtime.SendAsync(message, AgentContext.Create(), CancellationToken.None);
+    var response = await runtime.SendAsync(
+        message,
+        AgentContext.Create(),
+        onReasoningUpdate: null,
+        CancellationToken.None);
 
     Console.WriteLine(response.Text);
     return;

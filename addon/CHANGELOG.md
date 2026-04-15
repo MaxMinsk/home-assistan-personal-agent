@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.20
+
+- Add Telegram live reasoning preview (ephemeral): for long requests, show temporary reasoning progress and remove it after final answer.
+- Add streaming reasoning callback path in runtime/dialogue transport contracts without persisting preview text to memory layers.
+- Extend Telegram adapter with send/edit/delete message operations required for preview lifecycle.
+- Add add-on options `reasoning_preview_enabled` and `reasoning_preview_delay_seconds` (+ docs/translations/tests).
+- Complete HAAG-051 and move it to Done in backlog.
+
+
 ## 0.2.19
 
 - Publish Telegram command metadata via `setMyCommands`, so Telegram UI shows command hints when user types `/`.

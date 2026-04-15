@@ -190,6 +190,7 @@ public class ProjectCapsuleServiceTests
         public Task<AgentRuntimeResponse> SendAsync(
             string message,
             AgentContext context,
+            Func<AgentRuntimeReasoningUpdate, CancellationToken, Task>? onReasoningUpdate,
             CancellationToken cancellationToken)
         {
             Calls.Add((message, context));

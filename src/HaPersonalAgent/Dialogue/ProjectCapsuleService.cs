@@ -193,6 +193,7 @@ public sealed class ProjectCapsuleService
                 conversationId: conversation.ConversationId,
                 participantId: conversation.ParticipantId,
                 executionProfile: LlmExecutionProfile.Summarization),
+            onReasoningUpdate: null,
             cancellationToken);
 
         if (!runtimeResponse.IsConfigured)

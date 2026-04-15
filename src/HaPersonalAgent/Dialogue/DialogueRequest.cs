@@ -11,13 +11,15 @@ public sealed record DialogueRequest(
     DialogueConversation Conversation,
     string Text,
     string CorrelationId,
-    LlmExecutionProfile ExecutionProfile)
+    LlmExecutionProfile ExecutionProfile,
+    Func<AgentRuntimeReasoningUpdate, CancellationToken, Task>? OnReasoningUpdate)
 {
     public static DialogueRequest Create(
         DialogueConversation conversation,
         string text,
         string? correlationId = null,
-        LlmExecutionProfile executionProfile = LlmExecutionProfile.ToolEnabled)
+        LlmExecutionProfile executionProfile = LlmExecutionProfile.ToolEnabled,
+        Func<AgentRuntimeReasoningUpdate, CancellationToken, Task>? onReasoningUpdate = null)
     {
         ArgumentNullException.ThrowIfNull(conversation);
         ArgumentException.ThrowIfNullOrWhiteSpace(text);
@@ -26,6 +28,7 @@ public sealed record DialogueRequest(
             conversation,
             text.Trim(),
             string.IsNullOrWhiteSpace(correlationId) ? Guid.NewGuid().ToString("N") : correlationId.Trim(),
-            executionProfile);
+            executionProfile,
+            onReasoningUpdate);
     }
 }

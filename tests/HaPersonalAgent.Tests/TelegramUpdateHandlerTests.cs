@@ -575,6 +575,83 @@ public class TelegramUpdateHandlerTests
     }
 
     [Fact]
+    public async Task Reasoning_preview_is_sent_and_deleted_for_long_running_reasoning_stream()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var runtime = new FakeAgentRuntime("финальный ответ")
+            {
+                ReasoningUpdateDelayMs = 1100,
+            };
+            runtime.ReasoningUpdatesToEmit.Add("Проверяю входные данные.");
+            runtime.ReasoningUpdatesToEmit.Add("Собираю итог.");
+            var handler = CreateHandler(CreateRepository(databasePath), runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 41, chatId: 200, userId: 100, text: "долго думай"),
+                new TelegramOptions
+                {
+                    AllowedUserIds = new long[] { 100 },
+                    ReasoningPreviewEnabled = true,
+                    ReasoningPreviewDelaySeconds = 1,
+                },
+                CancellationToken.None);
+
+            Assert.NotEmpty(adapter.SentMessagesWithIds);
+            var previewMessage = adapter.SentMessagesWithIds[0];
+            Assert.Contains("Промежуточные рассуждения", previewMessage.Text, StringComparison.Ordinal);
+            Assert.Contains(
+                adapter.DeletedMessages,
+                item => item.ChatId == previewMessage.ChatId && item.MessageId == previewMessage.MessageId);
+            Assert.Equal("финальный ответ", adapter.SentMessages.Last().Text);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Reasoning_preview_is_not_sent_when_option_is_disabled()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var runtime = new FakeAgentRuntime("финальный ответ")
+            {
+                ReasoningUpdateDelayMs = 0,
+            };
+            runtime.ReasoningUpdatesToEmit.Add("Внутренние рассуждения.");
+            var handler = CreateHandler(CreateRepository(databasePath), runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 42, chatId: 200, userId: 100, text: "ответь"),
+                new TelegramOptions
+                {
+                    AllowedUserIds = new long[] { 100 },
+                    ReasoningPreviewEnabled = false,
+                    ReasoningPreviewDelaySeconds = 1,
+                },
+                CancellationToken.None);
+
+            Assert.Empty(adapter.SentMessagesWithIds);
+            Assert.Empty(adapter.DeletedMessages);
+            Assert.Equal("финальный ответ", adapter.SentMessages.Single().Text);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Natural_language_mcp_status_question_goes_through_dialogue_agent()
     {
         var databasePath = CreateTemporaryDatabasePath();
@@ -908,6 +985,10 @@ public class TelegramUpdateHandlerTests
 
         public Exception? ExceptionToThrow { get; set; }
 
+        public List<string> ReasoningUpdatesToEmit { get; } = new();
+
+        public int ReasoningUpdateDelayMs { get; set; }
+
         public List<(string Message, AgentContext Context)> Calls { get; } = new();
 
         public AgentRuntimeHealth GetHealth() =>
@@ -916,6 +997,7 @@ public class TelegramUpdateHandlerTests
         public Task<AgentRuntimeResponse> SendAsync(
             string message,
             AgentContext context,
+            Func<AgentRuntimeReasoningUpdate, CancellationToken, Task>? onReasoningUpdate,
             CancellationToken cancellationToken)
         {
             if (ExceptionToThrow is not null)
@@ -925,12 +1007,38 @@ public class TelegramUpdateHandlerTests
 
             Calls.Add((message, context));
 
-            return Task.FromResult(new AgentRuntimeResponse(
+            return SendAsyncCore(
+                context,
+                onReasoningUpdate,
+                cancellationToken);
+        }
+
+        private async Task<AgentRuntimeResponse> SendAsyncCore(
+            AgentContext context,
+            Func<AgentRuntimeReasoningUpdate, CancellationToken, Task>? onReasoningUpdate,
+            CancellationToken cancellationToken)
+        {
+            if (onReasoningUpdate is not null)
+            {
+                foreach (var reasoningUpdate in ReasoningUpdatesToEmit)
+                {
+                    if (ReasoningUpdateDelayMs > 0)
+                    {
+                        await Task.Delay(ReasoningUpdateDelayMs, cancellationToken);
+                    }
+
+                    await onReasoningUpdate(
+                        new AgentRuntimeReasoningUpdate(context.CorrelationId, reasoningUpdate),
+                        cancellationToken);
+                }
+            }
+
+            return new AgentRuntimeResponse(
                 context.CorrelationId,
                 IsConfigured: true,
                 NextResponseText,
                 GetHealth(),
-                NextSummaryCandidate));
+                NextSummaryCandidate);
         }
     }
 
@@ -1012,9 +1120,13 @@ public class TelegramUpdateHandlerTests
         public List<(long ChatId, string Text)> SentMessages { get; } = new();
         public List<(long ChatId, string Text, string ConfirmationId)> SentConfirmationMessages { get; } = new();
         public List<long> SentTypingActions { get; } = new();
+        public List<(long ChatId, int MessageId, string Text)> SentMessagesWithIds { get; } = new();
+        public List<(long ChatId, int MessageId, string Text)> EditedMessages { get; } = new();
+        public List<(long ChatId, int MessageId)> DeletedMessages { get; } = new();
         public List<(long ChatId, int MessageId)> ClearedInlineKeyboards { get; } = new();
         public List<(string CallbackQueryId, string? Text, bool ShowAlert)> AnsweredCallbackQueries { get; } = new();
         public List<IReadOnlyList<(string Command, string Description)>> ConfiguredCommands { get; } = new();
+        private int _nextMessageId = 10;
 
         public Task DeleteWebhookAsync(bool dropPendingUpdates, CancellationToken cancellationToken) =>
             Task.CompletedTask;
@@ -1036,6 +1148,29 @@ public class TelegramUpdateHandlerTests
         public Task SendMessageAsync(long chatId, string text, CancellationToken cancellationToken)
         {
             SentMessages.Add((chatId, text));
+            return Task.CompletedTask;
+        }
+
+        public Task<int> SendMessageWithIdAsync(long chatId, string text, CancellationToken cancellationToken)
+        {
+            var messageId = Interlocked.Increment(ref _nextMessageId);
+            SentMessagesWithIds.Add((chatId, messageId, text));
+            return Task.FromResult(messageId);
+        }
+
+        public Task EditMessageTextAsync(
+            long chatId,
+            int messageId,
+            string text,
+            CancellationToken cancellationToken)
+        {
+            EditedMessages.Add((chatId, messageId, text));
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteMessageAsync(long chatId, int messageId, CancellationToken cancellationToken)
+        {
+            DeletedMessages.Add((chatId, messageId));
             return Task.CompletedTask;
         }
 

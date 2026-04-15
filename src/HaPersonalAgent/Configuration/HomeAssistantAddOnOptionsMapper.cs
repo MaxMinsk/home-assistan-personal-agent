@@ -15,6 +15,8 @@ public static class HomeAssistantAddOnOptionsMapper
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["telegram_bot_token"] = $"{TelegramOptions.SectionName}:BotToken",
+            ["reasoning_preview_enabled"] = $"{TelegramOptions.SectionName}:ReasoningPreviewEnabled",
+            ["reasoning_preview_delay_seconds"] = $"{TelegramOptions.SectionName}:ReasoningPreviewDelaySeconds",
             ["ha_url"] = $"{HomeAssistantOptions.SectionName}:Url",
             ["ha_long_lived_access_token"] = $"{HomeAssistantOptions.SectionName}:LongLivedAccessToken",
             ["mcp_endpoint"] = $"{HomeAssistantOptions.SectionName}:McpEndpoint",

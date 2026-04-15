@@ -25,6 +25,7 @@ public class AgentRuntimeTests
         var response = await runtime.SendAsync(
             "hello",
             AgentContext.Create("test-correlation"),
+            onReasoningUpdate: null,
             CancellationToken.None);
 
         Assert.False(health.IsConfigured);

@@ -5,6 +5,7 @@ using HaPersonalAgent.Dialogue;
 using HaPersonalAgent.HomeAssistant;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Text;
 using System.Text.RegularExpressions;
 using Telegram.Bot.Types;
 
@@ -23,10 +24,12 @@ public sealed class TelegramUpdateHandler
     private const int MaxRawEventLimit = 25;
     private const int DefaultProjectCapsuleLimit = 6;
     private const int MaxProjectCapsuleLimit = 12;
+    private const int MaxReasoningPreviewLength = 1_500;
     private const string ConfirmationCallbackApprovePrefix = "confirm:approve:";
     private const string ConfirmationCallbackRejectPrefix = "confirm:reject:";
     private const string TelegramTransportName = "telegram";
     private static readonly TimeSpan TypingIndicatorInterval = TimeSpan.FromSeconds(4);
+    private static readonly TimeSpan ReasoningPreviewEditInterval = TimeSpan.FromSeconds(2);
     private static readonly Regex ApproveCommandRegex = new(
         "/approve\\s+([A-Za-z0-9_-]{6,64})",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled);
@@ -279,6 +282,7 @@ public sealed class TelegramUpdateHandler
                 chatId,
                 conversation,
                 deepReasoningText,
+                telegramOptions,
                 LlmExecutionProfile.DeepReasoning,
                 cancellationToken);
             return;
@@ -294,6 +298,7 @@ public sealed class TelegramUpdateHandler
             chatId,
             conversation,
             text,
+            telegramOptions,
             LlmExecutionProfile.ToolEnabled,
             cancellationToken);
     }
@@ -598,6 +603,7 @@ public sealed class TelegramUpdateHandler
         long chatId,
         DialogueConversation conversation,
         string text,
+        TelegramOptions telegramOptions,
         LlmExecutionProfile executionProfile,
         CancellationToken cancellationToken)
     {
@@ -607,17 +613,39 @@ public sealed class TelegramUpdateHandler
             chatId,
             executionProfile,
             text.Length);
-        var response = await ExecuteWithTypingIndicatorAsync(
+        var reasoningPreviewSession = new TelegramReasoningPreviewSession(
             client,
             chatId,
-            ct => _dialogueService.SendUserMessageAsync(
-                DialogueRequest.Create(
-                    conversation,
-                    text,
-                    correlationId: $"telegram-{updateId}",
-                    executionProfile: executionProfile),
-                ct),
-            cancellationToken);
+            _logger,
+            telegramOptions);
+        AgentRuntimeResponse response;
+        try
+        {
+            response = await ExecuteWithTypingIndicatorAsync(
+                client,
+                chatId,
+                ct => _dialogueService.SendUserMessageAsync(
+                    DialogueRequest.Create(
+                        conversation,
+                        text,
+                        correlationId: $"telegram-{updateId}",
+                        executionProfile: executionProfile,
+                        onReasoningUpdate: reasoningPreviewSession.IsEnabled
+                            ? reasoningPreviewSession.OnReasoningUpdateAsync
+                            : null),
+                    ct),
+                cancellationToken);
+        }
+        finally
+        {
+            try
+            {
+                await reasoningPreviewSession.CompleteAsync(cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+        }
         _logger.LogInformation(
             "Dialogue request telegram-{TelegramUpdateId} completed for chat {TelegramChatId}; configured {IsConfigured}; response length {ResponseLength}.",
             updateId,
@@ -866,6 +894,180 @@ public sealed class TelegramUpdateHandler
             LlmEffectiveThinkingMode.Enabled => "enabled",
             _ => "provider-default",
         };
+
+    /// <summary>
+    /// Что: ephemeral preview reasoning в Telegram во время длинного ответа.
+    /// Зачем: пользователь должен видеть прогресс, если модель думает заметно дольше обычного.
+    /// Как: получает streaming reasoning delta, по таймауту создает временное сообщение, периодически редактирует и удаляет после финального ответа.
+    /// </summary>
+    private sealed class TelegramReasoningPreviewSession
+    {
+        private readonly ITelegramBotClientAdapter _client;
+        private readonly TimeSpan _delay;
+        private readonly long _chatId;
+        private readonly ILogger _logger;
+        private readonly StringBuilder _reasoningBuffer = new();
+        private readonly SemaphoreSlim _sync = new(1, 1);
+        private readonly DateTimeOffset _startedAtUtc = DateTimeOffset.UtcNow;
+
+        private DateTimeOffset _lastEditedAtUtc = DateTimeOffset.MinValue;
+        private int? _messageId;
+        private string _lastPreviewText = string.Empty;
+        private bool _isCompleted;
+
+        public TelegramReasoningPreviewSession(
+            ITelegramBotClientAdapter client,
+            long chatId,
+            ILogger logger,
+            TelegramOptions telegramOptions)
+        {
+            _client = client;
+            _chatId = chatId;
+            _logger = logger;
+            var delaySeconds = Math.Clamp(telegramOptions.ReasoningPreviewDelaySeconds, 1, 30);
+            _delay = TimeSpan.FromSeconds(delaySeconds);
+            IsEnabled = telegramOptions.ReasoningPreviewEnabled;
+        }
+
+        public bool IsEnabled { get; }
+
+        public async Task OnReasoningUpdateAsync(
+            AgentRuntimeReasoningUpdate update,
+            CancellationToken cancellationToken)
+        {
+            if (!IsEnabled || string.IsNullOrWhiteSpace(update.TextDelta))
+            {
+                return;
+            }
+
+            await _sync.WaitAsync(cancellationToken);
+            try
+            {
+                if (_isCompleted)
+                {
+                    return;
+                }
+
+                _reasoningBuffer.Append(update.TextDelta);
+
+                var now = DateTimeOffset.UtcNow;
+                if (now - _startedAtUtc < _delay)
+                {
+                    return;
+                }
+
+                var previewText = BuildPreviewText(_reasoningBuffer.ToString());
+                if (string.Equals(previewText, _lastPreviewText, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                if (_messageId is null)
+                {
+                    _messageId = await _client.SendMessageWithIdAsync(
+                        _chatId,
+                        previewText,
+                        cancellationToken);
+                    _lastPreviewText = previewText;
+                    _lastEditedAtUtc = now;
+                    return;
+                }
+
+                if (now - _lastEditedAtUtc < ReasoningPreviewEditInterval)
+                {
+                    return;
+                }
+
+                await _client.EditMessageTextAsync(
+                    _chatId,
+                    _messageId.Value,
+                    previewText,
+                    cancellationToken);
+                _lastPreviewText = previewText;
+                _lastEditedAtUtc = now;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogDebug(
+                    exception,
+                    "Failed to update Telegram reasoning preview for chat {TelegramChatId}.",
+                    _chatId);
+            }
+            finally
+            {
+                _sync.Release();
+            }
+        }
+
+        public async Task CompleteAsync(CancellationToken cancellationToken)
+        {
+            if (!IsEnabled)
+            {
+                return;
+            }
+
+            await _sync.WaitAsync(cancellationToken);
+            try
+            {
+                if (_isCompleted)
+                {
+                    return;
+                }
+
+                _isCompleted = true;
+
+                if (_messageId is null)
+                {
+                    return;
+                }
+
+                await _client.DeleteMessageAsync(
+                    _chatId,
+                    _messageId.Value,
+                    cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogDebug(
+                    exception,
+                    "Failed to remove Telegram reasoning preview for chat {TelegramChatId}.",
+                    _chatId);
+            }
+            finally
+            {
+                _sync.Release();
+            }
+        }
+
+        private static string BuildPreviewText(string rawReasoning)
+        {
+            var normalized = rawReasoning
+                .Replace("\r\n", "\n", StringComparison.Ordinal)
+                .Trim();
+            if (string.IsNullOrWhiteSpace(normalized))
+            {
+                return "Думаю над ответом...";
+            }
+
+            if (normalized.Length > MaxReasoningPreviewLength)
+            {
+                normalized = normalized[..MaxReasoningPreviewLength] + "...";
+            }
+
+            return string.Join(
+                Environment.NewLine,
+                "Промежуточные рассуждения:",
+                normalized);
+        }
+    }
 
     private async Task<T> ExecuteWithTypingIndicatorAsync<T>(
         ITelegramBotClientAdapter client,

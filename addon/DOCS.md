@@ -6,6 +6,7 @@ Use the Home Assistant app/add-on UI to set:
 
 - Telegram bot token
 - Allowed Telegram user IDs, as a comma-separated string such as `93372553` or `93372553,12345`
+- Telegram reasoning preview toggle and delay threshold (seconds)
 - Moonshot/Kimi API key
 - LLM base URL and model
 - LLM thinking mode: `auto`, `disabled`, or `enabled`

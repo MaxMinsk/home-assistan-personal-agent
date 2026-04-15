@@ -49,9 +49,39 @@ public sealed class TelegramBotClientAdapter : ITelegramBotClientAdapter
             cancellationToken: cancellationToken);
 
     public async Task SendMessageAsync(long chatId, string text, CancellationToken cancellationToken) =>
-        await _client.SendMessage(
+        _ = await SendMessageWithIdAsync(chatId, text, cancellationToken);
+
+    public async Task<int> SendMessageWithIdAsync(
+        long chatId,
+        string text,
+        CancellationToken cancellationToken)
+    {
+        var message = await _client.SendMessage(
             chatId: chatId,
             text: text,
+            cancellationToken: cancellationToken);
+
+        return message.Id;
+    }
+
+    public async Task EditMessageTextAsync(
+        long chatId,
+        int messageId,
+        string text,
+        CancellationToken cancellationToken) =>
+        await _client.EditMessageText(
+            chatId: chatId,
+            messageId: messageId,
+            text: text,
+            cancellationToken: cancellationToken);
+
+    public async Task DeleteMessageAsync(
+        long chatId,
+        int messageId,
+        CancellationToken cancellationToken) =>
+        await _client.DeleteMessage(
+            chatId: chatId,
+            messageId: messageId,
             cancellationToken: cancellationToken);
 
     public async Task SetCommandsAsync(

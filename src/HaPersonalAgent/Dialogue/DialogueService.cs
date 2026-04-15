@@ -130,6 +130,7 @@ public sealed class DialogueService
                     conversationId: request.Conversation.ConversationId,
                     participantId: request.Conversation.ParticipantId,
                     executionProfile: request.ExecutionProfile),
+                request.OnReasoningUpdate,
                 cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -383,6 +384,7 @@ public sealed class DialogueService
                     conversationId: conversation.ConversationId,
                     participantId: conversation.ParticipantId,
                     executionProfile: LlmExecutionProfile.Summarization),
+                onReasoningUpdate: null,
                 cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)

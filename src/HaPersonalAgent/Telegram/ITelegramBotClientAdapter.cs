@@ -23,6 +23,12 @@ public interface ITelegramBotClientAdapter
 
     Task SendMessageAsync(long chatId, string text, CancellationToken cancellationToken);
 
+    Task<int> SendMessageWithIdAsync(long chatId, string text, CancellationToken cancellationToken);
+
+    Task EditMessageTextAsync(long chatId, int messageId, string text, CancellationToken cancellationToken);
+
+    Task DeleteMessageAsync(long chatId, int messageId, CancellationToken cancellationToken);
+
     Task SetCommandsAsync(
         IReadOnlyList<(string Command, string Description)> commands,
         CancellationToken cancellationToken);

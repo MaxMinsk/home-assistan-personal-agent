@@ -5,6 +5,12 @@ configuration:
   allowed_telegram_user_ids:
     name: Allowed Telegram user IDs
     description: Comma-separated Telegram user IDs that can talk to the assistant.
+  reasoning_preview_enabled:
+    name: Reasoning preview in Telegram
+    description: Shows temporary reasoning preview while the model is thinking and removes it after the final answer.
+  reasoning_preview_delay_seconds:
+    name: Reasoning preview delay (sec)
+    description: Show reasoning preview only if response generation takes longer than this threshold.
   ha_url:
     name: Home Assistant URL
     description: Home Assistant Core API proxy URL.

@@ -115,6 +115,7 @@ public sealed class AgentRuntime : IAgentRuntime
     public async Task<AgentRuntimeResponse> SendAsync(
         string message,
         AgentContext context,
+        Func<AgentRuntimeReasoningUpdate, CancellationToken, Task>? onReasoningUpdate,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(message);
@@ -178,11 +179,38 @@ public sealed class AgentRuntime : IAgentRuntime
         AgentRuntimeResponse? failureResponse = null;
         try
         {
-            response = await agent.RunAsync(
-                CreateMessages(message, context),
-                session: null,
-                options: runOptions,
-                cancellationToken);
+            var messages = CreateMessages(message, context);
+            if (onReasoningUpdate is null)
+            {
+                response = await agent.RunAsync(
+                    messages,
+                    session: null,
+                    options: runOptions,
+                    cancellationToken);
+            }
+            else
+            {
+                // MAF pattern: stream updates, process intermediate deltas, then assemble AgentResponse.
+                // Ref: dotnet/samples/02-agents/Agents/Agent_Step02_StructuredOutput/Program.cs (RunStreamingAsync + ToAgentResponseAsync).
+                var updates = new List<AgentResponseUpdate>();
+                await foreach (var update in agent.RunStreamingAsync(
+                                   messages,
+                                   session: null,
+                                   options: runOptions,
+                                   cancellationToken).WithCancellation(cancellationToken))
+                {
+                    updates.Add(update);
+                    var reasoningTextDelta = ExtractReasoningTextDelta(update);
+                    if (!string.IsNullOrWhiteSpace(reasoningTextDelta))
+                    {
+                        await onReasoningUpdate(
+                            new AgentRuntimeReasoningUpdate(context.CorrelationId, reasoningTextDelta),
+                            cancellationToken);
+                    }
+                }
+
+                response = updates.ToAgentResponse();
+            }
         }
         catch (ClientResultException exception)
         {
@@ -545,6 +573,16 @@ public sealed class AgentRuntime : IAgentRuntime
 
     private static string BuildSummarizationNotice(CompactionRunDiagnosticsSnapshot snapshot) =>
         $"[context-summary] Чтобы удержать бюджет контекста, я сжал раннюю часть диалога ({snapshot.SummarizationRequests} summarize step).";
+
+    private static string ExtractReasoningTextDelta(AgentResponseUpdate update)
+    {
+        var reasoningText = string.Concat(
+            update.Contents
+                .OfType<TextReasoningContent>()
+                .Select(content => content.Text ?? string.Empty));
+
+        return reasoningText;
+    }
 
     private AIFunction CreateConversationMemorySearchTool(AgentContext context)
     {

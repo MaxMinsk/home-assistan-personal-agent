@@ -12,5 +12,6 @@ public interface IAgentRuntime
     Task<AgentRuntimeResponse> SendAsync(
         string message,
         AgentContext context,
+        Func<AgentRuntimeReasoningUpdate, CancellationToken, Task>? onReasoningUpdate,
         CancellationToken cancellationToken);
 }
