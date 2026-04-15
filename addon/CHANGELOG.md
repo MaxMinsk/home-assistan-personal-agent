@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.17
+
+- Operational add-on release to republish current `0.2.16` functionality (no code changes).
+
+
 ## 0.2.16
 
 - Add bounded chat history + vector overflow memory layer (`conversation_vector_memory`) with retrieval context injection before each tool-enabled run.
