@@ -72,6 +72,21 @@ public sealed class DialogueService
             shouldRefreshPersistedSummary);
 
         var now = DateTimeOffset.UtcNow;
+        await _stateRepository.AppendRawEventsAsync(
+            new[]
+            {
+                RawEventEntry.Create(
+                    conversationKey,
+                    request.Conversation.Transport,
+                    request.Conversation.ConversationId,
+                    request.Conversation.ParticipantId,
+                    DialogueRawEventKinds.UserMessage,
+                    request.Text,
+                    correlationId: request.CorrelationId,
+                    createdAtUtc: now),
+            },
+            cancellationToken);
+
         AgentRuntimeResponse response;
         try
         {
@@ -92,6 +107,21 @@ public sealed class DialogueService
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            const string fallbackText = "Не смог обработать сообщение из-за внутренней ошибки агента. Запрос не сохранен в историю диалога.";
+            await _stateRepository.AppendRawEventsAsync(
+                new[]
+                {
+                    RawEventEntry.Create(
+                        conversationKey,
+                        request.Conversation.Transport,
+                        request.Conversation.ConversationId,
+                        request.Conversation.ParticipantId,
+                        DialogueRawEventKinds.AssistantMessage,
+                        fallbackText,
+                        sourceId: "runtime-error",
+                        correlationId: request.CorrelationId),
+                },
+                cancellationToken);
             _logger.LogWarning(
                 exception,
                 "Agent runtime failed for dialogue request {CorrelationId}.",
@@ -100,12 +130,26 @@ public sealed class DialogueService
             return new AgentRuntimeResponse(
                 request.CorrelationId,
                 IsConfigured: false,
-                "Не смог обработать сообщение из-за внутренней ошибки агента. Запрос не сохранен в историю диалога.",
+                fallbackText,
                 _agentRuntime.GetHealth());
         }
 
         if (!response.IsConfigured)
         {
+            await _stateRepository.AppendRawEventsAsync(
+                new[]
+                {
+                    RawEventEntry.Create(
+                        conversationKey,
+                        request.Conversation.Transport,
+                        request.Conversation.ConversationId,
+                        request.Conversation.ParticipantId,
+                        DialogueRawEventKinds.AssistantMessage,
+                        NormalizeRawEventPayload(response.Text),
+                        sourceId: "runtime-not-configured",
+                        correlationId: request.CorrelationId),
+                },
+                cancellationToken);
             _logger.LogInformation(
                 "Dialogue request {CorrelationId} completed without persisted turn because runtime is not configured or provider call failed.",
                 request.CorrelationId);
@@ -119,6 +163,19 @@ public sealed class DialogueService
             {
                 new AgentConversationMessage(AgentConversationRole.User, request.Text, now),
                 new AgentConversationMessage(AgentConversationRole.Assistant, assistantTextForPersistence, DateTimeOffset.UtcNow),
+            },
+            cancellationToken);
+        await _stateRepository.AppendRawEventsAsync(
+            new[]
+            {
+                RawEventEntry.Create(
+                    conversationKey,
+                    request.Conversation.Transport,
+                    request.Conversation.ConversationId,
+                    request.Conversation.ParticipantId,
+                    DialogueRawEventKinds.AssistantMessage,
+                    NormalizeRawEventPayload(assistantTextForPersistence),
+                    correlationId: request.CorrelationId),
             },
             cancellationToken);
 
@@ -146,15 +203,28 @@ public sealed class DialogueService
     {
         ArgumentNullException.ThrowIfNull(conversation);
 
+        var conversationKey = DialogueConversationKey.Create(conversation);
         await _stateRepository.ClearConversationMessagesAsync(
-            DialogueConversationKey.Create(conversation),
+            conversationKey,
             cancellationToken);
         await _stateRepository.ClearConversationSummaryAsync(
-            DialogueConversationKey.Create(conversation),
+            conversationKey,
+            cancellationToken);
+        await _stateRepository.AppendRawEventsAsync(
+            new[]
+            {
+                RawEventEntry.Create(
+                    conversationKey,
+                    conversation.Transport,
+                    conversation.ConversationId,
+                    conversation.ParticipantId,
+                    DialogueRawEventKinds.ContextReset,
+                    "User requested context reset."),
+            },
             cancellationToken);
         _logger.LogInformation(
             "Dialogue context reset for {ConversationKey}.",
-            DialogueConversationKey.Create(conversation));
+            conversationKey);
     }
 
     public async Task<ConversationSummaryMemory?> GetPersistedSummaryAsync(
@@ -166,6 +236,20 @@ public sealed class DialogueService
         var conversationKey = DialogueConversationKey.Create(conversation);
         return await _stateRepository.GetConversationSummaryAsync(
             conversationKey,
+            cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<RawEventRecord>> GetRawEventsAsync(
+        DialogueConversation conversation,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+
+        var conversationKey = DialogueConversationKey.Create(conversation);
+        return await _stateRepository.GetRawEventsAsync(
+            conversationKey,
+            limit,
             cancellationToken);
     }
 
@@ -314,6 +398,9 @@ public sealed class DialogueService
         var storedMessageCount = await _stateRepository.GetConversationMessageCountAsync(
             conversationKey,
             cancellationToken);
+        var rawEventCount = await _stateRepository.GetRawEventCountAsync(
+            conversationKey,
+            cancellationToken);
         var summary = await _stateRepository.GetConversationSummaryAsync(
             conversationKey,
             cancellationToken);
@@ -325,6 +412,7 @@ public sealed class DialogueService
         return new DialogueContextSnapshot(
             conversationKey,
             StoredMessageCount: storedMessageCount,
+            RawEventCount: rawEventCount,
             MaxContextMessages: maxMessages,
             LoadedHistoryMessageCount: Math.Min(storedMessageCount, maxMessages),
             MessagesSincePersistedSummary: messagesSinceSummary,
@@ -339,14 +427,28 @@ public sealed class DialogueService
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(notification);
-        cancellationToken.ThrowIfCancellationRequested();
+        var conversation = notification.Conversation;
+        var conversationKey = DialogueConversationKey.Create(conversation);
 
-        _logger.LogDebug(
-            "System notification {NotificationKind} for {Transport} conversation is not stored as dialogue memory.",
+        _logger.LogInformation(
+            "System notification {NotificationKind} for {ConversationKey} will be appended to raw event store and excluded from dialogue memory.",
             notification.Kind,
-            notification.Conversation.Transport);
+            conversationKey);
 
-        return Task.CompletedTask;
+        return _stateRepository.AppendRawEventsAsync(
+            new[]
+            {
+                RawEventEntry.Create(
+                    conversationKey,
+                    conversation.Transport,
+                    conversation.ConversationId,
+                    conversation.ParticipantId,
+                    DialogueRawEventKinds.SystemNotification,
+                    notification.Text,
+                    sourceId: notification.SourceId,
+                    createdAtUtc: notification.CreatedAtUtc),
+            },
+            cancellationToken);
     }
 
     private int GetMaxContextMessages()
@@ -418,6 +520,11 @@ public sealed class DialogueService
 
         return LimitSummaryLength(normalized);
     }
+
+    private static string NormalizeRawEventPayload(string payload) =>
+        string.IsNullOrWhiteSpace(payload)
+            ? "[empty]"
+            : payload;
 
     private static string LimitSummaryLength(string summary) =>
         summary.Length <= MaxPersistedSummaryLength

@@ -29,6 +29,7 @@ public class StorageTests
             Assert.Equal(1L, await CountTablesAsync(databasePath, "agent_state"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "conversation_messages"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "conversation_summary"));
+            Assert.Equal(1L, await CountTablesAsync(databasePath, "raw_events"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "pending_confirmations"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "confirmation_audit"));
         }
@@ -169,6 +170,60 @@ public class StorageTests
             Assert.Single(messages);
             Assert.Equal(AgentConversationRole.Assistant, messages[0].Role);
             Assert.Equal(notice, messages[0].Text);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Raw_events_append_and_read_last_events_in_chronological_order()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            await repository.AppendRawEventsAsync(
+                new[]
+                {
+                    RawEventEntry.Create(
+                        "telegram:1:2",
+                        "telegram",
+                        "1",
+                        "2",
+                        "dialogue.user_message",
+                        "hello",
+                        correlationId: "run-1",
+                        createdAtUtc: DateTimeOffset.UtcNow.AddSeconds(-3)),
+                    RawEventEntry.Create(
+                        "telegram:1:2",
+                        "telegram",
+                        "1",
+                        "2",
+                        "dialogue.assistant_message",
+                        "hi",
+                        correlationId: "run-1",
+                        createdAtUtc: DateTimeOffset.UtcNow.AddSeconds(-2)),
+                    RawEventEntry.Create(
+                        "telegram:1:2",
+                        "telegram",
+                        "1",
+                        "2",
+                        "dialogue.context_reset",
+                        "context reset",
+                        createdAtUtc: DateTimeOffset.UtcNow.AddSeconds(-1)),
+                },
+                CancellationToken.None);
+
+            var count = await repository.GetRawEventCountAsync("telegram:1:2", CancellationToken.None);
+            var events = await repository.GetRawEventsAsync("telegram:1:2", limit: 2, CancellationToken.None);
+
+            Assert.Equal(3, count);
+            Assert.Equal(new[] { "dialogue.assistant_message", "dialogue.context_reset" }, events.Select(rawEvent => rawEvent.EventKind));
+            Assert.Equal(new[] { "hi", "context reset" }, events.Select(rawEvent => rawEvent.Payload));
+            Assert.All(events, rawEvent => Assert.Equal("telegram:1:2", rawEvent.ConversationKey));
         }
         finally
         {

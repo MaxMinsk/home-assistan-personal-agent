@@ -19,5 +19,7 @@ public interface ITelegramBotClientAdapter
         IReadOnlyList<UpdateType> allowedUpdates,
         CancellationToken cancellationToken);
 
+    Task SendTypingAsync(long chatId, CancellationToken cancellationToken);
+
     Task SendMessageAsync(long chatId, string text, CancellationToken cancellationToken);
 }

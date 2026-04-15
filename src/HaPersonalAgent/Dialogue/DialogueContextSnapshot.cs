@@ -8,6 +8,7 @@ namespace HaPersonalAgent.Dialogue;
 public sealed record DialogueContextSnapshot(
     string ConversationKey,
     int StoredMessageCount,
+    int RawEventCount,
     int MaxContextMessages,
     int LoadedHistoryMessageCount,
     int MessagesSincePersistedSummary,

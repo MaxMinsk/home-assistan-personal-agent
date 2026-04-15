@@ -67,6 +67,25 @@ public sealed class AgentStateRepository
                     summary_version INTEGER NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS raw_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    conversation_key TEXT NOT NULL,
+                    transport TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    participant_id TEXT NOT NULL,
+                    event_kind TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    source_id TEXT NULL,
+                    correlation_id TEXT NULL,
+                    created_utc TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_raw_events_conversation_id
+                ON raw_events (conversation_key, id);
+
+                CREATE INDEX IF NOT EXISTS idx_raw_events_kind_created_utc
+                ON raw_events (event_kind, created_utc);
+
                 CREATE TABLE IF NOT EXISTS pending_confirmations (
                     id TEXT PRIMARY KEY NOT NULL,
                     action_kind TEXT NOT NULL,
@@ -227,6 +246,173 @@ public sealed class AgentStateRepository
         }
 
         return Convert.ToInt32(value, CultureInfo.InvariantCulture);
+    }
+
+    public async Task AppendRawEventsAsync(
+        IEnumerable<RawEventEntry> events,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(events);
+
+        var eventList = events
+            .Where(rawEvent =>
+                !string.IsNullOrWhiteSpace(rawEvent.ConversationKey)
+                && !string.IsNullOrWhiteSpace(rawEvent.Transport)
+                && !string.IsNullOrWhiteSpace(rawEvent.ConversationId)
+                && !string.IsNullOrWhiteSpace(rawEvent.ParticipantId)
+                && !string.IsNullOrWhiteSpace(rawEvent.EventKind)
+                && !string.IsNullOrWhiteSpace(rawEvent.Payload))
+            .ToArray();
+        if (eventList.Length == 0)
+        {
+            return;
+        }
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var transaction = connection.BeginTransaction();
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            """
+            INSERT INTO raw_events (
+                conversation_key,
+                transport,
+                conversation_id,
+                participant_id,
+                event_kind,
+                payload,
+                source_id,
+                correlation_id,
+                created_utc)
+            VALUES (
+                $conversationKey,
+                $transport,
+                $conversationId,
+                $participantId,
+                $eventKind,
+                $payload,
+                $sourceId,
+                $correlationId,
+                $createdUtc);
+            """;
+
+        foreach (var rawEvent in eventList)
+        {
+            command.Parameters.Clear();
+            command.Parameters.AddWithValue("$conversationKey", rawEvent.ConversationKey);
+            command.Parameters.AddWithValue("$transport", rawEvent.Transport);
+            command.Parameters.AddWithValue("$conversationId", rawEvent.ConversationId);
+            command.Parameters.AddWithValue("$participantId", rawEvent.ParticipantId);
+            command.Parameters.AddWithValue("$eventKind", rawEvent.EventKind);
+            command.Parameters.AddWithValue("$payload", rawEvent.Payload);
+            command.Parameters.AddWithValue("$sourceId", ToDbValue(rawEvent.SourceId));
+            command.Parameters.AddWithValue("$correlationId", ToDbValue(rawEvent.CorrelationId));
+            command.Parameters.AddWithValue("$createdUtc", rawEvent.CreatedAtUtc.ToString("O", CultureInfo.InvariantCulture));
+
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task<int> GetRawEventCountAsync(
+        string conversationKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT COUNT(*)
+            FROM raw_events
+            WHERE conversation_key = $conversationKey;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+
+        var value = await command.ExecuteScalarAsync(cancellationToken);
+        if (value is null || value is DBNull)
+        {
+            return 0;
+        }
+
+        return Convert.ToInt32(value, CultureInfo.InvariantCulture);
+    }
+
+    public async Task<IReadOnlyList<RawEventRecord>> GetRawEventsAsync(
+        string conversationKey,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+
+        if (limit <= 0)
+        {
+            return Array.Empty<RawEventRecord>();
+        }
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                id,
+                conversation_key,
+                transport,
+                conversation_id,
+                participant_id,
+                event_kind,
+                payload,
+                source_id,
+                correlation_id,
+                created_utc
+            FROM (
+                SELECT
+                    id,
+                    conversation_key,
+                    transport,
+                    conversation_id,
+                    participant_id,
+                    event_kind,
+                    payload,
+                    source_id,
+                    correlation_id,
+                    created_utc
+                FROM raw_events
+                WHERE conversation_key = $conversationKey
+                ORDER BY id DESC
+                LIMIT $limit
+            )
+            ORDER BY id ASC;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+        command.Parameters.AddWithValue("$limit", limit);
+
+        var events = new List<RawEventRecord>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            events.Add(new RawEventRecord(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetString(6),
+                reader.IsDBNull(7) ? null : reader.GetString(7),
+                reader.IsDBNull(8) ? null : reader.GetString(8),
+                DateTimeOffset.Parse(reader.GetString(9), CultureInfo.InvariantCulture)));
+        }
+
+        return events;
     }
 
     public async Task<ConversationSummaryMemory?> GetConversationSummaryAsync(

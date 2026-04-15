@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.15
+
+- Add Telegram typing indicator loop for long LLM operations (`typing...`) without persisting progress artifacts into dialogue memory.
+- Introduce append-only `raw_events` SQLite store as source-of-truth event log, separated from trimmed `conversation_messages`.
+- Persist user/assistant/system-notification/reset events into `raw_events` and expose raw event counters in `/status`.
+- Add Telegram command `/showRawEvents [N]` to inspect recent raw events for the current chat.
+- Extend storage/dialogue/telegram tests for raw event persistence, raw event command output, and updated status diagnostics.
+
+
 ## 0.2.14
 
 - Add dedicated `Summarization` LLM execution profile and force `thinking=disabled` for summary-compaction requests when provider supports request-level thinking control.

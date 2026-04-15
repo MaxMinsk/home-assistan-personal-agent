@@ -34,11 +34,19 @@ public class DialogueServiceTests
                 DialogueConversationKey.Create(conversation),
                 limit: 10,
                 CancellationToken.None);
+            var rawEvents = await repository.GetRawEventsAsync(
+                DialogueConversationKey.Create(conversation),
+                limit: 10,
+                CancellationToken.None);
 
             Assert.Equal("web-test", runtime.Calls.Single().Context.CorrelationId);
             Assert.Equal("web-ui:session-1:user-1", runtime.Calls.Single().Context.ConversationKey);
             Assert.Equal("user-1", runtime.Calls.Single().Context.ParticipantId);
             Assert.Equal(new[] { "hello", "hello back" }, stored.Select(message => message.Text));
+            Assert.Equal(
+                new[] { DialogueRawEventKinds.UserMessage, DialogueRawEventKinds.AssistantMessage },
+                rawEvents.Select(rawEvent => rawEvent.EventKind));
+            Assert.Equal(new[] { "hello", "hello back" }, rawEvents.Select(rawEvent => rawEvent.Payload));
         }
         finally
         {
@@ -82,9 +90,15 @@ public class DialogueServiceTests
             var summary = await repository.GetConversationSummaryAsync(
                 DialogueConversationKey.Create(conversation),
                 CancellationToken.None);
+            var rawEvents = await repository.GetRawEventsAsync(
+                DialogueConversationKey.Create(conversation),
+                limit: 10,
+                CancellationToken.None);
 
             Assert.Empty(stored);
             Assert.Null(summary);
+            Assert.Single(rawEvents);
+            Assert.Equal(DialogueRawEventKinds.ContextReset, rawEvents[0].EventKind);
         }
         finally
         {
@@ -116,9 +130,17 @@ public class DialogueServiceTests
                 DialogueConversationKey.Create(conversation),
                 limit: 10,
                 CancellationToken.None);
+            var rawEvents = await repository.GetRawEventsAsync(
+                DialogueConversationKey.Create(conversation),
+                limit: 10,
+                CancellationToken.None);
 
             Assert.Empty(stored);
             Assert.Empty(runtime.Calls);
+            Assert.Single(rawEvents);
+            Assert.Equal(DialogueRawEventKinds.SystemNotification, rawEvents[0].EventKind);
+            Assert.Equal("Motion detected near the garage.", rawEvents[0].Payload);
+            Assert.Equal("camera.garage", rawEvents[0].SourceId);
         }
         finally
         {
@@ -297,6 +319,7 @@ public class DialogueServiceTests
 
             Assert.Equal(key, snapshot.ConversationKey);
             Assert.Equal(3, snapshot.StoredMessageCount);
+            Assert.Equal(0, snapshot.RawEventCount);
             Assert.Equal(24, snapshot.MaxContextMessages);
             Assert.Equal(3, snapshot.LoadedHistoryMessageCount);
             Assert.True(snapshot.PersistedSummaryPresent);

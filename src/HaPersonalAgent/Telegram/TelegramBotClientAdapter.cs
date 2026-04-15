@@ -41,6 +41,12 @@ public sealed class TelegramBotClientAdapter : ITelegramBotClientAdapter
             allowedUpdates: allowedUpdates,
             cancellationToken: cancellationToken);
 
+    public async Task SendTypingAsync(long chatId, CancellationToken cancellationToken) =>
+        await _client.SendChatAction(
+            chatId: chatId,
+            action: ChatAction.Typing,
+            cancellationToken: cancellationToken);
+
     public async Task SendMessageAsync(long chatId, string text, CancellationToken cancellationToken) =>
         await _client.SendMessage(
             chatId: chatId,

@@ -68,6 +68,7 @@ public class TelegramUpdateHandlerTests
                 new[] { "Меня зовут Максим.", "Запомнил.", "Как меня зовут?", "Тебя зовут Максим." },
                 stored.Select(message => message.Text));
             Assert.Equal(new[] { "Запомнил.", "Тебя зовут Максим." }, adapter.SentMessages.Select(message => message.Text));
+            Assert.True(adapter.SentTypingActions.Count >= 2);
         }
         finally
         {
@@ -189,6 +190,94 @@ public class TelegramUpdateHandlerTests
     }
 
     [Fact]
+    public async Task Show_raw_events_returns_recent_events_for_current_conversation()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            await repository.AppendRawEventsAsync(
+                new[]
+                {
+                    RawEventEntry.Create(
+                        "telegram:200:100",
+                        "telegram",
+                        "200",
+                        "100",
+                        DialogueRawEventKinds.UserMessage,
+                        "Первый запрос",
+                        correlationId: "c-1"),
+                    RawEventEntry.Create(
+                        "telegram:200:100",
+                        "telegram",
+                        "200",
+                        "100",
+                        DialogueRawEventKinds.AssistantMessage,
+                        "Второй ответ",
+                        correlationId: "c-1"),
+                    RawEventEntry.Create(
+                        "telegram:201:100",
+                        "telegram",
+                        "201",
+                        "100",
+                        DialogueRawEventKinds.UserMessage,
+                        "чужой чат"),
+                },
+                CancellationToken.None);
+            var runtime = new FakeAgentRuntime("unused");
+            var handler = CreateHandler(repository, runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 23, chatId: 200, userId: 100, text: "/showRawEvents 2"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Empty(runtime.Calls);
+            Assert.Single(adapter.SentMessages);
+            Assert.Contains("Raw events: последние 2", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains(DialogueRawEventKinds.UserMessage, adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains(DialogueRawEventKinds.AssistantMessage, adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.DoesNotContain("чужой чат", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Show_raw_events_returns_empty_message_when_no_events_exist()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var runtime = new FakeAgentRuntime("unused");
+            var handler = CreateHandler(repository, runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 24, chatId: 200, userId: 100, text: "/showRawEvents"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Empty(runtime.Calls);
+            Assert.Single(adapter.SentMessages);
+            Assert.Contains("Raw events", adapter.SentMessages.Single().Text, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("отсутствуют", adapter.SentMessages.Single().Text, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Refresh_summary_forces_rebuild_and_returns_updated_snapshot()
     {
         var databasePath = CreateTemporaryDatabasePath();
@@ -243,6 +332,7 @@ public class TelegramUpdateHandlerTests
             Assert.Equal("новый summary", refreshedSummary.Summary);
             Assert.Contains("пересобран", adapter.SentMessages.Single().Text, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("Summary version: 2", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.True(adapter.SentTypingActions.Count >= 1);
         }
         finally
         {
@@ -332,8 +422,10 @@ public class TelegramUpdateHandlerTests
             Assert.Contains("ReasoningActive(tool-enabled): True", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("ReasoningPlan(tool-enabled): requested auto, effective provider-default", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("Context(stored): 0 messages", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("RawEvents(stored): 0 events", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("Context(loaded): 0 / 24 messages", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("PersistedSummary: present False", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Empty(adapter.SentTypingActions);
         }
         finally
         {
@@ -677,6 +769,7 @@ public class TelegramUpdateHandlerTests
     private sealed class FakeTelegramBotClientAdapter : ITelegramBotClientAdapter
     {
         public List<(long ChatId, string Text)> SentMessages { get; } = new();
+        public List<long> SentTypingActions { get; } = new();
 
         public Task DeleteWebhookAsync(bool dropPendingUpdates, CancellationToken cancellationToken) =>
             Task.CompletedTask;
@@ -688,6 +781,12 @@ public class TelegramUpdateHandlerTests
             IReadOnlyList<UpdateType> allowedUpdates,
             CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<Update>>(Array.Empty<Update>());
+
+        public Task SendTypingAsync(long chatId, CancellationToken cancellationToken)
+        {
+            SentTypingActions.Add(chatId);
+            return Task.CompletedTask;
+        }
 
         public Task SendMessageAsync(long chatId, string text, CancellationToken cancellationToken)
         {

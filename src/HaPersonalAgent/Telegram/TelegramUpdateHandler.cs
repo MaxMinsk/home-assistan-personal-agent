@@ -17,7 +17,11 @@ namespace HaPersonalAgent.Telegram;
 public sealed class TelegramUpdateHandler
 {
     private const int MaxTelegramMessageLength = 4096;
+    private const int MaxRawEventPayloadPreviewLength = 180;
+    private const int DefaultRawEventLimit = 10;
+    private const int MaxRawEventLimit = 25;
     private const string TelegramTransportName = "telegram";
+    private static readonly TimeSpan TypingIndicatorInterval = TimeSpan.FromSeconds(4);
 
     private readonly DialogueService _dialogueService;
     private readonly IHomeAssistantMcpClient _homeAssistantMcpClient;
@@ -92,7 +96,7 @@ public sealed class TelegramUpdateHandler
                 update.Id);
             await client.SendMessageAsync(
                 chatId,
-                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary. Для действий с домом используй /approve <id> или /reject <id>, когда агент попросит подтверждение.",
+                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary, /showRawEvents [N] покажет последние сырые события памяти. Для действий с домом используй /approve <id> или /reject <id>, когда агент попросит подтверждение.",
                 cancellationToken);
             return;
         }
@@ -133,6 +137,21 @@ public sealed class TelegramUpdateHandler
                 client,
                 chatId,
                 conversation,
+                cancellationToken);
+            return;
+        }
+
+        if (TryReadCommandArgument(text, "/showRawEvents", out var rawEventsLimitArgument))
+        {
+            _logger.LogInformation(
+                "Telegram update {TelegramUpdateId} routed to /showRawEvents command for conversation {ConversationKey}.",
+                update.Id,
+                DialogueConversationKey.Create(conversation));
+            await HandleShowRawEventsCommandAsync(
+                client,
+                chatId,
+                conversation,
+                rawEventsLimitArgument,
                 cancellationToken);
             return;
         }
@@ -301,9 +320,13 @@ public sealed class TelegramUpdateHandler
         DialogueConversation conversation,
         CancellationToken cancellationToken)
     {
-        var result = await _dialogueService.RefreshPersistedSummaryAsync(
-            conversation,
-            correlationId: $"telegram-{updateId}-refresh-summary",
+        var result = await ExecuteWithTypingIndicatorAsync(
+            client,
+            chatId,
+            ct => _dialogueService.RefreshPersistedSummaryAsync(
+                conversation,
+                correlationId: $"telegram-{updateId}-refresh-summary",
+                ct),
             cancellationToken);
         var response = result.Summary is null
             ? result.Message
@@ -315,6 +338,56 @@ public sealed class TelegramUpdateHandler
         await client.SendMessageAsync(
             chatId,
             NormalizeTelegramText(response),
+            cancellationToken);
+    }
+
+    private async Task HandleShowRawEventsCommandAsync(
+        ITelegramBotClientAdapter client,
+        long chatId,
+        DialogueConversation conversation,
+        string? limitArgument,
+        CancellationToken cancellationToken)
+    {
+        var rawEventLimit = ParseRawEventLimit(limitArgument);
+        var rawEvents = await _dialogueService.GetRawEventsAsync(
+            conversation,
+            rawEventLimit,
+            cancellationToken);
+
+        if (rawEvents.Count == 0)
+        {
+            await client.SendMessageAsync(
+                chatId,
+                "Raw events для этого чата пока отсутствуют.",
+                cancellationToken);
+            return;
+        }
+
+        var lines = new List<string>
+        {
+            $"Raw events: последние {rawEvents.Count} (из запрошенных {rawEventLimit})",
+        };
+
+        foreach (var rawEvent in rawEvents)
+        {
+            var details = $"#{rawEvent.Id} {rawEvent.CreatedAtUtc:O} {rawEvent.EventKind}";
+            if (!string.IsNullOrWhiteSpace(rawEvent.SourceId))
+            {
+                details += $" source={rawEvent.SourceId}";
+            }
+
+            if (!string.IsNullOrWhiteSpace(rawEvent.CorrelationId))
+            {
+                details += $" correlation={rawEvent.CorrelationId}";
+            }
+
+            lines.Add(details);
+            lines.Add($"  {FormatRawEventPayload(rawEvent.Payload)}");
+        }
+
+        await client.SendMessageAsync(
+            chatId,
+            NormalizeTelegramText(string.Join(Environment.NewLine, lines)),
             cancellationToken);
     }
 
@@ -333,12 +406,16 @@ public sealed class TelegramUpdateHandler
             chatId,
             executionProfile,
             text.Length);
-        var response = await _dialogueService.SendUserMessageAsync(
-            DialogueRequest.Create(
-                conversation,
-                text,
-                correlationId: $"telegram-{updateId}",
-                executionProfile: executionProfile),
+        var response = await ExecuteWithTypingIndicatorAsync(
+            client,
+            chatId,
+            ct => _dialogueService.SendUserMessageAsync(
+                DialogueRequest.Create(
+                    conversation,
+                    text,
+                    correlationId: $"telegram-{updateId}",
+                    executionProfile: executionProfile),
+                ct),
             cancellationToken);
         _logger.LogInformation(
             "Dialogue request telegram-{TelegramUpdateId} completed for chat {TelegramChatId}; configured {IsConfigured}; response length {ResponseLength}.",
@@ -383,6 +460,7 @@ public sealed class TelegramUpdateHandler
             $"Configuration: {status.ConfigurationMode}",
             $"HA MCP: {FormatMcpStatus(mcpDiscovery)}",
             $"Context(stored): {contextSnapshot.StoredMessageCount} messages",
+            $"RawEvents(stored): {contextSnapshot.RawEventCount} events",
             $"Context(loaded): {contextSnapshot.LoadedHistoryMessageCount} / {contextSnapshot.MaxContextMessages} messages",
             $"PersistedSummary: present {contextSnapshot.PersistedSummaryPresent}, version {contextSnapshot.PersistedSummaryVersion}, length {contextSnapshot.PersistedSummaryLength}, sourceLastMessageId {contextSnapshot.PersistedSummarySourceLastMessageId}, messagesSinceSummary {contextSnapshot.MessagesSincePersistedSummary}",
             $"Telegram allowlist users: {status.Configuration.AllowedTelegramUserCount}");
@@ -447,6 +525,32 @@ public sealed class TelegramUpdateHandler
         return normalized[..(MaxTelegramMessageLength - 32)] + "\n\n[ответ обрезан]";
     }
 
+    private static int ParseRawEventLimit(string? argument)
+    {
+        if (string.IsNullOrWhiteSpace(argument))
+        {
+            return DefaultRawEventLimit;
+        }
+
+        return int.TryParse(argument, out var parsedLimit)
+            ? Math.Clamp(parsedLimit, 1, MaxRawEventLimit)
+            : DefaultRawEventLimit;
+    }
+
+    private static string FormatRawEventPayload(string payload)
+    {
+        var normalizedPayload = payload
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\n', ' ')
+            .Trim();
+        if (normalizedPayload.Length <= MaxRawEventPayloadPreviewLength)
+        {
+            return normalizedPayload;
+        }
+
+        return normalizedPayload[..MaxRawEventPayloadPreviewLength] + "...";
+    }
+
     private static bool IsReasoningActive(LlmExecutionPlan plan) =>
         plan.EffectiveThinkingMode != LlmEffectiveThinkingMode.Disabled;
 
@@ -463,6 +567,65 @@ public sealed class TelegramUpdateHandler
             LlmEffectiveThinkingMode.Enabled => "enabled",
             _ => "provider-default",
         };
+
+    private async Task<T> ExecuteWithTypingIndicatorAsync<T>(
+        ITelegramBotClientAdapter client,
+        long chatId,
+        Func<CancellationToken, Task<T>> operation,
+        CancellationToken cancellationToken)
+    {
+        using var typingCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var typingTask = SendTypingLoopAsync(client, chatId, typingCancellation.Token);
+        try
+        {
+            return await operation(cancellationToken);
+        }
+        finally
+        {
+            typingCancellation.Cancel();
+            try
+            {
+                await typingTask;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+        }
+    }
+
+    private async Task SendTypingLoopAsync(
+        ITelegramBotClientAdapter client,
+        long chatId,
+        CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await client.SendTypingAsync(chatId, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+            catch (Exception exception)
+            {
+                _logger.LogDebug(
+                    exception,
+                    "Failed to send Telegram typing indicator for chat {TelegramChatId}.",
+                    chatId);
+            }
+
+            try
+            {
+                await Task.Delay(TypingIndicatorInterval, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+    }
 
     private static string FormatPersistedSummary(ConversationSummaryMemory summary) =>
         string.Join(

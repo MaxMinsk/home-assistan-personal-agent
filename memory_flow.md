@@ -37,6 +37,15 @@
   - `source_last_message_id`
   - `summary_version`
 
+- `raw_events`
+  - `id` (AUTOINCREMENT)
+  - `conversation_key`
+  - `transport` / `conversation_id` / `participant_id`
+  - `event_kind`
+  - `payload`
+  - `source_id` / `correlation_id`
+  - `created_utc`
+
 Отдельно (не memory turns):
 
 - `pending_confirmations`
@@ -74,8 +83,13 @@
 7. `DialogueService` сохраняет в SQLite только 2 сообщения:
    - `User` (входной текст)
    - `Assistant` (очищенный текст без технического префикса `[context-summary]`)
-8. Если runtime вернул summary candidate, `DialogueService` обновляет `conversation_summary` полным snapshot-перезаписыванием (upsert, новая версия, `source_last_message_id`), без склейки старых и новых абзацев.
-9. После сохранения `DialogueService` применяет `TrimConversationMessagesAsync` по лимиту (`ConversationContextMaxTurns * 2`).
+8. Параллельно `DialogueService` пишет append-only `raw_events`:
+   - `dialogue.user_message`
+   - `dialogue.assistant_message`
+   - `dialogue.context_reset` (на `/resetContext`)
+   - `dialogue.system_notification` (через `RecordSystemNotificationAsync`)
+9. Если runtime вернул summary candidate, `DialogueService` обновляет `conversation_summary` полным snapshot-перезаписыванием (upsert, новая версия, `source_last_message_id`), без склейки старых и новых абзацев.
+10. После сохранения `DialogueService` применяет `TrimConversationMessagesAsync` по лимиту (`ConversationContextMaxTurns * 2`).
 
 ## Что важно для SQL-корректности после compaction
 
@@ -83,6 +97,7 @@
 
 - `conversation_messages` остается журналом фактических turns;
 - `conversation_summary` хранит сжатую память отдельно;
+- `raw_events` хранит полный append-only event trail (включая reset/system notifications), который не подрезается `TrimConversationMessagesAsync`;
 - нет скрытых служебных сообщений compaction в `conversation_messages`;
 - internal tool-call/result и internal summary message groups не пишутся в SQL как отдельные turns.
 
@@ -100,6 +115,8 @@
 - `reasoning_content`/`TextReasoningContent`;
 - внутренние tool-call/result payloads и internal compaction groups;
 - raw confirmation payload/result (они в `pending_confirmations`/`confirmation_audit`).
+
+Примечание: system notifications и reset события теперь попадают в `raw_events`, но не в `conversation_messages`.
 
 ## Как summary попадает в prompt
 
