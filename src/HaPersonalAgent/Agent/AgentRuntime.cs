@@ -377,10 +377,29 @@ public sealed class AgentRuntime : IAgentRuntime
 
     private static string CreateSummarizationPrompt() =>
         """
-        Summarize older conversation context in concise Russian.
-        Preserve user intent, confirmed facts, unfinished tasks, and constraints.
-        Do not include secrets, tokens, raw identifiers, or full tool outputs.
-        Keep the summary practical for the next assistant step.
+        Build persisted conversation memory in concise Russian.
+        Return only this markdown structure:
+
+        ## Контекст пользователя
+        - ...
+
+        ## Факты и решения
+        - ...
+
+        ## Открытые задачи
+        - ...
+
+        ## Ограничения и предпочтения
+        - ...
+
+        Rules:
+        - Keep only facts useful for future turns.
+        - Include still-relevant facts from prior summary when present.
+        - Do not copy long quotes from dialogue.
+        - Do not ask questions and do not address the user directly.
+        - Do not include role labels, timestamps, message ids, tokens, secrets, or raw tool outputs.
+        - If no data for a section, write one bullet: "- нет данных".
+        - Keep the full summary under 1200 characters.
         """;
 
     private static OpenAIClientOptions CreateOpenAIClientOptions(

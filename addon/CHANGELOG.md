@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.12
+
+- Fix persisted summary quality: stop paragraph-wise append/merge and store a single canonical summary snapshot per refresh.
+- Tighten compaction summarization prompt to a structured memory format (context, facts, open tasks, constraints) without user-facing chatter.
+- Update dialogue tests for snapshot-replacement behavior and refresh memory-flow docs accordingly.
+
 ## 0.2.11
 
 - Fix persisted summary refresh behavior: merge new summarize output with existing summary instead of replacing it with a single recent chunk.

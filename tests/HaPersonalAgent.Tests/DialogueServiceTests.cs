@@ -221,7 +221,7 @@ public class DialogueServiceTests
     }
 
     [Fact]
-    public async Task Persisted_summary_candidate_is_merged_with_existing_summary_instead_of_overwrite()
+    public async Task Persisted_summary_candidate_replaces_previous_summary_snapshot()
     {
         var databasePath = CreateTemporaryDatabasePath();
 
@@ -249,8 +249,7 @@ public class DialogueServiceTests
                 CancellationToken.None);
             Assert.NotNull(summary);
             Assert.Equal(2, summary.SummaryVersion);
-            Assert.Contains("Собака быстро адаптировалась к дому.", summary.Summary, StringComparison.Ordinal);
-            Assert.Contains("Пользователь тренирует выдержку на прогулке.", summary.Summary, StringComparison.Ordinal);
+            Assert.Equal("Пользователь тренирует выдержку на прогулке.", summary.Summary);
         }
         finally
         {

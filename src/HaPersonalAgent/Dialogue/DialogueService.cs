@@ -3,7 +3,6 @@ using HaPersonalAgent.Configuration;
 using HaPersonalAgent.Storage;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using System.Text;
 
 namespace HaPersonalAgent.Dialogue;
 
@@ -233,13 +232,11 @@ public sealed class DialogueService
             return;
         }
 
-        var normalizedSummary = summaryCandidate.Trim();
-        normalizedSummary = currentSummary is null
-            ? LimitSummaryLength(normalizedSummary)
-            : MergePersistedSummary(
-                currentSummary.Summary,
-                normalizedSummary,
-                MaxPersistedSummaryLength);
+        var normalizedSummary = NormalizeSummaryCandidate(summaryCandidate);
+        if (normalizedSummary.Length == 0)
+        {
+            return;
+        }
 
         if (currentSummary is not null
             && string.Equals(currentSummary.Summary, normalizedSummary, StringComparison.Ordinal))
@@ -275,87 +272,18 @@ public sealed class DialogueService
             normalizedSummary.Length);
     }
 
-    private static string MergePersistedSummary(
-        string previousSummary,
-        string latestSummary,
-        int maxLength)
+    private static string NormalizeSummaryCandidate(string summaryCandidate)
     {
-        var paragraphs = new List<string>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-
-        AddUniqueParagraphs(previousSummary, paragraphs, seen);
-        AddUniqueParagraphs(latestSummary, paragraphs, seen);
-
-        if (paragraphs.Count == 0)
+        var normalized = summaryCandidate
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Trim();
+        while (normalized.Contains("\n\n\n", StringComparison.Ordinal))
         {
-            return LimitSummaryLength(latestSummary);
+            normalized = normalized.Replace("\n\n\n", "\n\n", StringComparison.Ordinal);
         }
 
-        var merged = JoinParagraphs(paragraphs);
-        while (merged.Length > maxLength && paragraphs.Count > 1)
-        {
-            // Сбрасываем самые старые абзацы, чтобы сохранять актуальные обновления.
-            paragraphs.RemoveAt(0);
-            merged = JoinParagraphs(paragraphs);
-        }
-
-        return merged.Length <= maxLength
-            ? merged
-            : merged[..maxLength];
+        return LimitSummaryLength(normalized);
     }
-
-    private static void AddUniqueParagraphs(
-        string source,
-        List<string> paragraphs,
-        HashSet<string> seen)
-    {
-        if (string.IsNullOrWhiteSpace(source))
-        {
-            return;
-        }
-
-        var normalized = source.Replace("\r\n", "\n", StringComparison.Ordinal);
-        foreach (var paragraph in normalized.Split(
-                     "\n\n",
-                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            var key = NormalizeParagraphKey(paragraph);
-            if (key.Length == 0 || !seen.Add(key))
-            {
-                continue;
-            }
-
-            paragraphs.Add(paragraph);
-        }
-    }
-
-    private static string NormalizeParagraphKey(string value)
-    {
-        var builder = new StringBuilder(value.Length);
-        var previousWasWhitespace = false;
-        foreach (var character in value)
-        {
-            if (char.IsWhiteSpace(character))
-            {
-                if (previousWasWhitespace)
-                {
-                    continue;
-                }
-
-                builder.Append(' ');
-                previousWasWhitespace = true;
-                continue;
-            }
-
-            builder.Append(char.ToLowerInvariant(character));
-            previousWasWhitespace = false;
-        }
-
-        return builder.ToString().Trim();
-    }
-
-    private static string JoinParagraphs(List<string> paragraphs) =>
-        string.Join(Environment.NewLine + Environment.NewLine, paragraphs);
 
     private static string LimitSummaryLength(string summary) =>
         summary.Length <= MaxPersistedSummaryLength

@@ -74,7 +74,7 @@
 7. `DialogueService` сохраняет в SQLite только 2 сообщения:
    - `User` (входной текст)
    - `Assistant` (очищенный текст без технического префикса `[context-summary]`)
-8. Если runtime вернул summary candidate, `DialogueService` обновляет `conversation_summary` (upsert, новая версия, `source_last_message_id`).
+8. Если runtime вернул summary candidate, `DialogueService` обновляет `conversation_summary` полным snapshot-перезаписыванием (upsert, новая версия, `source_last_message_id`), без склейки старых и новых абзацев.
 9. После сохранения `DialogueService` применяет `TrimConversationMessagesAsync` по лимиту (`ConversationContextMaxTurns * 2`).
 
 ## Что важно для SQL-корректности после compaction
