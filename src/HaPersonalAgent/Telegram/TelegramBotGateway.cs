@@ -19,6 +19,20 @@ public sealed class TelegramBotGateway : BackgroundService
         UpdateType.Message,
         UpdateType.CallbackQuery,
     ];
+    private static readonly IReadOnlyList<(string Command, string Description)> BotCommands =
+    [
+        ("start", "Справка по командам"),
+        ("status", "Статус агента и памяти"),
+        ("resetcontext", "Очистить контекст текущего чата"),
+        ("showsummary", "Показать persisted summary"),
+        ("refreshsummary", "Принудительно пересобрать summary"),
+        ("showrawevents", "Показать последние raw events"),
+        ("showcapsules", "Показать project capsules"),
+        ("refreshcapsules", "Обновить project capsules"),
+        ("think", "Deep reasoning без tools"),
+        ("approve", "Подтвердить действие по id"),
+        ("reject", "Отклонить действие по id"),
+    ];
 
     private readonly ITelegramBotClientAdapterFactory _clientFactory;
     private readonly ILogger<TelegramBotGateway> _logger;
@@ -65,6 +79,7 @@ public sealed class TelegramBotGateway : BackgroundService
     {
         var offset = await _stateRepository.GetTelegramUpdateOffsetAsync(stoppingToken);
         var webhookDeleted = false;
+        var commandsConfigured = false;
         var iteration = 0;
 
         while (!stoppingToken.IsCancellationRequested)
@@ -77,6 +92,11 @@ public sealed class TelegramBotGateway : BackgroundService
                     await client.DeleteWebhookAsync(dropPendingUpdates: false, stoppingToken);
                     webhookDeleted = true;
                     _logger.LogInformation("Telegram long polling started from offset {TelegramUpdateOffset}", offset);
+                }
+
+                if (!commandsConfigured)
+                {
+                    commandsConfigured = await TryConfigureBotCommandsAsync(client, stoppingToken);
                 }
 
                 var updates = await client.GetUpdatesAsync(
@@ -122,6 +142,31 @@ public sealed class TelegramBotGateway : BackgroundService
                     return;
                 }
             }
+        }
+    }
+
+    private async Task<bool> TryConfigureBotCommandsAsync(
+        ITelegramBotClientAdapter client,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await client.SetCommandsAsync(BotCommands, cancellationToken);
+            _logger.LogInformation(
+                "Telegram bot commands configured: {CommandCount}.",
+                BotCommands.Count);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(
+                exception,
+                "Failed to configure Telegram bot commands; command suggestions in Telegram UI may be missing.");
+            return false;
         }
     }
 

@@ -1014,6 +1014,7 @@ public class TelegramUpdateHandlerTests
         public List<long> SentTypingActions { get; } = new();
         public List<(long ChatId, int MessageId)> ClearedInlineKeyboards { get; } = new();
         public List<(string CallbackQueryId, string? Text, bool ShowAlert)> AnsweredCallbackQueries { get; } = new();
+        public List<IReadOnlyList<(string Command, string Description)>> ConfiguredCommands { get; } = new();
 
         public Task DeleteWebhookAsync(bool dropPendingUpdates, CancellationToken cancellationToken) =>
             Task.CompletedTask;
@@ -1035,6 +1036,14 @@ public class TelegramUpdateHandlerTests
         public Task SendMessageAsync(long chatId, string text, CancellationToken cancellationToken)
         {
             SentMessages.Add((chatId, text));
+            return Task.CompletedTask;
+        }
+
+        public Task SetCommandsAsync(
+            IReadOnlyList<(string Command, string Description)> commands,
+            CancellationToken cancellationToken)
+        {
+            ConfiguredCommands.Add(commands);
             return Task.CompletedTask;
         }
 

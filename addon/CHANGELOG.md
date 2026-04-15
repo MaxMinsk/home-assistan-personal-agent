@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.19
+
+- Publish Telegram command metadata via `setMyCommands`, so Telegram UI shows command hints when user types `/`.
+- Register command hints at gateway startup with retry-on-failure behavior and explicit diagnostics logs.
+- Keep command names Telegram-compatible (lowercase) while preserving existing case-insensitive command handling.
+- Extend Telegram test adapter with command registration support.
+
+
 ## 0.2.18
 
 - Add configurable memory retrieval mode: `before_invoke` (auto-injected vector recall) or `on_demand_tool` (explicit `search_conversation_memory` tool calls by the agent).

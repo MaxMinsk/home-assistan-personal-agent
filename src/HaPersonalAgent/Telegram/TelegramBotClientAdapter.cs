@@ -54,6 +54,27 @@ public sealed class TelegramBotClientAdapter : ITelegramBotClientAdapter
             text: text,
             cancellationToken: cancellationToken);
 
+    public async Task SetCommandsAsync(
+        IReadOnlyList<(string Command, string Description)> commands,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(commands);
+
+        var botCommands = commands
+            .Where(command =>
+                !string.IsNullOrWhiteSpace(command.Command)
+                && !string.IsNullOrWhiteSpace(command.Description))
+            .Select(command => new BotCommand
+            {
+                Command = command.Command,
+                Description = command.Description,
+            })
+            .ToArray();
+        await _client.SetMyCommands(
+            commands: botCommands,
+            cancellationToken: cancellationToken);
+    }
+
     public async Task SendConfirmationMessageAsync(
         long chatId,
         string text,
