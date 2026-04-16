@@ -830,6 +830,8 @@ public sealed class TelegramUpdateHandler
             $"Context(loaded): {contextSnapshot.LoadedHistoryMessageCount} / {contextSnapshot.MaxContextMessages} messages",
             $"Context(tokens~): {contextSnapshot.EstimatedContextTokenCount} (history {contextSnapshot.EstimatedHistoryTokenCount}, summary {contextSnapshot.EstimatedPersistedSummaryTokenCount}, capsules {contextSnapshot.EstimatedProjectCapsuleTokenCount}, scaffolding {contextSnapshot.EstimatedMessageScaffoldingTokenCount}; heuristic UTF8 bytes/4)",
             $"PersistedSummary: present {contextSnapshot.PersistedSummaryPresent}, version {contextSnapshot.PersistedSummaryVersion}, length {contextSnapshot.PersistedSummaryLength}, sourceLastMessageId {contextSnapshot.PersistedSummarySourceLastMessageId}, messagesSinceSummary {contextSnapshot.MessagesSincePersistedSummary}",
+            $"PersistedSummary(refresh): suggested {contextSnapshot.PersistedSummaryRefreshSuggested}, reason {contextSnapshot.PersistedSummaryRefreshReason}, threshold {contextSnapshot.PersistedSummaryRefreshThreshold} messages",
+            $"PersistedSummary(quality): structured {contextSnapshot.PersistedSummaryStructuredContract}, facts {contextSnapshot.PersistedSummaryFactsCount}, conflicts {contextSnapshot.PersistedSummaryConflictsCount}, history/summary compression {contextSnapshot.PersistedSummaryHistoryToSummaryCompressionRatio:0.##}x",
             $"Telegram allowlist users: {status.Configuration.AllowedTelegramUserCount}");
     }
 

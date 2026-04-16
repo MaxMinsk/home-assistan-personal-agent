@@ -60,14 +60,18 @@ public sealed class DialogueService
             latestMessageId);
         var memoryRetrievalMode = AgentOptions.NormalizeMemoryRetrievalMode(_agentOptions.Value.MemoryRetrievalMode);
         var autoMemoryRetrievalEnabled = AgentOptions.IsBeforeInvokeRetrieval(memoryRetrievalMode);
-        var shouldRefreshPersistedSummary = persistedSummary is null
-            || messagesSincePersistedSummary >= PersistedSummaryRefreshMessageThreshold;
         var boundedHistory = await _boundedChatHistoryProvider.LoadAsync(
             conversationKey,
             request.Text,
             maxMessages,
             includeRetrievedMemory: autoMemoryRetrievalEnabled,
             cancellationToken);
+        var summaryRefreshDecision = PersistedSummaryRefreshPolicy.EvaluateAuto(
+            persistedSummary,
+            messagesSincePersistedSummary,
+            PersistedSummaryRefreshMessageThreshold,
+            request.Text,
+            boundedHistory.RecentMessages);
         var capsulePromptContext = await _projectCapsuleService.BuildPromptContextAsync(
             conversationKey,
             cancellationToken);
@@ -78,7 +82,7 @@ public sealed class DialogueService
         var combinedMemoryCount = capsulePromptContext.CapsuleCount + vectorRetrievedMemoryCount;
         var history = boundedHistory.RecentMessages;
         _logger.LogInformation(
-            "Dialogue request {CorrelationId} started for {ConversationKey} ({Transport}/{ConversationId}, participant {ParticipantId}) with profile {ExecutionProfile}, text length {TextLength}, history messages {HistoryMessageCount}, memory retrieval mode {MemoryRetrievalMode}, auto retrieval {AutoMemoryRetrievalEnabled}, vector retrieved memories {VectorRetrievedMemoryCount}, project capsules in prompt {ProjectCapsuleCount}, combined retrieved memories {RetrievedMemoryCount}, persisted summary present {PersistedSummaryPresent}, persisted summary version {PersistedSummaryVersion}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}.",
+            "Dialogue request {CorrelationId} started for {ConversationKey} ({Transport}/{ConversationId}, participant {ParticipantId}) with profile {ExecutionProfile}, text length {TextLength}, history messages {HistoryMessageCount}, memory retrieval mode {MemoryRetrievalMode}, auto retrieval {AutoMemoryRetrievalEnabled}, vector retrieved memories {VectorRetrievedMemoryCount}, project capsules in prompt {ProjectCapsuleCount}, combined retrieved memories {RetrievedMemoryCount}, persisted summary present {PersistedSummaryPresent}, persisted summary version {PersistedSummaryVersion}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}, persisted summary refresh reason {PersistedSummaryRefreshReason}.",
             request.CorrelationId,
             conversationKey,
             request.Conversation.Transport,
@@ -95,7 +99,8 @@ public sealed class DialogueService
             persistedSummary is not null,
             persistedSummary?.SummaryVersion ?? 0,
             messagesSincePersistedSummary,
-            shouldRefreshPersistedSummary);
+            summaryRefreshDecision.ShouldRefresh,
+            summaryRefreshDecision.Reason);
 
         var now = DateTimeOffset.UtcNow;
         await _stateRepository.AppendRawEventsAsync(
@@ -124,7 +129,8 @@ public sealed class DialogueService
                     persistedSummary: persistedSummary?.Summary,
                     retrievedMemoryContext: combinedMemoryContext,
                     retrievedMemoryCount: combinedMemoryCount,
-                    shouldRefreshPersistedSummary: shouldRefreshPersistedSummary,
+                    shouldRefreshPersistedSummary: summaryRefreshDecision.ShouldRefresh,
+                    persistedSummaryRefreshReason: summaryRefreshDecision.Reason,
                     messagesSincePersistedSummary: messagesSincePersistedSummary,
                     memoryRetrievalMode: memoryRetrievalMode,
                     conversationKey: conversationKey,
@@ -373,13 +379,14 @@ public sealed class DialogueService
         }
 
         _logger.LogInformation(
-            "Persisted summary refresh {CorrelationId} started for {ConversationKey}; history messages {HistoryMessageCount}, persisted summary present {PersistedSummaryPresent}, persisted summary version {PersistedSummaryVersion}, messages since persisted summary {MessagesSincePersistedSummary}.",
+            "Persisted summary refresh {CorrelationId} started for {ConversationKey}; history messages {HistoryMessageCount}, persisted summary present {PersistedSummaryPresent}, persisted summary version {PersistedSummaryVersion}, messages since persisted summary {MessagesSincePersistedSummary}, refresh reason {PersistedSummaryRefreshReason}.",
             correlationId,
             conversationKey,
             history.Count,
             persistedSummary is not null,
             persistedSummary?.SummaryVersion ?? 0,
-            messagesSincePersistedSummary);
+            messagesSincePersistedSummary,
+            PersistedSummaryRefreshReasons.Manual);
 
         AgentRuntimeResponse response;
         try
@@ -391,6 +398,7 @@ public sealed class DialogueService
                     conversationMessages: history,
                     persistedSummary: persistedSummary?.Summary,
                     shouldRefreshPersistedSummary: true,
+                    persistedSummaryRefreshReason: PersistedSummaryRefreshReasons.Manual,
                     forcePersistedSummaryRefresh: true,
                     messagesSincePersistedSummary: Math.Max(
                         messagesSincePersistedSummary,
@@ -525,6 +533,16 @@ public sealed class DialogueService
             conversationKey,
             cancellationToken);
         var messagesSinceSummary = CountMessagesSinceSummary(summary, latestMessageId);
+        var summaryQuality = PersistedSummaryQualityAnalyzer.Analyze(summary?.Summary);
+        var summaryRefreshDecision = PersistedSummaryRefreshPolicy.EvaluateStatus(
+            summary,
+            messagesSinceSummary,
+            PersistedSummaryRefreshMessageThreshold);
+        var historyToSummaryCompressionRatio = contextTokenEstimate.SummaryTokens <= 0
+            ? 0d
+            : Math.Round(
+                contextTokenEstimate.HistoryTokens / (double)contextTokenEstimate.SummaryTokens,
+                2);
 
         return new DialogueContextSnapshot(
             conversationKey,
@@ -543,10 +561,17 @@ public sealed class DialogueService
             MaxContextMessages: maxMessages,
             LoadedHistoryMessageCount: loadedHistoryMessages.Count,
             MessagesSincePersistedSummary: messagesSinceSummary,
+            PersistedSummaryRefreshThreshold: PersistedSummaryRefreshMessageThreshold,
+            PersistedSummaryRefreshSuggested: summaryRefreshDecision.ShouldRefresh,
+            PersistedSummaryRefreshReason: summaryRefreshDecision.Reason,
             PersistedSummaryPresent: summary is not null,
             PersistedSummaryLength: summary?.Summary.Length ?? 0,
             PersistedSummaryVersion: summary?.SummaryVersion ?? 0,
             PersistedSummarySourceLastMessageId: summary?.SourceLastMessageId ?? 0,
+            PersistedSummaryStructuredContract: summaryQuality.HasStructuredContract,
+            PersistedSummaryFactsCount: summaryQuality.FactsCount,
+            PersistedSummaryConflictsCount: summaryQuality.ConflictsCount,
+            PersistedSummaryHistoryToSummaryCompressionRatio: historyToSummaryCompressionRatio,
             EstimatedContextTokenCount: contextTokenEstimate.TotalTokens,
             EstimatedHistoryTokenCount: contextTokenEstimate.HistoryTokens,
             EstimatedPersistedSummaryTokenCount: contextTokenEstimate.SummaryTokens,

@@ -280,6 +280,7 @@ public class DialogueServiceTests
             Assert.Equal(2, runtime.Calls.Count);
             Assert.Equal("Persisted summary v1", runtime.Calls[1].Context.PersistedSummary);
             Assert.False(runtime.Calls[1].Context.ShouldRefreshPersistedSummary);
+            Assert.Equal(PersistedSummaryRefreshReasons.None, runtime.Calls[1].Context.PersistedSummaryRefreshReason);
             Assert.Equal(0, runtime.Calls[1].Context.MessagesSincePersistedSummary);
         }
         finally
@@ -525,10 +526,17 @@ public class DialogueServiceTests
             Assert.False(snapshot.MemoryRetrievalOnDemandToolEnabled);
             Assert.Equal(24, snapshot.MaxContextMessages);
             Assert.Equal(3, snapshot.LoadedHistoryMessageCount);
+            Assert.False(snapshot.PersistedSummaryRefreshSuggested);
+            Assert.Equal(PersistedSummaryRefreshReasons.None, snapshot.PersistedSummaryRefreshReason);
+            Assert.Equal(12, snapshot.PersistedSummaryRefreshThreshold);
             Assert.True(snapshot.PersistedSummaryPresent);
             Assert.Equal("summary-1".Length, snapshot.PersistedSummaryLength);
             Assert.Equal(2, snapshot.PersistedSummaryVersion);
             Assert.Equal(1, snapshot.PersistedSummarySourceLastMessageId);
+            Assert.False(snapshot.PersistedSummaryStructuredContract);
+            Assert.Equal(0, snapshot.PersistedSummaryFactsCount);
+            Assert.Equal(0, snapshot.PersistedSummaryConflictsCount);
+            Assert.Equal(1d, snapshot.PersistedSummaryHistoryToSummaryCompressionRatio);
             Assert.Equal(latestMessageId.Value - 1, snapshot.MessagesSincePersistedSummary);
             Assert.Equal(30, snapshot.EstimatedContextTokenCount);
             Assert.Equal(3, snapshot.EstimatedHistoryTokenCount);
@@ -581,6 +589,7 @@ public class DialogueServiceTests
 
             Assert.Single(runtime.Calls);
             Assert.True(runtime.Calls[0].Context.ShouldRefreshPersistedSummary);
+            Assert.Equal(PersistedSummaryRefreshReasons.Threshold, runtime.Calls[0].Context.PersistedSummaryRefreshReason);
             Assert.True(runtime.Calls[0].Context.MessagesSincePersistedSummary >= 12);
         }
         finally
@@ -642,6 +651,7 @@ public class DialogueServiceTests
             Assert.Single(runtime.Calls);
             Assert.Equal(LlmExecutionProfile.Summarization, runtime.Calls[0].Context.ExecutionProfile);
             Assert.True(runtime.Calls[0].Context.ShouldRefreshPersistedSummary);
+            Assert.Equal(PersistedSummaryRefreshReasons.Manual, runtime.Calls[0].Context.PersistedSummaryRefreshReason);
             Assert.True(runtime.Calls[0].Context.ForcePersistedSummaryRefresh);
             Assert.Equal(2, stored.Count);
             Assert.NotNull(summary);

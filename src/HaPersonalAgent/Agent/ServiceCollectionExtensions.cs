@@ -18,6 +18,14 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<LlmProviderCapabilitiesResolver>();
         services.AddSingleton<LlmExecutionRouter>();
         services.AddSingleton<LlmExecutionPlanner>();
+        services.AddSingleton<AgentExecutionResolver>();
+        services.AddSingleton<AgentFallbackExecutor>();
+        services.AddSingleton<HomeAssistantMcpToolSetResolver>();
+        services.AddSingleton<AgentRuntimeDiagnosticsLogger>();
+        services.AddSingleton<AgentToolCatalog>();
+        services.AddSingleton<AgentCompactionPipelineFactory>();
+        services.AddSingleton<AgentMafFactory>();
+        services.AddSingleton<AgentRunner>();
         services.AddSingleton<IAgentRuntime, AgentRuntime>();
 
         return services;

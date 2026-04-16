@@ -2,7 +2,7 @@
 
 ## Контекст
 
-Этот документ фиксирует текущий memory flow в проекте **Home Assistant Personal Agent** после внедрения HAAG-034/HAAG-039/HAAG-043/HAAG-041/HAAG-044 (MAF compaction pipeline + persisted summary + bounded history/vector overflow + project capsules + retrieval mode switch).
+Этот документ фиксирует текущий memory flow в проекте **Home Assistant Personal Agent** после внедрения HAAG-034/HAAG-039/HAAG-043/HAAG-041/HAAG-044/HAAG-055 (MAF compaction pipeline + persisted summary + bounded history/vector overflow + project capsules + retrieval mode switch + summary quality overhaul).
 
 Цель документа:
 
@@ -17,7 +17,10 @@
 1. Короткая оперативная память:
    - `conversation_messages` хранит только recent window (`ConversationContextMaxTurns * 2`).
 2. Persisted summary:
-   - `conversation_summary` хранит долгоживущий сжатый контекст по разговору.
+   - `conversation_summary` хранит долгоживущий сжатый контекст по разговору;
+   - refresh policy фиксирует причину обновления: `missing`, `threshold`, `topic-shift`, `manual`;
+   - summarize prompt использует delta-merge контракт: `new_summary = merge(old_summary, summary(new_tail))`;
+   - `/status` показывает freshness/quality summary: refresh reason, facts/conflicts, structured-contract flag, history/summary compression.
 3. Overflow retrieval memory:
    - вытесненные сообщения архивируются в `conversation_vector_memory`;
    - режим retrieval конфигурируется: `before_invoke` или `on_demand_tool`;
@@ -41,6 +44,7 @@
 - В `on_demand_tool` retrieval зависит от решения модели вызвать tool; если model/tool reasoning слабый, recall может быть менее стабильным.
 - Капсулы пока conversation-scoped и не покрывают полноценный cross-conversation user/project graph.
 - Качество extraction зависит от batched LLM refresh и будет улучшаться отдельным facts-layer/quality pass.
+- Topic-shift refresh остается эвристикой (keyword overlap), а не semantic classifier на embedding/LLM judge.
 
 ## Что получим дальше (план)
 
@@ -141,6 +145,7 @@
 2. `DialogueService`:
    - считает `conversationKey`;
    - читает persisted summary из `conversation_summary`;
+   - считает `messagesSincePersistedSummary` и refresh decision с reason-кодом (`missing|threshold|topic-shift|none`);
    - читает `Agent:MemoryRetrievalMode`;
    - через `BoundedChatHistoryProvider` читает последние `N*2` сообщений из `conversation_messages`;
    - в `before_invoke` через тот же provider делает retrieval по `conversation_vector_memory` и собирает компактный memory-context блок;
@@ -159,7 +164,8 @@
      - `TruncationCompactionStrategy`
 4. Если `SummarizationCompactionStrategy` срабатывает:
    - summarizer делает отдельный LLM вызов через `CompactionSummarizationChatClient`;
-   - в `CompactionRunDiagnostics` фиксируется факт summarize-step.
+   - в `CompactionRunDiagnostics` фиксируется факт summarize-step;
+   - summarize prompt работает по merge-контракту и включает anti-drift правила + source attribution section.
 5. Финальный assistant response возвращается из runtime.
 6. Если summarize-step был, runtime добавляет в начало ответа явный маркер:
    - `[context-summary] ...`
@@ -171,7 +177,8 @@
    - `dialogue.assistant_message`
    - `dialogue.context_reset` (на `/resetContext`)
    - `dialogue.system_notification` (через `RecordSystemNotificationAsync`)
-9. Если runtime вернул summary candidate, `DialogueService` обновляет `conversation_summary` полным snapshot-перезаписыванием (upsert, новая версия, `source_last_message_id`), без склейки старых и новых абзацев.
+9. Если runtime вернул summary candidate, `DialogueService` обновляет `conversation_summary` полным snapshot-перезаписыванием (upsert, новая версия, `source_last_message_id`).
+   - семантическая склейка старого и нового выполняется на summarize-шаге через prompt-контракт, а не через string-конкатенацию в persistence-слое.
 10. После сохранения `DialogueService` запускает `BoundedChatHistoryProvider.ArchiveOverflowAndTrimAsync`:
     - определяет overflow сообщения за пределами окна (`ConversationContextMaxTurns * 2`);
     - архивирует их в `conversation_vector_memory`;
@@ -226,6 +233,24 @@
 5. текущий `User` message.
 
 Это оставляет `conversation_messages` чистым журналом, а summary работает как отдельный memory слой.
+
+## Persisted summary lifecycle (HAAG-055)
+
+1. Trigger decision:
+   - `missing`: persisted summary отсутствует;
+   - `threshold`: накоплено >= `PersistedSummaryRefreshMessageThreshold` новых сообщений;
+   - `topic-shift`: topic-shift эвристика сработала;
+   - `manual`: явная команда `/refreshSummary`.
+2. Summarize/merge:
+   - summarize prompt требует `new_summary = merge(old_summary, summary(new_tail))`;
+   - anti-drift правило запрещает выкидывать baseline facts без явного противоречия.
+3. Persist:
+   - в SQL сохраняется только финальный merged snapshot (`conversation_summary`);
+   - версия summary инкрементируется, `source_last_message_id` обновляется до последнего сохраненного turn.
+4. Quality gates and diagnostics:
+   - анализатор summary проверяет структурный контракт секций;
+   - считает `facts` и `conflicts` по секциям;
+   - в `/status` показываются freshness/reason + quality + compression ratio (`history_tokens / summary_tokens`).
 
 ## Тестовая верификация
 

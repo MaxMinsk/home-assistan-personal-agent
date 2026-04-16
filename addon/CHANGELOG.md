@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.23
+
+- Refactor `AgentRuntime` into orchestration facade + dedicated components (`Preflight`, `ExecutionResolver`, `MafFactory`, `Runner`, `ToolCatalog`, `CompactionPipelineFactory`, `FallbackExecutor`, diagnostics/result/toolset resolvers) and add focused unit tests for these components.
+- Upgrade persisted summary pipeline (HAAG-055): strict delta-merge summarization prompt (`new_summary = merge(old_summary, summary(new_tail))`), anti-drift rules, importance scoring, and source attribution section contract.
+- Add explicit persisted summary refresh reasons (`missing|threshold|topic-shift|manual`) in dialogue/runtime logs and summarize prompt diagnostics.
+- Extend `/status` diagnostics for summary quality/freshness: refresh suggestion + reason/threshold, structured-contract flag, facts/conflicts counters, and history/summary compression ratio.
+- Add summary quality harness tests (`PersistedSummaryPromptBuilder`, `PersistedSummaryRefreshPolicy`, `PersistedSummaryQualityAnalyzer`) and update memory/backlog docs.
+
+
 ## 0.2.22
 
 - Add adaptive LLM routing layer (`off|shadow|enforced`) with deterministic `model + reasoning` decision and per-run diagnostics.

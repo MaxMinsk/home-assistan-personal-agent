@@ -10,7 +10,15 @@
 
 - `TelegramBotGateway` / `TelegramUpdateHandler`: транспортный вход, команды `/status`, `/resetContext`, `/think`, `/approve`, `/reject`.
 - `DialogueService`: transport-agnostic orchestration (history load -> runtime call -> history append).
-- `AgentRuntime`: сборка execution plan, инициализация MAF agent, запуск `RunAsync`.
+- `AgentRuntime`: orchestration facade (health -> resolve -> run -> fallback -> response).
+- `AgentRuntimePreflight`: isolated config health validation.
+- `AgentExecutionResolver`: router+planner decision.
+- `AgentRunner`: single run attempt (sync/streaming) через MAF.
+- `AgentMafFactory`: сборка `ChatClientAgent` (middleware/tools/instructions/compaction wiring).
+- `AgentToolCatalog`: tools + instructions assembly.
+- `HomeAssistantMcpToolSetResolver`: загрузка read-only MCP tool set.
+- `AgentFallbackExecutor`: fallback policy small -> default.
+- `AgentRuntimeDiagnosticsLogger` / `AgentRuntimeResultFactory`: run diagnostics + response mapping.
 - `LlmExecutionRouter`: детерминированный routing-решатель `model + reasoning` перед вызовом LLM.
 - `LlmRoutingFallbackPolicy`: policy одного ретрая `small -> default` на retryable provider/model ошибках.
 - `LlmRoutingTelemetry`: counters/snapshot для `/status` и runtime diagnostics по routing buckets/fallback.
@@ -19,6 +27,8 @@
 - `ReasoningContentReplayChatClient`: per-run capture+replay reasoning metadata между tool-шагами.
 - `HomeAssistantMcpAgentToolProvider`: загрузка MCP tools, разделение read-only vs requires-confirmation.
 - `ConfirmationService`: lifecycle pending actions (`propose -> approve/reject -> execute`).
+
+Подробная схема модулей после `HAAG-052`: см. `agent_runtime_architecture.md`.
 
 ## Основной поток (обычное сообщение в Telegram)
 
