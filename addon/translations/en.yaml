@@ -47,6 +47,15 @@ configuration:
   llm_router_max_history_messages_for_small:
     name: LLM router history messages limit
     description: Maximum history message count allowed for routing to the small model.
+  llm_router_simple_max_input_chars:
+    name: LLM router simple path input limit
+    description: Maximum estimated input characters for the packed simple-chat context profile used by enforced routing.
+  llm_router_simple_max_history_messages:
+    name: LLM router simple path history limit
+    description: Maximum number of recent history messages kept in the packed simple-chat context profile.
+  llm_router_simple_allow_tools:
+    name: LLM router simple path allow tools
+    description: If disabled, enforced simple-chat route runs in no-tools profile (PureChat) to reduce latency and token usage.
   llm_router_deep_keywords:
     name: LLM router deep keywords
     description: Optional comma-separated keywords that force deep reasoning route (default keywords are used when empty).

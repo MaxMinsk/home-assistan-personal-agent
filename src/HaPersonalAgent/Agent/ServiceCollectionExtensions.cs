@@ -16,6 +16,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<AgentStatusTool>();
         services.AddSingleton<LlmRoutingTelemetry>();
         services.AddSingleton<LlmProviderCapabilitiesResolver>();
+        services.AddSingleton<LlmRoutingContextProfileBuilder>();
         services.AddSingleton<LlmExecutionRouter>();
         services.AddSingleton<LlmExecutionPlanner>();
         services.AddSingleton<AgentExecutionResolver>();

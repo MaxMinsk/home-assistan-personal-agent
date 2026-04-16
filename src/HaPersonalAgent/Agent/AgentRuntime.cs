@@ -121,7 +121,7 @@ public sealed class AgentRuntime : IAgentRuntime
             decision.SelectedPlan,
             cancellationToken);
         _diagnosticsLogger.LogRunStart(
-            context,
+            decision.EffectiveContext,
             health,
             decision,
             homeAssistantMcpTools);
@@ -135,7 +135,7 @@ public sealed class AgentRuntime : IAgentRuntime
         {
             response = await _agentRunner.RunOnceAsync(
                 message,
-                context,
+                decision.EffectiveContext,
                 llmOptions,
                 decision.SelectedModel,
                 homeAssistantMcpTools,
@@ -185,7 +185,7 @@ public sealed class AgentRuntime : IAgentRuntime
             {
                 response = await _agentRunner.RunOnceAsync(
                     message,
-                    context,
+                    decision.EffectiveContext,
                     llmOptions,
                     executedModel,
                     homeAssistantMcpTools,

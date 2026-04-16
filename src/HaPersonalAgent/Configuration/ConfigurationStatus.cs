@@ -14,6 +14,9 @@ public sealed record ConfigurationStatus(
     string LlmRouterSmallModel,
     int LlmRouterMaxInputCharsForSmall,
     int LlmRouterMaxHistoryMessagesForSmall,
+    int LlmRouterSimpleMaxInputChars,
+    int LlmRouterSimpleMaxHistoryMessages,
+    bool LlmRouterSimpleAllowTools,
     string LlmRouterDeepKeywords,
     bool LlmApiKeyConfigured,
     bool TelegramBotTokenConfigured,
@@ -52,6 +55,9 @@ public sealed record ConfigurationStatus(
                 : llmOptions.RouterSmallModel.Trim(),
             Math.Clamp(llmOptions.RouterMaxInputCharsForSmall, 200, 24_000),
             Math.Clamp(llmOptions.RouterMaxHistoryMessagesForSmall, 2, 64),
+            Math.Clamp(llmOptions.RouterSimpleMaxInputChars, 400, 24_000),
+            Math.Clamp(llmOptions.RouterSimpleMaxHistoryMessages, 2, 64),
+            llmOptions.RouterSimpleAllowTools,
             string.IsNullOrWhiteSpace(llmOptions.RouterDeepKeywords)
                 ? "пошагово,step-by-step,deep reasoning"
                 : llmOptions.RouterDeepKeywords.Trim(),

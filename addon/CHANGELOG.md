@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.24
+
+- Complete HAAG-056 routing overhaul for `enforced` mode: deterministic intent classes (`simple_chat`, `complex_analysis`, `tool_heavy`, `deep_reasoning`) with explicit `simple_packed` vs `default_full` context profiles.
+- Add `LlmRoutingContextProfileBuilder` and apply packed context for simple-chat route (bounded recent tail, trimmed summary, retrieval-memory drop) so small-path can work under long raw history.
+- Add new router configuration options for simple-path budgets and behavior (`llm_router_simple_max_input_chars`, `llm_router_simple_max_history_messages`, `llm_router_simple_allow_tools`) in app settings and Home Assistant add-on UI mapping.
+- Extend runtime and `/status` diagnostics with router intent/profile/blocker visibility plus richer decision reason traces for debugging route selection.
+- Expand test coverage for routing matrix and packing behavior (simple under large context, tool-heavy/default guardrail, prompt-shape blocker, resolver effective profile, context profile builder, config binding/status).
+
+
 ## 0.2.23
 
 - Refactor `AgentRuntime` into orchestration facade + dedicated components (`Preflight`, `ExecutionResolver`, `MafFactory`, `Runner`, `ToolCatalog`, `CompactionPipelineFactory`, `FallbackExecutor`, diagnostics/result/toolset resolvers) and add focused unit tests for these components.

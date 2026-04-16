@@ -9,10 +9,12 @@ namespace HaPersonalAgent.Agent;
 /// </summary>
 public sealed record AgentExecutionDecision(
     LlmOptions LlmOptions,
-    AgentContext Context,
+    AgentContext OriginalContext,
+    AgentContext EffectiveContext,
     string UserMessage,
     string DefaultModel,
     LlmRoutingDecision RoutingDecision,
+    string EffectiveContextProfile,
     string SelectedModel,
     string? SelectedThinkingModeOverride,
     LlmExecutionPlan SelectedPlan)

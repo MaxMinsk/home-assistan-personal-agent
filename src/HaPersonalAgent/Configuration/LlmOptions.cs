@@ -27,5 +27,11 @@ public sealed class LlmOptions
 
     public int RouterMaxHistoryMessagesForSmall { get; set; } = 10;
 
+    public int RouterSimpleMaxInputChars { get; set; } = 6_000;
+
+    public int RouterSimpleMaxHistoryMessages { get; set; } = 6;
+
+    public bool RouterSimpleAllowTools { get; set; } = false;
+
     public string RouterDeepKeywords { get; set; } = "пошагово,step-by-step,deep reasoning";
 }

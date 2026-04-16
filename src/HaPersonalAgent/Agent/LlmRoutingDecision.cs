@@ -13,6 +13,9 @@ public sealed record LlmRoutingDecision(
     string ReasoningTarget,
     string? ThinkingModeOverride,
     string DecisionBucket,
+    string IntentClass,
+    string ContextProfile,
+    string? ContextProfileBlockerReason,
     string Reason,
     int EstimatedInputChars,
     int HistoryMessageCount)
@@ -27,6 +30,14 @@ public sealed record LlmRoutingDecision(
     public const string DecisionBucketSmallDisabled = "small+disabled";
     public const string DecisionBucketDefaultProviderDefault = "default+provider-default";
     public const string DecisionBucketDefaultDeep = "default+deep";
+
+    public const string IntentClassSimpleChat = "simple_chat";
+    public const string IntentClassComplexAnalysis = "complex_analysis";
+    public const string IntentClassToolHeavy = "tool_heavy";
+    public const string IntentClassDeepReasoning = "deep_reasoning";
+
+    public const string ContextProfileDefaultFull = "default_full";
+    public const string ContextProfileSimplePacked = "simple_packed";
 
     public bool UsesSmallModelTarget =>
         string.Equals(ModelTarget, ModelTargetSmallContextFast, StringComparison.Ordinal);

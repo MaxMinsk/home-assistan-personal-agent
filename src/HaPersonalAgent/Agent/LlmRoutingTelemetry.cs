@@ -23,6 +23,9 @@ public sealed class LlmRoutingTelemetry
     private string _lastModelTarget = LlmRoutingDecision.ModelTargetDefault;
     private string _lastReasoningTarget = LlmRoutingDecision.ReasoningTargetProviderDefault;
     private string _lastDecisionBucket = LlmRoutingDecision.DecisionBucketDefaultProviderDefault;
+    private string _lastIntentClass = LlmRoutingDecision.IntentClassComplexAnalysis;
+    private string _lastContextProfile = LlmRoutingDecision.ContextProfileDefaultFull;
+    private string _lastContextProfileBlockerReason = "none";
     private bool _lastApplied;
     private bool _lastFallbackApplied;
     private string _lastDecisionReason = "no decisions yet.";
@@ -54,6 +57,11 @@ public sealed class LlmRoutingTelemetry
         _lastModelTarget = decision.ModelTarget;
         _lastReasoningTarget = decision.ReasoningTarget;
         _lastDecisionBucket = decision.DecisionBucket;
+        _lastIntentClass = decision.IntentClass;
+        _lastContextProfile = decision.ContextProfile;
+        _lastContextProfileBlockerReason = string.IsNullOrWhiteSpace(decision.ContextProfileBlockerReason)
+            ? "none"
+            : decision.ContextProfileBlockerReason;
         _lastApplied = decision.IsApplied;
         _lastDecisionReason = decision.Reason;
     }
@@ -96,6 +104,9 @@ public sealed class LlmRoutingTelemetry
             LastModelTarget: _lastModelTarget,
             LastReasoningTarget: _lastReasoningTarget,
             LastDecisionBucket: _lastDecisionBucket,
+            LastIntentClass: _lastIntentClass,
+            LastContextProfile: _lastContextProfile,
+            LastContextProfileBlockerReason: _lastContextProfileBlockerReason,
             LastApplied: _lastApplied,
             LastFallbackApplied: _lastFallbackApplied,
             LastDecisionReason: _lastDecisionReason);
@@ -120,6 +131,9 @@ public sealed record LlmRoutingTelemetrySnapshot(
     string LastModelTarget,
     string LastReasoningTarget,
     string LastDecisionBucket,
+    string LastIntentClass,
+    string LastContextProfile,
+    string LastContextProfileBlockerReason,
     bool LastApplied,
     bool LastFallbackApplied,
     string LastDecisionReason);

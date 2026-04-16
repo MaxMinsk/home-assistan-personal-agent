@@ -62,6 +62,9 @@ public class AgentFallbackExecutorTests
             ReasoningTarget: LlmRoutingDecision.ReasoningTargetDisabled,
             ThinkingModeOverride: LlmThinkingModes.Disabled,
             DecisionBucket: LlmRoutingDecision.DecisionBucketSmallDisabled,
+            IntentClass: LlmRoutingDecision.IntentClassSimpleChat,
+            ContextProfile: LlmRoutingDecision.ContextProfileSimplePacked,
+            ContextProfileBlockerReason: null,
             Reason: "test",
             EstimatedInputChars: 100,
             HistoryMessageCount: 2);
@@ -73,9 +76,11 @@ public class AgentFallbackExecutorTests
         return new AgentExecutionDecision(
             options,
             context,
+            context,
             UserMessage: "включи свет",
             DefaultModel: "kimi-k2.5",
             RoutingDecision: routingDecision,
+            EffectiveContextProfile: LlmRoutingDecision.ContextProfileSimplePacked,
             SelectedModel: "moonshot-v1-8k",
             SelectedThinkingModeOverride: LlmThinkingModes.Disabled,
             SelectedPlan: plan);

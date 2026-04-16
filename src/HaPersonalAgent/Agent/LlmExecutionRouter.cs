@@ -34,6 +34,39 @@ public sealed class LlmExecutionRouter
         "объясни",
     ];
 
+    private static readonly string[] ToolIntentMarkers =
+    [
+        "включи",
+        "выключи",
+        "turn on",
+        "turn off",
+        "mcp",
+        "home assistant",
+        "датчик",
+        "сенсор",
+        "температур",
+        "свет",
+        "таймер",
+        "камера",
+        "frigate",
+        "todo",
+        "список",
+        "капсул",
+        "project capsule",
+        "approve",
+        "reject",
+        "/approve",
+        "/reject",
+        "hass",
+    ];
+
+    private readonly LlmRoutingContextProfileBuilder _contextProfileBuilder;
+
+    public LlmExecutionRouter(LlmRoutingContextProfileBuilder? contextProfileBuilder = null)
+    {
+        _contextProfileBuilder = contextProfileBuilder ?? new LlmRoutingContextProfileBuilder();
+    }
+
     public LlmRoutingDecision Decide(
         LlmOptions options,
         AgentContext context,
@@ -48,17 +81,17 @@ public sealed class LlmExecutionRouter
         var normalizedDefaultModel = NormalizeModel(options.Model, fallback: "unknown-model");
         var normalizedSmallModel = NormalizeModel(options.RouterSmallModel, normalizedDefaultModel);
         var normalizedMessage = userMessage.Trim();
-        var estimatedInputChars = EstimateInputChars(context, normalizedMessage);
-        var historyMessageCount = context.ConversationMessages.Count;
-        var maxCharsForSmall = Math.Clamp(options.RouterMaxInputCharsForSmall, 200, 24_000);
-        var maxHistoryForSmall = Math.Clamp(options.RouterMaxHistoryMessagesForSmall, 2, 64);
+        var simpleMaxChars = Math.Clamp(options.RouterSimpleMaxInputChars, 400, 24_000);
+        var simpleMaxHistory = Math.Clamp(options.RouterSimpleMaxHistoryMessages, 2, 64);
         var deepKeywords = ParseKeywords(options.RouterDeepKeywords);
 
-        var hasDeepIntent = HasDeepIntent(profile, normalizedMessage, deepKeywords);
-        var fitsSmallContext = estimatedInputChars <= maxCharsForSmall
-            && historyMessageCount <= maxHistoryForSmall;
+        var defaultProfile = _contextProfileBuilder.BuildDefault(context, normalizedMessage);
+        var simplePackedProfile = _contextProfileBuilder.BuildSimplePacked(context, normalizedMessage, options);
+        var intentClass = ClassifyIntent(profile, normalizedMessage, deepKeywords);
+        var isSimplePromptShape = IsSimplePromptShape(normalizedMessage);
+        var fitsSimplePackedContext = simplePackedProfile.EstimatedInputChars <= simpleMaxChars
+            && simplePackedProfile.HistoryMessageCount <= simpleMaxHistory;
         var isSmallEligibleProfile = profile is LlmExecutionProfile.ToolEnabled or LlmExecutionProfile.PureChat;
-        var isSimplePrompt = IsSimpleOperationalPrompt(normalizedMessage);
 
         // Extension point: на следующем этапе сюда можно добавить feature flags:
         // 1) provider-specific budgets (tokens/$ per model),
@@ -67,10 +100,12 @@ public sealed class LlmExecutionRouter
         var candidateDecision = SelectCandidateDecision(
             normalizedDefaultModel,
             normalizedSmallModel,
-            hasDeepIntent,
-            fitsSmallContext,
+            intentClass,
+            isSimplePromptShape,
+            fitsSimplePackedContext,
             isSmallEligibleProfile,
-            isSimplePrompt);
+            defaultProfile,
+            simplePackedProfile);
 
         var isApplied = string.Equals(routerMode, LlmRouterModes.Enforced, StringComparison.Ordinal);
         var selectedModel = isApplied
@@ -83,13 +118,13 @@ public sealed class LlmExecutionRouter
         var reason = BuildReason(
             routerMode,
             candidateDecision.Reason,
-            isSimplePrompt,
-            fitsSmallContext,
-            hasDeepIntent,
-            estimatedInputChars,
-            historyMessageCount,
-            maxCharsForSmall,
-            maxHistoryForSmall);
+            intentClass,
+            candidateDecision.ContextProfile,
+            candidateDecision.ContextProfileBlockerReason,
+            defaultProfile,
+            simplePackedProfile,
+            simpleMaxChars,
+            simpleMaxHistory);
 
         return candidateDecision with
         {
@@ -98,20 +133,20 @@ public sealed class LlmExecutionRouter
             SelectedModel = selectedModel,
             ThinkingModeOverride = thinkingModeOverride,
             Reason = reason,
-            EstimatedInputChars = estimatedInputChars,
-            HistoryMessageCount = historyMessageCount,
         };
     }
 
     private static LlmRoutingDecision SelectCandidateDecision(
         string defaultModel,
         string smallModel,
-        bool hasDeepIntent,
-        bool fitsSmallContext,
+        string intentClass,
+        bool isSimplePromptShape,
+        bool fitsSimplePackedContext,
         bool isSmallEligibleProfile,
-        bool isSimplePrompt)
+        LlmRoutingContextProfile defaultProfile,
+        LlmRoutingContextProfile simplePackedProfile)
     {
-        if (hasDeepIntent)
+        if (string.Equals(intentClass, LlmRoutingDecision.IntentClassDeepReasoning, StringComparison.Ordinal))
         {
             return new LlmRoutingDecision(
                 RouterMode: LlmRouterModes.Off,
@@ -121,12 +156,123 @@ public sealed class LlmExecutionRouter
                 ReasoningTarget: LlmRoutingDecision.ReasoningTargetDeep,
                 ThinkingModeOverride: LlmThinkingModes.Enabled,
                 DecisionBucket: LlmRoutingDecision.DecisionBucketDefaultDeep,
+                IntentClass: intentClass,
+                ContextProfile: LlmRoutingDecision.ContextProfileDefaultFull,
+                ContextProfileBlockerReason: null,
                 Reason: "deep intent marker detected in request/profile.",
-                EstimatedInputChars: 0,
-                HistoryMessageCount: 0);
+                EstimatedInputChars: defaultProfile.EstimatedInputChars,
+                HistoryMessageCount: defaultProfile.HistoryMessageCount);
         }
 
-        if (isSmallEligibleProfile && fitsSmallContext && isSimplePrompt)
+        if (string.Equals(intentClass, LlmRoutingDecision.IntentClassToolHeavy, StringComparison.Ordinal))
+        {
+            return new LlmRoutingDecision(
+                RouterMode: LlmRouterModes.Off,
+                IsApplied: false,
+                ModelTarget: LlmRoutingDecision.ModelTargetDefault,
+                SelectedModel: defaultModel,
+                ReasoningTarget: LlmRoutingDecision.ReasoningTargetProviderDefault,
+                ThinkingModeOverride: null,
+                DecisionBucket: LlmRoutingDecision.DecisionBucketDefaultProviderDefault,
+                IntentClass: intentClass,
+                ContextProfile: LlmRoutingDecision.ContextProfileDefaultFull,
+                ContextProfileBlockerReason: "tool intent requires full tool-enabled context profile.",
+                Reason: "tool-heavy intent detected; keep default model/profile.",
+                EstimatedInputChars: defaultProfile.EstimatedInputChars,
+                HistoryMessageCount: defaultProfile.HistoryMessageCount);
+        }
+
+        if (string.Equals(intentClass, LlmRoutingDecision.IntentClassSimpleChat, StringComparison.Ordinal))
+        {
+            if (!isSmallEligibleProfile)
+            {
+                return new LlmRoutingDecision(
+                    RouterMode: LlmRouterModes.Off,
+                    IsApplied: false,
+                    ModelTarget: LlmRoutingDecision.ModelTargetDefault,
+                    SelectedModel: defaultModel,
+                    ReasoningTarget: LlmRoutingDecision.ReasoningTargetProviderDefault,
+                    ThinkingModeOverride: null,
+                    DecisionBucket: LlmRoutingDecision.DecisionBucketDefaultProviderDefault,
+                    IntentClass: intentClass,
+                    ContextProfile: LlmRoutingDecision.ContextProfileDefaultFull,
+                    ContextProfileBlockerReason: "execution profile is not eligible for small-path routing.",
+                    Reason: "simple intent detected but execution profile is not small-route eligible.",
+                    EstimatedInputChars: defaultProfile.EstimatedInputChars,
+                    HistoryMessageCount: defaultProfile.HistoryMessageCount);
+            }
+
+            if (!isSimplePromptShape)
+            {
+                return new LlmRoutingDecision(
+                    RouterMode: LlmRouterModes.Off,
+                    IsApplied: false,
+                    ModelTarget: LlmRoutingDecision.ModelTargetDefault,
+                    SelectedModel: defaultModel,
+                    ReasoningTarget: LlmRoutingDecision.ReasoningTargetProviderDefault,
+                    ThinkingModeOverride: null,
+                    DecisionBucket: LlmRoutingDecision.DecisionBucketDefaultProviderDefault,
+                    IntentClass: intentClass,
+                    ContextProfile: LlmRoutingDecision.ContextProfileDefaultFull,
+                    ContextProfileBlockerReason: "simple intent exceeds prompt-shape guardrails (too long/multiline).",
+                    Reason: "simple intent detected but prompt shape is too large for deterministic small-path.",
+                    EstimatedInputChars: defaultProfile.EstimatedInputChars,
+                    HistoryMessageCount: defaultProfile.HistoryMessageCount);
+            }
+
+            if (!fitsSimplePackedContext)
+            {
+                return new LlmRoutingDecision(
+                    RouterMode: LlmRouterModes.Off,
+                    IsApplied: false,
+                    ModelTarget: LlmRoutingDecision.ModelTargetDefault,
+                    SelectedModel: defaultModel,
+                    ReasoningTarget: LlmRoutingDecision.ReasoningTargetProviderDefault,
+                    ThinkingModeOverride: null,
+                    DecisionBucket: LlmRoutingDecision.DecisionBucketDefaultProviderDefault,
+                    IntentClass: intentClass,
+                    ContextProfile: LlmRoutingDecision.ContextProfileDefaultFull,
+                    ContextProfileBlockerReason: "simple packed context exceeds configured budget.",
+                    Reason: "simple intent detected but packed context does not fit simple-path budget.",
+                    EstimatedInputChars: defaultProfile.EstimatedInputChars,
+                    HistoryMessageCount: defaultProfile.HistoryMessageCount);
+            }
+
+            return new LlmRoutingDecision(
+                RouterMode: LlmRouterModes.Off,
+                IsApplied: false,
+                ModelTarget: LlmRoutingDecision.ModelTargetSmallContextFast,
+                SelectedModel: smallModel,
+                ReasoningTarget: LlmRoutingDecision.ReasoningTargetDisabled,
+                ThinkingModeOverride: LlmThinkingModes.Disabled,
+                DecisionBucket: LlmRoutingDecision.DecisionBucketSmallDisabled,
+                IntentClass: intentClass,
+                ContextProfile: LlmRoutingDecision.ContextProfileSimplePacked,
+                ContextProfileBlockerReason: null,
+                Reason: "simple-chat intent with packed context inside simple-route budget.",
+                EstimatedInputChars: simplePackedProfile.EstimatedInputChars,
+                HistoryMessageCount: simplePackedProfile.HistoryMessageCount);
+        }
+
+        if (string.Equals(intentClass, LlmRoutingDecision.IntentClassComplexAnalysis, StringComparison.Ordinal))
+        {
+            return new LlmRoutingDecision(
+                RouterMode: LlmRouterModes.Off,
+                IsApplied: false,
+                ModelTarget: LlmRoutingDecision.ModelTargetDefault,
+                SelectedModel: defaultModel,
+                ReasoningTarget: LlmRoutingDecision.ReasoningTargetProviderDefault,
+                ThinkingModeOverride: null,
+                DecisionBucket: LlmRoutingDecision.DecisionBucketDefaultProviderDefault,
+                IntentClass: intentClass,
+                ContextProfile: LlmRoutingDecision.ContextProfileDefaultFull,
+                ContextProfileBlockerReason: null,
+                Reason: "complex-analysis intent detected; keep default model/profile.",
+                EstimatedInputChars: defaultProfile.EstimatedInputChars,
+                HistoryMessageCount: defaultProfile.HistoryMessageCount);
+        }
+
+        if (isSmallEligibleProfile && fitsSimplePackedContext && isSimplePromptShape)
         {
             return new LlmRoutingDecision(
                 RouterMode: LlmRouterModes.Off,
@@ -136,9 +282,12 @@ public sealed class LlmExecutionRouter
                 ReasoningTarget: LlmRoutingDecision.ReasoningTargetDisabled,
                 ThinkingModeOverride: LlmThinkingModes.Disabled,
                 DecisionBucket: LlmRoutingDecision.DecisionBucketSmallDisabled,
-                Reason: "short operational prompt in small context budget.",
-                EstimatedInputChars: 0,
-                HistoryMessageCount: 0);
+                IntentClass: LlmRoutingDecision.IntentClassSimpleChat,
+                ContextProfile: LlmRoutingDecision.ContextProfileSimplePacked,
+                ContextProfileBlockerReason: null,
+                Reason: "fallback simple-route path selected.",
+                EstimatedInputChars: simplePackedProfile.EstimatedInputChars,
+                HistoryMessageCount: simplePackedProfile.HistoryMessageCount);
         }
 
         return new LlmRoutingDecision(
@@ -149,9 +298,35 @@ public sealed class LlmExecutionRouter
             ReasoningTarget: LlmRoutingDecision.ReasoningTargetProviderDefault,
             ThinkingModeOverride: null,
             DecisionBucket: LlmRoutingDecision.DecisionBucketDefaultProviderDefault,
+            IntentClass: LlmRoutingDecision.IntentClassComplexAnalysis,
+            ContextProfile: LlmRoutingDecision.ContextProfileDefaultFull,
+            ContextProfileBlockerReason: "intent classification fallback selected default profile.",
             Reason: "default path keeps provider model and reasoning mode.",
-            EstimatedInputChars: 0,
-            HistoryMessageCount: 0);
+            EstimatedInputChars: defaultProfile.EstimatedInputChars,
+            HistoryMessageCount: defaultProfile.HistoryMessageCount);
+    }
+
+    private static string ClassifyIntent(
+        LlmExecutionProfile profile,
+        string message,
+        IReadOnlyList<string> deepKeywords)
+    {
+        if (HasDeepIntent(profile, message, deepKeywords))
+        {
+            return LlmRoutingDecision.IntentClassDeepReasoning;
+        }
+
+        if (HasToolIntent(message))
+        {
+            return LlmRoutingDecision.IntentClassToolHeavy;
+        }
+
+        if (IsComplexIntent(message))
+        {
+            return LlmRoutingDecision.IntentClassComplexAnalysis;
+        }
+
+        return LlmRoutingDecision.IntentClassSimpleChat;
     }
 
     private static bool HasDeepIntent(
@@ -193,9 +368,9 @@ public sealed class LlmExecutionRouter
             : DefaultDeepIntentKeywords;
     }
 
-    private static bool IsSimpleOperationalPrompt(string message)
+    private static bool IsSimplePromptShape(string message)
     {
-        if (message.Length > 260)
+        if (message.Length > 420)
         {
             return false;
         }
@@ -206,33 +381,38 @@ public sealed class LlmExecutionRouter
         }
 
         var tokenCount = message.Split(' ', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Length;
-        if (tokenCount > 48)
+        if (tokenCount > 72)
         {
             return false;
-        }
-
-        foreach (var marker in ComplexIntentMarkers)
-        {
-            if (message.Contains(marker, StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
         }
 
         return true;
     }
 
-    private static int EstimateInputChars(AgentContext context, string message)
+    private static bool IsComplexIntent(string message)
     {
-        var total = message.Length;
-        foreach (var historyMessage in context.ConversationMessages)
+        foreach (var marker in ComplexIntentMarkers)
         {
-            total += historyMessage.Text?.Length ?? 0;
+            if (message.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
         }
 
-        total += context.PersistedSummary?.Length ?? 0;
-        total += context.RetrievedMemoryContext?.Length ?? 0;
-        return total;
+        return false;
+    }
+
+    private static bool HasToolIntent(string message)
+    {
+        foreach (var marker in ToolIntentMarkers)
+        {
+            if (message.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string NormalizeModel(string? value, string fallback)
@@ -246,19 +426,26 @@ public sealed class LlmExecutionRouter
     private static string BuildReason(
         string routerMode,
         string selectedReason,
-        bool isSimplePrompt,
-        bool fitsSmallContext,
-        bool hasDeepIntent,
-        int estimatedInputChars,
-        int historyMessageCount,
-        int maxCharsForSmall,
-        int maxHistoryForSmall)
+        string intentClass,
+        string contextProfile,
+        string? contextProfileBlockerReason,
+        LlmRoutingContextProfile defaultProfile,
+        LlmRoutingContextProfile simplePackedProfile,
+        int simpleMaxChars,
+        int simpleMaxHistory)
     {
         // Extension point: если позже появится обучаемый scoring, здесь можно вернуть breakdown по весам feature-функций.
+        var blocker = string.IsNullOrWhiteSpace(contextProfileBlockerReason)
+            ? "none"
+            : contextProfileBlockerReason;
         return string.Join(
             " ",
             $"mode={routerMode};",
             selectedReason,
-            $"features(simple={isSimplePrompt}, smallContext={fitsSmallContext}, deepIntent={hasDeepIntent}, inputChars={estimatedInputChars}/{maxCharsForSmall}, historyMessages={historyMessageCount}/{maxHistoryForSmall}).");
+            $"intent={intentClass};",
+            $"contextProfile={contextProfile};",
+            $"blocker={blocker};",
+            $"profiles(default:chars={defaultProfile.EstimatedInputChars},history={defaultProfile.HistoryMessageCount};",
+            $"simplePacked:chars={simplePackedProfile.EstimatedInputChars}/{simpleMaxChars},history={simplePackedProfile.HistoryMessageCount}/{simpleMaxHistory}).");
     }
 }

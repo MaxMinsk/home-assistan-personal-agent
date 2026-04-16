@@ -371,7 +371,7 @@ public class AgentRuntimeTests
                     new AgentConversationMessage(AgentConversationRole.User, "Привет", DateTimeOffset.UtcNow),
                     new AgentConversationMessage(AgentConversationRole.Assistant, "Привет!", DateTimeOffset.UtcNow),
                 ]),
-            userMessage: "включи свет на кухне",
+            userMessage: "ну шо, чувствуешь себя обновленным?",
             profile: LlmExecutionProfile.ToolEnabled);
 
         Assert.Equal(LlmRouterModes.Enforced, decision.RouterMode);
@@ -381,6 +381,87 @@ public class AgentRuntimeTests
         Assert.Equal(LlmRoutingDecision.ReasoningTargetDisabled, decision.ReasoningTarget);
         Assert.Equal(LlmThinkingModes.Disabled, decision.ThinkingModeOverride);
         Assert.Equal(LlmRoutingDecision.DecisionBucketSmallDisabled, decision.DecisionBucket);
+        Assert.Equal(LlmRoutingDecision.IntentClassSimpleChat, decision.IntentClass);
+        Assert.Equal(LlmRoutingDecision.ContextProfileSimplePacked, decision.ContextProfile);
+        Assert.Null(decision.ContextProfileBlockerReason);
+    }
+
+    [Fact]
+    public void Router_keeps_default_model_for_tool_heavy_prompt_even_in_enforced_mode()
+    {
+        var router = new LlmExecutionRouter();
+        var decision = router.Decide(
+            new LlmOptions
+            {
+                Model = "kimi-k2.5",
+                RouterMode = LlmRouterModes.Enforced,
+                RouterSmallModel = "moonshot-v1-8k",
+            },
+            AgentContext.Create(),
+            userMessage: "включи свет на кухне",
+            profile: LlmExecutionProfile.ToolEnabled);
+
+        Assert.True(decision.IsApplied);
+        Assert.Equal(LlmRoutingDecision.ModelTargetDefault, decision.ModelTarget);
+        Assert.Equal("kimi-k2.5", decision.SelectedModel);
+        Assert.Equal(LlmRoutingDecision.IntentClassToolHeavy, decision.IntentClass);
+        Assert.Equal(LlmRoutingDecision.ContextProfileDefaultFull, decision.ContextProfile);
+        Assert.NotNull(decision.ContextProfileBlockerReason);
+    }
+
+    [Fact]
+    public void Router_uses_simple_packed_profile_even_when_raw_context_is_large()
+    {
+        var router = new LlmExecutionRouter();
+        var largeHistory = Enumerable.Range(1, 24)
+            .Select(index => new AgentConversationMessage(
+                index % 2 == 0 ? AgentConversationRole.Assistant : AgentConversationRole.User,
+                new string('x', 180),
+                DateTimeOffset.UtcNow))
+            .ToArray();
+        var decision = router.Decide(
+            new LlmOptions
+            {
+                Model = "kimi-k2.5",
+                RouterMode = LlmRouterModes.Enforced,
+                RouterSmallModel = "moonshot-v1-8k",
+                RouterMaxHistoryMessagesForSmall = 10,
+                RouterSimpleMaxHistoryMessages = 6,
+                RouterSimpleMaxInputChars = 3000,
+            },
+            AgentContext.Create(
+                conversationMessages: largeHistory,
+                persistedSummary: new string('s', 4000)),
+            userMessage: "привет, как настроение сегодня?",
+            profile: LlmExecutionProfile.ToolEnabled);
+
+        Assert.True(decision.IsApplied);
+        Assert.Equal(LlmRoutingDecision.ModelTargetSmallContextFast, decision.ModelTarget);
+        Assert.Equal(LlmRoutingDecision.ContextProfileSimplePacked, decision.ContextProfile);
+        Assert.Equal(LlmRoutingDecision.IntentClassSimpleChat, decision.IntentClass);
+    }
+
+    [Fact]
+    public void Router_keeps_default_when_simple_message_exceeds_shape_guardrail()
+    {
+        var router = new LlmExecutionRouter();
+        var longMessage = string.Join(' ', Enumerable.Repeat("обновление", 120));
+
+        var decision = router.Decide(
+            new LlmOptions
+            {
+                Model = "kimi-k2.5",
+                RouterMode = LlmRouterModes.Enforced,
+                RouterSmallModel = "moonshot-v1-8k",
+            },
+            AgentContext.Create(),
+            userMessage: longMessage,
+            profile: LlmExecutionProfile.ToolEnabled);
+
+        Assert.True(decision.IsApplied);
+        Assert.Equal(LlmRoutingDecision.ModelTargetDefault, decision.ModelTarget);
+        Assert.Equal(LlmRoutingDecision.ContextProfileDefaultFull, decision.ContextProfile);
+        Assert.NotNull(decision.ContextProfileBlockerReason);
     }
 
     [Fact]
@@ -465,6 +546,9 @@ public class AgentRuntimeTests
             ReasoningTarget: LlmRoutingDecision.ReasoningTargetDisabled,
             ThinkingModeOverride: LlmThinkingModes.Disabled,
             DecisionBucket: LlmRoutingDecision.DecisionBucketSmallDisabled,
+            IntentClass: LlmRoutingDecision.IntentClassSimpleChat,
+            ContextProfile: LlmRoutingDecision.ContextProfileSimplePacked,
+            ContextProfileBlockerReason: null,
             Reason: "test",
             EstimatedInputChars: 100,
             HistoryMessageCount: 2);
@@ -489,6 +573,9 @@ public class AgentRuntimeTests
             ReasoningTarget: LlmRoutingDecision.ReasoningTargetDisabled,
             ThinkingModeOverride: LlmThinkingModes.Disabled,
             DecisionBucket: LlmRoutingDecision.DecisionBucketSmallDisabled,
+            IntentClass: LlmRoutingDecision.IntentClassSimpleChat,
+            ContextProfile: LlmRoutingDecision.ContextProfileSimplePacked,
+            ContextProfileBlockerReason: null,
             Reason: "test",
             EstimatedInputChars: 100,
             HistoryMessageCount: 2);

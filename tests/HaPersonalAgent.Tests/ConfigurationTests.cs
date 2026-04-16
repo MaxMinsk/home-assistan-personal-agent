@@ -26,6 +26,9 @@ public class ConfigurationTests
         Assert.Equal("moonshot-v1-8k", llmOptions.RouterSmallModel);
         Assert.Equal(1800, llmOptions.RouterMaxInputCharsForSmall);
         Assert.Equal(10, llmOptions.RouterMaxHistoryMessagesForSmall);
+        Assert.Equal(6000, llmOptions.RouterSimpleMaxInputChars);
+        Assert.Equal(6, llmOptions.RouterSimpleMaxHistoryMessages);
+        Assert.False(llmOptions.RouterSimpleAllowTools);
         Assert.Equal("/data/state.sqlite", agentOptions.StateDatabasePath);
         Assert.Equal("/data/workspace", agentOptions.WorkspacePath);
         Assert.Equal(AgentOptions.MemoryRetrievalModeBeforeInvoke, agentOptions.MemoryRetrievalMode);
@@ -79,6 +82,9 @@ public class ConfigurationTests
                   "llm_router_small_model": "moonshot-v1-8k",
                   "llm_router_max_input_chars_for_small": 1600,
                   "llm_router_max_history_messages_for_small": 8,
+                  "llm_router_simple_max_input_chars": 4200,
+                  "llm_router_simple_max_history_messages": 5,
+                  "llm_router_simple_allow_tools": true,
                   "llm_router_deep_keywords": "пошагово,deep reasoning",
                   "state_database_path": "/tmp/state.sqlite",
                   "workspace_path": "/tmp/workspace",
@@ -109,6 +115,9 @@ public class ConfigurationTests
             Assert.Equal("moonshot-v1-8k", llmOptions.RouterSmallModel);
             Assert.Equal(1600, llmOptions.RouterMaxInputCharsForSmall);
             Assert.Equal(8, llmOptions.RouterMaxHistoryMessagesForSmall);
+            Assert.Equal(4200, llmOptions.RouterSimpleMaxInputChars);
+            Assert.Equal(5, llmOptions.RouterSimpleMaxHistoryMessages);
+            Assert.True(llmOptions.RouterSimpleAllowTools);
             Assert.Equal("пошагово,deep reasoning", llmOptions.RouterDeepKeywords);
             Assert.Equal("http://homeassistant.local:8123", homeAssistantOptions.Url);
             Assert.Equal("ha-secret", homeAssistantOptions.LongLivedAccessToken);
@@ -200,6 +209,9 @@ public class ConfigurationTests
         Assert.Equal("moonshot-v1-8k", status.LlmRouterSmallModel);
         Assert.Equal(1800, status.LlmRouterMaxInputCharsForSmall);
         Assert.Equal(10, status.LlmRouterMaxHistoryMessagesForSmall);
+        Assert.Equal(6000, status.LlmRouterSimpleMaxInputChars);
+        Assert.Equal(6, status.LlmRouterSimpleMaxHistoryMessages);
+        Assert.False(status.LlmRouterSimpleAllowTools);
         Assert.Equal(AgentOptions.MemoryRetrievalModeBeforeInvoke, status.MemoryRetrievalMode);
         Assert.True(status.TelegramBotTokenConfigured);
         Assert.False(status.TelegramReasoningPreviewEnabled);
