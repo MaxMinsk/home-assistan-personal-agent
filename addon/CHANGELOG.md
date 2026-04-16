@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.21
+
+- Add Telegram command `/showVector [N]` to inspect recent vector-memory entries for the current chat.
+- Extend Telegram command hints (`setMyCommands`) with `showvector`.
+- Improve reasoning preview UX: create delayed placeholder when reasoning stream is slow and add explicit lifecycle diagnostics logs.
+- Extend `/status` with approximate loaded-context token estimate and breakdown (`history/summary/capsules/scaffolding`) using MAF-aligned `UTF8 bytes / 4` heuristic.
+- Extend context snapshot model and tests for vector-memory command, reasoning preview diagnostics, and token-estimate reporting.
+
+
 ## 0.2.20
 
 - Add Telegram live reasoning preview (ephemeral): for long requests, show temporary reasoning progress and remove it after final answer.

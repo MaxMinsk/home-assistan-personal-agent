@@ -25,4 +25,9 @@ public sealed record DialogueContextSnapshot(
     bool PersistedSummaryPresent,
     int PersistedSummaryLength,
     int PersistedSummaryVersion,
-    long PersistedSummarySourceLastMessageId);
+    long PersistedSummarySourceLastMessageId,
+    int EstimatedContextTokenCount,
+    int EstimatedHistoryTokenCount,
+    int EstimatedPersistedSummaryTokenCount,
+    int EstimatedProjectCapsuleTokenCount,
+    int EstimatedMessageScaffoldingTokenCount);

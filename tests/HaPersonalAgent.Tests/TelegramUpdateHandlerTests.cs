@@ -235,6 +235,78 @@ public class TelegramUpdateHandlerTests
     }
 
     [Fact]
+    public async Task Show_vector_returns_vector_memory_for_current_conversation()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            await repository.UpsertConversationVectorMemoryAsync(
+                new[]
+                {
+                    new ConversationVectorMemoryEntry(
+                        "telegram:200:100",
+                        SourceMessageId: 12,
+                        AgentConversationRole.User,
+                        "Кодовое слово KESTREL-917.",
+                        "0.1,0.2,0.3,0.4",
+                        DateTimeOffset.UtcNow),
+                },
+                CancellationToken.None);
+            var runtime = new FakeAgentRuntime("unused");
+            var handler = CreateHandler(repository, runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 290, chatId: 200, userId: 100, text: "/showVector"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Empty(runtime.Calls);
+            Assert.Single(adapter.SentMessages);
+            Assert.Contains("Vector memory:", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("sourceMessageId=12", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("embeddingDims=4", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("KESTREL-917", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Show_vector_returns_empty_message_when_vector_memory_is_missing()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var runtime = new FakeAgentRuntime("unused");
+            var handler = CreateHandler(repository, runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 291, chatId: 200, userId: 100, text: "/showVector 5"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Empty(runtime.Calls);
+            Assert.Single(adapter.SentMessages);
+            Assert.Contains("Vector memory", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("отсутствует", adapter.SentMessages.Single().Text, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Refresh_capsules_extracts_capsules_from_raw_events_without_regular_dialogue_turn()
     {
         var databasePath = CreateTemporaryDatabasePath();
@@ -537,6 +609,7 @@ public class TelegramUpdateHandlerTests
             Assert.Contains("MemoryRetrieval: mode before_invoke, before-invoke True, on-demand-tool False", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("ProjectCapsules(stored): 0 entries", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("Context(loaded): 0 / 24 messages", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("Context(tokens~): 0 (history 0, summary 0, capsules 0, scaffolding 0; heuristic UTF8 bytes/4)", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("PersistedSummary: present False", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Empty(adapter.SentTypingActions);
         }
@@ -603,7 +676,9 @@ public class TelegramUpdateHandlerTests
 
             Assert.NotEmpty(adapter.SentMessagesWithIds);
             var previewMessage = adapter.SentMessagesWithIds[0];
-            Assert.Contains("Промежуточные рассуждения", previewMessage.Text, StringComparison.Ordinal);
+            Assert.True(
+                previewMessage.Text.Contains("Промежуточные рассуждения", StringComparison.Ordinal)
+                || previewMessage.Text.Contains("Думаю над ответом", StringComparison.Ordinal));
             Assert.Contains(
                 adapter.DeletedMessages,
                 item => item.ChatId == previewMessage.ChatId && item.MessageId == previewMessage.MessageId);
@@ -644,6 +719,45 @@ public class TelegramUpdateHandlerTests
             Assert.Empty(adapter.SentMessagesWithIds);
             Assert.Empty(adapter.DeletedMessages);
             Assert.Equal("финальный ответ", adapter.SentMessages.Single().Text);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Reasoning_preview_fallback_is_sent_for_long_response_without_reasoning_updates()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var runtime = new FakeAgentRuntime("финальный ответ")
+            {
+                ResponseDelayMs = 1300,
+            };
+            var handler = CreateHandler(CreateRepository(databasePath), runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 420, chatId: 200, userId: 100, text: "долго отвечай"),
+                new TelegramOptions
+                {
+                    AllowedUserIds = new long[] { 100 },
+                    ReasoningPreviewEnabled = true,
+                    ReasoningPreviewDelaySeconds = 1,
+                },
+                CancellationToken.None);
+
+            Assert.NotEmpty(adapter.SentMessagesWithIds);
+            var previewMessage = adapter.SentMessagesWithIds[0];
+            Assert.Contains("Думаю над ответом", previewMessage.Text, StringComparison.Ordinal);
+            Assert.Contains(
+                adapter.DeletedMessages,
+                item => item.ChatId == previewMessage.ChatId && item.MessageId == previewMessage.MessageId);
+            Assert.Equal("финальный ответ", adapter.SentMessages.Last().Text);
         }
         finally
         {
@@ -751,6 +865,39 @@ public class TelegramUpdateHandlerTests
             Assert.Equal(200, adapter.SentConfirmationMessages[0].ChatId);
             Assert.Equal("abc12345", adapter.SentConfirmationMessages[0].ConfirmationId);
             Assert.Contains("/approve abc12345", adapter.SentConfirmationMessages[0].Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Confirmation_prompt_with_only_approve_command_is_sent_with_inline_buttons()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var runtime = new FakeAgentRuntime(
+                """
+                Капсула обновлена и ждёт подтверждения.
+                Подтверди: /approve a54434b8
+                """);
+            var handler = CreateHandler(CreateRepository(databasePath), runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 310, chatId: 200, userId: 100, text: "исправь капсулу"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Single(runtime.Calls);
+            Assert.Single(adapter.SentConfirmationMessages);
+            Assert.Equal(200, adapter.SentConfirmationMessages[0].ChatId);
+            Assert.Equal("a54434b8", adapter.SentConfirmationMessages[0].ConfirmationId);
+            Assert.Contains("/approve a54434b8", adapter.SentConfirmationMessages[0].Text, StringComparison.Ordinal);
         }
         finally
         {
@@ -989,6 +1136,8 @@ public class TelegramUpdateHandlerTests
 
         public int ReasoningUpdateDelayMs { get; set; }
 
+        public int ResponseDelayMs { get; set; }
+
         public List<(string Message, AgentContext Context)> Calls { get; } = new();
 
         public AgentRuntimeHealth GetHealth() =>
@@ -1031,6 +1180,11 @@ public class TelegramUpdateHandlerTests
                         new AgentRuntimeReasoningUpdate(context.CorrelationId, reasoningUpdate),
                         cancellationToken);
                 }
+            }
+
+            if (ResponseDelayMs > 0)
+            {
+                await Task.Delay(ResponseDelayMs, cancellationToken);
             }
 
             return new AgentRuntimeResponse(

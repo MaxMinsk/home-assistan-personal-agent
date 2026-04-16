@@ -184,6 +184,8 @@ public class ConfigurationTests
         Assert.Equal(LlmThinkingModes.Auto, status.LlmThinkingMode);
         Assert.Equal(AgentOptions.MemoryRetrievalModeBeforeInvoke, status.MemoryRetrievalMode);
         Assert.True(status.TelegramBotTokenConfigured);
+        Assert.False(status.TelegramReasoningPreviewEnabled);
+        Assert.Equal(7, status.TelegramReasoningPreviewDelaySeconds);
         Assert.True(status.HomeAssistantTokenConfigured);
         Assert.DoesNotContain("moonshot-secret", statusText);
         Assert.DoesNotContain("telegram-secret", statusText);

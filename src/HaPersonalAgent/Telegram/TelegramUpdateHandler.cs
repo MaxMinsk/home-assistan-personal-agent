@@ -22,6 +22,8 @@ public sealed class TelegramUpdateHandler
     private const int MaxRawEventPayloadPreviewLength = 180;
     private const int DefaultRawEventLimit = 10;
     private const int MaxRawEventLimit = 25;
+    private const int DefaultVectorMemoryLimit = 10;
+    private const int MaxVectorMemoryLimit = 25;
     private const int DefaultProjectCapsuleLimit = 6;
     private const int MaxProjectCapsuleLimit = 12;
     private const int MaxReasoningPreviewLength = 1_500;
@@ -121,7 +123,7 @@ public sealed class TelegramUpdateHandler
                 update.Id);
             await client.SendMessageAsync(
                 chatId,
-                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary, /showRawEvents [N] покажет последние сырые события памяти, /showCapsules [N] покажет project capsules, /refreshCapsules обновит project capsules из raw events. Для действий с подтверждением можно нажать кнопки Подтвердить/Отклонить, а также доступны команды /approve <id> и /reject <id>.",
+                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary, /showRawEvents [N] покажет последние сырые события памяти, /showVector [N] покажет записи vector memory, /showCapsules [N] покажет project capsules, /refreshCapsules обновит project capsules из raw events. Для действий с подтверждением можно нажать кнопки Подтвердить/Отклонить, а также доступны команды /approve <id> и /reject <id>.",
                 cancellationToken);
             return;
         }
@@ -177,6 +179,21 @@ public sealed class TelegramUpdateHandler
                 chatId,
                 conversation,
                 rawEventsLimitArgument,
+                cancellationToken);
+            return;
+        }
+
+        if (TryReadCommandArgument(text, "/showVector", out var vectorMemoryLimitArgument))
+        {
+            _logger.LogInformation(
+                "Telegram update {TelegramUpdateId} routed to /showVector command for conversation {ConversationKey}.",
+                update.Id,
+                DialogueConversationKey.Create(conversation));
+            await HandleShowVectorMemoryCommandAsync(
+                client,
+                chatId,
+                conversation,
+                vectorMemoryLimitArgument,
                 cancellationToken);
             return;
         }
@@ -531,6 +548,46 @@ public sealed class TelegramUpdateHandler
             cancellationToken);
     }
 
+    private async Task HandleShowVectorMemoryCommandAsync(
+        ITelegramBotClientAdapter client,
+        long chatId,
+        DialogueConversation conversation,
+        string? limitArgument,
+        CancellationToken cancellationToken)
+    {
+        var vectorLimit = ParseVectorMemoryLimit(limitArgument);
+        var vectorEntries = await _dialogueService.GetVectorMemoryAsync(
+            conversation,
+            vectorLimit,
+            cancellationToken);
+
+        if (vectorEntries.Count == 0)
+        {
+            await client.SendMessageAsync(
+                chatId,
+                "Vector memory для этого чата пока отсутствует.",
+                cancellationToken);
+            return;
+        }
+
+        var lines = new List<string>
+        {
+            $"Vector memory: последние {vectorEntries.Count} (из запрошенных {vectorLimit})",
+        };
+
+        foreach (var entry in vectorEntries)
+        {
+            lines.Add(
+                $"#{entry.Id} sourceMessageId={entry.SourceMessageId} role={entry.Role} created={entry.CreatedAtUtc:O} embeddingDims={CountEmbeddingDimensions(entry.Embedding)}");
+            lines.Add($"  {FormatRawEventPayload(entry.Content)}");
+        }
+
+        await client.SendMessageAsync(
+            chatId,
+            NormalizeTelegramText(string.Join(Environment.NewLine, lines)),
+            cancellationToken);
+    }
+
     private async Task HandleShowProjectCapsulesCommandAsync(
         ITelegramBotClientAdapter client,
         long chatId,
@@ -617,7 +674,13 @@ public sealed class TelegramUpdateHandler
             client,
             chatId,
             _logger,
-            telegramOptions);
+            telegramOptions,
+            cancellationToken);
+        _logger.LogInformation(
+            "Dialogue request telegram-{TelegramUpdateId} reasoning preview configured: enabled {ReasoningPreviewEnabled}, delay seconds {ReasoningPreviewDelaySeconds}.",
+            updateId,
+            reasoningPreviewSession.IsEnabled,
+            reasoningPreviewSession.DelaySeconds);
         AgentRuntimeResponse response;
         try
         {
@@ -698,6 +761,7 @@ public sealed class TelegramUpdateHandler
             $"ReasoningSafetyFallback(tool-enabled): {ShouldUseReasoningSafetyFallback(toolEnabledPlan)}",
             $"ReasoningActive(deep): {deepReasoningActive}",
             $"ReasoningPlan(deep): requested {deepReasoningPlan.RequestedThinkingMode}, effective {FormatThinkingMode(deepReasoningPlan.EffectiveThinkingMode)}, patch {deepReasoningPlan.ShouldPatchChatCompletionRequest}",
+            $"ReasoningPreview(Telegram): enabled {status.Configuration.TelegramReasoningPreviewEnabled}, delay {status.Configuration.TelegramReasoningPreviewDelaySeconds}s",
             $"Uptime: {status.Uptime}",
             $"Configuration: {status.ConfigurationMode}",
             $"HA MCP: {FormatMcpStatus(mcpDiscovery)}",
@@ -710,6 +774,7 @@ public sealed class TelegramUpdateHandler
             $"ProjectCapsules(lastUpdatedUtc): {FormatUtc(contextSnapshot.ProjectCapsuleLastUpdatedAtUtc)}",
             $"ProjectCapsules(extraction): lastRawEventId {contextSnapshot.ProjectCapsuleLastProcessedRawEventId}, lastExtractionUtc {FormatUtc(contextSnapshot.ProjectCapsuleLastExtractionAtUtc)}, runs {contextSnapshot.ProjectCapsuleExtractionRunsCount}",
             $"Context(loaded): {contextSnapshot.LoadedHistoryMessageCount} / {contextSnapshot.MaxContextMessages} messages",
+            $"Context(tokens~): {contextSnapshot.EstimatedContextTokenCount} (history {contextSnapshot.EstimatedHistoryTokenCount}, summary {contextSnapshot.EstimatedPersistedSummaryTokenCount}, capsules {contextSnapshot.EstimatedProjectCapsuleTokenCount}, scaffolding {contextSnapshot.EstimatedMessageScaffoldingTokenCount}; heuristic UTF8 bytes/4)",
             $"PersistedSummary: present {contextSnapshot.PersistedSummaryPresent}, version {contextSnapshot.PersistedSummaryVersion}, length {contextSnapshot.PersistedSummaryLength}, sourceLastMessageId {contextSnapshot.PersistedSummarySourceLastMessageId}, messagesSinceSummary {contextSnapshot.MessagesSincePersistedSummary}",
             $"Telegram allowlist users: {status.Configuration.AllowedTelegramUserCount}");
     }
@@ -801,26 +866,29 @@ public sealed class TelegramUpdateHandler
         }
 
         var approveMatch = ApproveCommandRegex.Match(text);
-        if (!approveMatch.Success)
-        {
-            return false;
-        }
-
         var rejectMatch = RejectCommandRegex.Match(text);
-        if (!rejectMatch.Success)
+        if (!approveMatch.Success && !rejectMatch.Success)
         {
             return false;
         }
 
-        var approveId = approveMatch.Groups[1].Value;
-        var rejectId = rejectMatch.Groups[1].Value;
-        if (!string.Equals(approveId, rejectId, StringComparison.Ordinal))
+        if (approveMatch.Success && rejectMatch.Success)
         {
-            return false;
+            var approveId = approveMatch.Groups[1].Value;
+            var rejectId = rejectMatch.Groups[1].Value;
+            if (!string.Equals(approveId, rejectId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            confirmationId = approveId;
+            return !string.IsNullOrWhiteSpace(confirmationId);
         }
 
-        confirmationId = approveId;
-        return true;
+        confirmationId = approveMatch.Success
+            ? approveMatch.Groups[1].Value
+            : rejectMatch.Groups[1].Value;
+        return !string.IsNullOrWhiteSpace(confirmationId);
     }
 
     private static string NormalizeTelegramText(string text)
@@ -861,6 +929,18 @@ public sealed class TelegramUpdateHandler
             : DefaultProjectCapsuleLimit;
     }
 
+    private static int ParseVectorMemoryLimit(string? argument)
+    {
+        if (string.IsNullOrWhiteSpace(argument))
+        {
+            return DefaultVectorMemoryLimit;
+        }
+
+        return int.TryParse(argument, out var parsedLimit)
+            ? Math.Clamp(parsedLimit, 1, MaxVectorMemoryLimit)
+            : DefaultVectorMemoryLimit;
+    }
+
     private static string FormatRawEventPayload(string payload)
     {
         var normalizedPayload = payload
@@ -873,6 +953,16 @@ public sealed class TelegramUpdateHandler
         }
 
         return normalizedPayload[..MaxRawEventPayloadPreviewLength] + "...";
+    }
+
+    private static int CountEmbeddingDimensions(string embedding)
+    {
+        if (string.IsNullOrWhiteSpace(embedding))
+        {
+            return 0;
+        }
+
+        return embedding.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Length;
     }
 
     private static bool IsReasoningActive(LlmExecutionPlan plan) =>
@@ -919,7 +1009,8 @@ public sealed class TelegramUpdateHandler
             ITelegramBotClientAdapter client,
             long chatId,
             ILogger logger,
-            TelegramOptions telegramOptions)
+            TelegramOptions telegramOptions,
+            CancellationToken requestCancellationToken)
         {
             _client = client;
             _chatId = chatId;
@@ -927,9 +1018,16 @@ public sealed class TelegramUpdateHandler
             var delaySeconds = Math.Clamp(telegramOptions.ReasoningPreviewDelaySeconds, 1, 30);
             _delay = TimeSpan.FromSeconds(delaySeconds);
             IsEnabled = telegramOptions.ReasoningPreviewEnabled;
+            DelaySeconds = delaySeconds;
+            if (IsEnabled)
+            {
+                _ = EnsurePlaceholderAfterDelayAsync(requestCancellationToken);
+            }
         }
 
         public bool IsEnabled { get; }
+
+        public int DelaySeconds { get; }
 
         public async Task OnReasoningUpdateAsync(
             AgentRuntimeReasoningUpdate update,
@@ -970,6 +1068,9 @@ public sealed class TelegramUpdateHandler
                         cancellationToken);
                     _lastPreviewText = previewText;
                     _lastEditedAtUtc = now;
+                    _logger.LogInformation(
+                        "Telegram reasoning preview created for chat {TelegramChatId}.",
+                        _chatId);
                     return;
                 }
 
@@ -985,6 +1086,10 @@ public sealed class TelegramUpdateHandler
                     cancellationToken);
                 _lastPreviewText = previewText;
                 _lastEditedAtUtc = now;
+                _logger.LogDebug(
+                    "Telegram reasoning preview updated for chat {TelegramChatId}; text length {PreviewLength}.",
+                    _chatId,
+                    previewText.Length);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -1029,6 +1134,9 @@ public sealed class TelegramUpdateHandler
                     _chatId,
                     _messageId.Value,
                     cancellationToken);
+                _logger.LogInformation(
+                    "Telegram reasoning preview removed for chat {TelegramChatId}.",
+                    _chatId);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -1044,6 +1152,48 @@ public sealed class TelegramUpdateHandler
             finally
             {
                 _sync.Release();
+            }
+        }
+
+        private async Task EnsurePlaceholderAfterDelayAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                await Task.Delay(_delay, cancellationToken);
+                await _sync.WaitAsync(cancellationToken);
+                try
+                {
+                    if (_isCompleted || _messageId is not null)
+                    {
+                        return;
+                    }
+
+                    var previewText = BuildPreviewText(string.Empty);
+                    _messageId = await _client.SendMessageWithIdAsync(
+                        _chatId,
+                        previewText,
+                        cancellationToken);
+                    _lastPreviewText = previewText;
+                    _lastEditedAtUtc = DateTimeOffset.UtcNow;
+                    _logger.LogInformation(
+                        "Telegram reasoning preview fallback created for chat {TelegramChatId} after delay {DelaySeconds}s.",
+                        _chatId,
+                        DelaySeconds);
+                }
+                finally
+                {
+                    _sync.Release();
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (Exception exception)
+            {
+                _logger.LogDebug(
+                    exception,
+                    "Failed to create Telegram reasoning preview fallback for chat {TelegramChatId}.",
+                    _chatId);
             }
         }
 

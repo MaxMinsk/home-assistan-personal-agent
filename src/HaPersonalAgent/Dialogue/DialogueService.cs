@@ -15,6 +15,8 @@ public sealed class DialogueService
 {
     private const int MaxPersistedSummaryLength = 4_000;
     private const int PersistedSummaryRefreshMessageThreshold = 12;
+    private const int ApproximateBytesPerToken = 4;
+    private const int ApproximateMessageScaffoldingTokens = 6;
 
     private readonly IAgentRuntime _agentRuntime;
     private readonly IOptions<AgentOptions> _agentOptions;
@@ -295,6 +297,20 @@ public sealed class DialogueService
             cancellationToken);
     }
 
+    public async Task<IReadOnlyList<ConversationVectorMemoryRecord>> GetVectorMemoryAsync(
+        DialogueConversation conversation,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+
+        var conversationKey = DialogueConversationKey.Create(conversation);
+        return await _stateRepository.GetConversationVectorMemoryAsync(
+            conversationKey,
+            limit,
+            cancellationToken);
+    }
+
     public async Task<IReadOnlyList<ProjectCapsuleMemory>> GetProjectCapsulesAsync(
         DialogueConversation conversation,
         int limit,
@@ -471,6 +487,10 @@ public sealed class DialogueService
         var storedMessageCount = await _stateRepository.GetConversationMessageCountAsync(
             conversationKey,
             cancellationToken);
+        var loadedHistoryMessages = await _stateRepository.GetConversationMessagesAsync(
+            conversationKey,
+            maxMessages,
+            cancellationToken);
         var rawEventCount = await _stateRepository.GetRawEventCountAsync(
             conversationKey,
             cancellationToken);
@@ -494,6 +514,13 @@ public sealed class DialogueService
         var summary = await _stateRepository.GetConversationSummaryAsync(
             conversationKey,
             cancellationToken);
+        var capsulePromptContext = await _projectCapsuleService.BuildPromptContextAsync(
+            conversationKey,
+            cancellationToken);
+        var contextTokenEstimate = EstimateContextTokenUsage(
+            loadedHistoryMessages,
+            summary?.Summary,
+            capsulePromptContext.PromptText);
         var latestMessageId = await _stateRepository.GetLatestConversationMessageIdAsync(
             conversationKey,
             cancellationToken);
@@ -514,12 +541,17 @@ public sealed class DialogueService
             MemoryRetrievalBeforeInvokeEnabled: autoMemoryRetrievalEnabled,
             MemoryRetrievalOnDemandToolEnabled: !autoMemoryRetrievalEnabled,
             MaxContextMessages: maxMessages,
-            LoadedHistoryMessageCount: Math.Min(storedMessageCount, maxMessages),
+            LoadedHistoryMessageCount: loadedHistoryMessages.Count,
             MessagesSincePersistedSummary: messagesSinceSummary,
             PersistedSummaryPresent: summary is not null,
             PersistedSummaryLength: summary?.Summary.Length ?? 0,
             PersistedSummaryVersion: summary?.SummaryVersion ?? 0,
-            PersistedSummarySourceLastMessageId: summary?.SourceLastMessageId ?? 0);
+            PersistedSummarySourceLastMessageId: summary?.SourceLastMessageId ?? 0,
+            EstimatedContextTokenCount: contextTokenEstimate.TotalTokens,
+            EstimatedHistoryTokenCount: contextTokenEstimate.HistoryTokens,
+            EstimatedPersistedSummaryTokenCount: contextTokenEstimate.SummaryTokens,
+            EstimatedProjectCapsuleTokenCount: contextTokenEstimate.ProjectCapsuleTokens,
+            EstimatedMessageScaffoldingTokenCount: contextTokenEstimate.ScaffoldingTokens);
     }
 
     public Task RecordSystemNotificationAsync(
@@ -737,4 +769,63 @@ public sealed class DialogueService
             ? int.MaxValue
             : (int)delta;
     }
+
+    private static ContextTokenEstimate EstimateContextTokenUsage(
+        IReadOnlyList<AgentConversationMessage> loadedHistoryMessages,
+        string? persistedSummary,
+        string? projectCapsuleContext)
+    {
+        var historyTokens = 0;
+        var scaffoldingBlocks = 0;
+        foreach (var message in loadedHistoryMessages)
+        {
+            if (string.IsNullOrWhiteSpace(message.Text))
+            {
+                continue;
+            }
+
+            historyTokens += EstimateTextTokens(message.Text);
+            scaffoldingBlocks++;
+        }
+
+        var summaryTokens = 0;
+        if (!string.IsNullOrWhiteSpace(persistedSummary))
+        {
+            summaryTokens = EstimateTextTokens(persistedSummary);
+            scaffoldingBlocks++;
+        }
+
+        var projectCapsuleTokens = 0;
+        if (!string.IsNullOrWhiteSpace(projectCapsuleContext))
+        {
+            projectCapsuleTokens = EstimateTextTokens(projectCapsuleContext);
+            scaffoldingBlocks++;
+        }
+
+        var scaffoldingTokens = scaffoldingBlocks * ApproximateMessageScaffoldingTokens;
+        return new ContextTokenEstimate(
+            historyTokens + summaryTokens + projectCapsuleTokens + scaffoldingTokens,
+            historyTokens,
+            summaryTokens,
+            projectCapsuleTokens,
+            scaffoldingTokens);
+    }
+
+    private static int EstimateTextTokens(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return 0;
+        }
+
+        var byteCount = System.Text.Encoding.UTF8.GetByteCount(text);
+        return Math.Max(1, (int)Math.Ceiling(byteCount / (double)ApproximateBytesPerToken));
+    }
+
+    private readonly record struct ContextTokenEstimate(
+        int TotalTokens,
+        int HistoryTokens,
+        int SummaryTokens,
+        int ProjectCapsuleTokens,
+        int ScaffoldingTokens);
 }

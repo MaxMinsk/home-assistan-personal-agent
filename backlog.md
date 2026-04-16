@@ -331,6 +331,80 @@ Acceptance criteria:
 - Retrieval качество проверяется на наборе memory сценариев (precision/recall smoke metrics).
 - `/status` показывает активный vector backend, embedding mode и версию индекса.
 
+### HAAG-052: Adaptive persona per user (эволюция личности ассистента)
+
+Цель: сделать персональность ассистента динамической и user-specific, чтобы стиль/тон/уровень проактивности эволюционировал по ходу взаимодействия, но оставался управляемым и безопасным.
+
+Контекст по MAF (что берем за паттерн):
+
+- user-scoped memory и persistence across sessions (`AgentWithMemory_Step02_MemoryUsingMem0`, `AgentWithMemory_Step04_MemoryUsingFoundry`);
+- memory retrieval/search как отдельный слой контекста (`AgentsWithFoundry/Agent_Step22_MemorySearch`);
+- дополнительный AI context, который не захламляет chat history (`Agents/Agent_Step17_AdditionalAIContext`).
+
+Что переделать:
+
+- Ввести отдельный слой `persona profile` (per user, не per chat) с versioning:
+  - tone/verbosity/directness/humor/proactivity/language-preference;
+  - confidence score + source attribution (`raw_event_id`, `capsule_key`, `updated_at`).
+- Разделить persona на 3 уровня:
+  - `base persona` (стабильная системная роль проекта),
+  - `user persona adaptation` (накопленные предпочтения пользователя),
+  - `session modulation` (временная настройка в рамках текущего диалога).
+- Добавить extraction pipeline из `raw_events`/`project_capsules` в `persona profile`:
+  - auto-batched обновление по порогу новых событий;
+  - manual refresh командой (аналогично summary/capsules).
+- Подмешивать persona в prompt как отдельный AI-context блок (не сохранять этот блок обратно в chat history).
+- Добавить явное управление пользователем:
+  - `/showPersona`, `/refreshPersona`, `/resetPersona`, `/lockPersona` (запрет автоизменений до `/unlockPersona`).
+- Ввести guardrails:
+  - не менять safety/policy часть system role;
+  - не допускать drift в небезопасные/манипулятивные модели общения;
+  - ограничить скорость изменения persona (rate limit per N turns).
+- Диагностика:
+  - `/status` показывает persona version, last update, lock state, signals processed;
+  - логи показывают, какие сигналы повлияли на обновление (без утечки приватных данных).
+
+Acceptance criteria:
+
+- Для разных пользователей persona профили независимы и не смешиваются.
+- После нескольких диалогов стиль ответов заметно адаптируется под пользователя без ручной правки prompt.
+- Persona adaptation сохраняется между перезапусками add-on и новыми сессиями.
+- AI-context injection persona не записывается в `conversation_messages`/`raw_events` как обычная реплика.
+- Есть тесты на extraction/update/versioning/lock-reset и на отсутствие cross-user leakage.
+
+### HAAG-053: User-scoped memory + identity mapping (Home Assistant UI <-> Telegram)
+
+Цель: перевести память с `conversation-scoped` на `user-scoped`, чтобы один и тот же человек имел общий контекст между каналами (Home Assistant UI, Telegram и будущие адаптеры).
+
+Что переделать:
+
+- Ввести отдельный `user_scope_key` и слой identity-резолвинга:
+  - `homeassistant_user_id -> user_scope_key`;
+  - `telegram_user_id -> user_scope_key`;
+  - возможность нескольких external identities на один user scope.
+- Добавить таблицы/модели identity link (`user_identities`, `user_scope_profiles`) и migration без потери текущих данных.
+- Сделать безопасный flow линковки Telegram с HA пользователем:
+  - одноразовый код/nonce из HA UI;
+  - подтверждение в Telegram (`/link <code>`);
+  - TTL, single-use, audit trail.
+- Перевести основные memory слои на `user_scope_key` (или гибрид user+conversation где это нужно):
+  - summary/vector/capsules/raw facts — user-scoped;
+  - при необходимости channel-local operational state оставить conversation-scoped.
+- Обновить `DialogueService` и retrieval pipeline: при наличии link извлекать память по user scope независимо от transport.
+- Добавить команды диагностики и управления link:
+  - `/whoami`, `/link`, `/unlink`, `/showIdentity`.
+- Добавить защиту от cross-user leakage:
+  - строгая валидация owner scope на каждом read/write;
+  - явные deny-сценарии для неподтвержденного/чужого link.
+
+Acceptance criteria:
+
+- Пользователь, связавший HA UI и Telegram, получает общий memory context в обоих каналах.
+- Пользователь без link продолжает работать изолированно (backward compatibility).
+- Нет смешивания данных между разными пользователями при любых комбинациях transport/conversation.
+- Миграция существующей базы выполняется без потери сообщений/summary/capsules.
+- Есть тесты на link flow, cross-transport recall и negative кейсы (invalid/expired/reused code).
+
 ### HAAG-022: File workspace tool с sandbox policy
 
 Цель: дать агенту безопасную работу с файлами внутри `/data/workspace`.

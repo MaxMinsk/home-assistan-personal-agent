@@ -530,6 +530,11 @@ public class DialogueServiceTests
             Assert.Equal(2, snapshot.PersistedSummaryVersion);
             Assert.Equal(1, snapshot.PersistedSummarySourceLastMessageId);
             Assert.Equal(latestMessageId.Value - 1, snapshot.MessagesSincePersistedSummary);
+            Assert.Equal(30, snapshot.EstimatedContextTokenCount);
+            Assert.Equal(3, snapshot.EstimatedHistoryTokenCount);
+            Assert.Equal(3, snapshot.EstimatedPersistedSummaryTokenCount);
+            Assert.Equal(0, snapshot.EstimatedProjectCapsuleTokenCount);
+            Assert.Equal(24, snapshot.EstimatedMessageScaffoldingTokenCount);
         }
         finally
         {
