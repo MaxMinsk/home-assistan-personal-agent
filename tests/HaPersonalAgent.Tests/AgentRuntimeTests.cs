@@ -337,6 +337,171 @@ public class AgentRuntimeTests
         Assert.Equal("enabled", document.RootElement.GetProperty("thinking").GetProperty("type").GetString());
     }
 
+    [Fact]
+    public void Runtime_reports_not_configured_with_invalid_router_mode()
+    {
+        var runtime = CreateRuntime(new LlmOptions
+        {
+            ApiKey = "configured",
+            RouterMode = "smart-auto",
+        });
+
+        var health = runtime.GetHealth();
+
+        Assert.False(health.IsConfigured);
+        Assert.Contains("RouterMode", health.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Router_routes_small_model_for_simple_prompt_in_small_context()
+    {
+        var router = new LlmExecutionRouter();
+        var decision = router.Decide(
+            new LlmOptions
+            {
+                Model = "kimi-k2.5",
+                RouterMode = LlmRouterModes.Enforced,
+                RouterSmallModel = "moonshot-v1-8k",
+                RouterMaxInputCharsForSmall = 1800,
+                RouterMaxHistoryMessagesForSmall = 10,
+            },
+            AgentContext.Create(
+                conversationMessages:
+                [
+                    new AgentConversationMessage(AgentConversationRole.User, "Привет", DateTimeOffset.UtcNow),
+                    new AgentConversationMessage(AgentConversationRole.Assistant, "Привет!", DateTimeOffset.UtcNow),
+                ]),
+            userMessage: "включи свет на кухне",
+            profile: LlmExecutionProfile.ToolEnabled);
+
+        Assert.Equal(LlmRouterModes.Enforced, decision.RouterMode);
+        Assert.True(decision.IsApplied);
+        Assert.Equal(LlmRoutingDecision.ModelTargetSmallContextFast, decision.ModelTarget);
+        Assert.Equal("moonshot-v1-8k", decision.SelectedModel);
+        Assert.Equal(LlmRoutingDecision.ReasoningTargetDisabled, decision.ReasoningTarget);
+        Assert.Equal(LlmThinkingModes.Disabled, decision.ThinkingModeOverride);
+        Assert.Equal(LlmRoutingDecision.DecisionBucketSmallDisabled, decision.DecisionBucket);
+    }
+
+    [Fact]
+    public void Router_keeps_default_model_in_shadow_mode()
+    {
+        var router = new LlmExecutionRouter();
+        var decision = router.Decide(
+            new LlmOptions
+            {
+                Model = "kimi-k2.5",
+                RouterMode = LlmRouterModes.Shadow,
+                RouterSmallModel = "moonshot-v1-8k",
+            },
+            AgentContext.Create(),
+            userMessage: "сколько сейчас времени",
+            profile: LlmExecutionProfile.ToolEnabled);
+
+        Assert.Equal(LlmRouterModes.Shadow, decision.RouterMode);
+        Assert.False(decision.IsApplied);
+        Assert.Equal("kimi-k2.5", decision.SelectedModel);
+        Assert.Null(decision.ThinkingModeOverride);
+    }
+
+    [Fact]
+    public void Router_routes_deep_when_keyword_matches()
+    {
+        var router = new LlmExecutionRouter();
+        var decision = router.Decide(
+            new LlmOptions
+            {
+                Model = "kimi-k2.5",
+                RouterMode = LlmRouterModes.Enforced,
+                RouterDeepKeywords = "глубоко,подумай глубже",
+            },
+            AgentContext.Create(),
+            userMessage: "подумай глубже и распиши план по шагам",
+            profile: LlmExecutionProfile.ToolEnabled);
+
+        Assert.True(decision.IsApplied);
+        Assert.Equal(LlmRoutingDecision.ModelTargetDefault, decision.ModelTarget);
+        Assert.Equal("kimi-k2.5", decision.SelectedModel);
+        Assert.Equal(LlmRoutingDecision.ReasoningTargetDeep, decision.ReasoningTarget);
+        Assert.Equal(LlmThinkingModes.Enabled, decision.ThinkingModeOverride);
+        Assert.Equal(LlmRoutingDecision.DecisionBucketDefaultDeep, decision.DecisionBucket);
+    }
+
+    [Fact]
+    public void Router_thinking_override_interacts_with_planner()
+    {
+        var options = new LlmOptions
+        {
+            Provider = "moonshot",
+            BaseUrl = "https://api.moonshot.ai/v1",
+            ThinkingMode = LlmThinkingModes.Auto,
+            RouterMode = LlmRouterModes.Enforced,
+            RouterSmallModel = "moonshot-v1-8k",
+        };
+        var router = new LlmExecutionRouter();
+        var decision = router.Decide(
+            options,
+            AgentContext.Create(),
+            userMessage: "какая погода",
+            profile: LlmExecutionProfile.ToolEnabled);
+
+        var plan = CreatePlanner().CreatePlan(
+            options,
+            LlmExecutionProfile.ToolEnabled,
+            decision.ThinkingModeOverride);
+
+        Assert.Equal(LlmThinkingModes.Disabled, decision.ThinkingModeOverride);
+        Assert.Equal(LlmEffectiveThinkingMode.Disabled, plan.EffectiveThinkingMode);
+    }
+
+    [Fact]
+    public void Fallback_policy_retries_small_model_for_retryable_status()
+    {
+        var decision = new LlmRoutingDecision(
+            RouterMode: LlmRouterModes.Enforced,
+            IsApplied: true,
+            ModelTarget: LlmRoutingDecision.ModelTargetSmallContextFast,
+            SelectedModel: "moonshot-v1-8k",
+            ReasoningTarget: LlmRoutingDecision.ReasoningTargetDisabled,
+            ThinkingModeOverride: LlmThinkingModes.Disabled,
+            DecisionBucket: LlmRoutingDecision.DecisionBucketSmallDisabled,
+            Reason: "test",
+            EstimatedInputChars: 100,
+            HistoryMessageCount: 2);
+
+        var retry = LlmRoutingFallbackPolicy.CanRetryWithDefaultModel(
+            decision,
+            selectedModel: "moonshot-v1-8k",
+            defaultModel: "kimi-k2.5",
+            providerStatusCode: 429);
+
+        Assert.True(retry);
+    }
+
+    [Fact]
+    public void Fallback_policy_does_not_retry_for_auth_failure()
+    {
+        var decision = new LlmRoutingDecision(
+            RouterMode: LlmRouterModes.Enforced,
+            IsApplied: true,
+            ModelTarget: LlmRoutingDecision.ModelTargetSmallContextFast,
+            SelectedModel: "moonshot-v1-8k",
+            ReasoningTarget: LlmRoutingDecision.ReasoningTargetDisabled,
+            ThinkingModeOverride: LlmThinkingModes.Disabled,
+            DecisionBucket: LlmRoutingDecision.DecisionBucketSmallDisabled,
+            Reason: "test",
+            EstimatedInputChars: 100,
+            HistoryMessageCount: 2);
+
+        var retry = LlmRoutingFallbackPolicy.CanRetryWithDefaultModel(
+            decision,
+            selectedModel: "moonshot-v1-8k",
+            defaultModel: "kimi-k2.5",
+            providerStatusCode: 401);
+
+        Assert.False(retry);
+    }
+
     private static AgentRuntime CreateRuntime(LlmOptions llmOptions)
     {
         var statusProvider = CreateConfigurationStatusProvider(

@@ -14,7 +14,9 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddSingleton<AgentStatusTool>();
+        services.AddSingleton<LlmRoutingTelemetry>();
         services.AddSingleton<LlmProviderCapabilitiesResolver>();
+        services.AddSingleton<LlmExecutionRouter>();
         services.AddSingleton<LlmExecutionPlanner>();
         services.AddSingleton<IAgentRuntime, AgentRuntime>();
 

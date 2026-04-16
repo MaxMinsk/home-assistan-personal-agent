@@ -10,6 +10,11 @@ public sealed record ConfigurationStatus(
     string LlmBaseUrl,
     string LlmModel,
     string LlmThinkingMode,
+    string LlmRouterMode,
+    string LlmRouterSmallModel,
+    int LlmRouterMaxInputCharsForSmall,
+    int LlmRouterMaxHistoryMessagesForSmall,
+    string LlmRouterDeepKeywords,
     bool LlmApiKeyConfigured,
     bool TelegramBotTokenConfigured,
     int AllowedTelegramUserCount,
@@ -41,6 +46,15 @@ public sealed record ConfigurationStatus(
             llmOptions.BaseUrl,
             llmOptions.Model,
             LlmThinkingModes.Normalize(llmOptions.ThinkingMode),
+            LlmRouterModes.Normalize(llmOptions.RouterMode),
+            string.IsNullOrWhiteSpace(llmOptions.RouterSmallModel)
+                ? "moonshot-v1-8k"
+                : llmOptions.RouterSmallModel.Trim(),
+            Math.Clamp(llmOptions.RouterMaxInputCharsForSmall, 200, 24_000),
+            Math.Clamp(llmOptions.RouterMaxHistoryMessagesForSmall, 2, 64),
+            string.IsNullOrWhiteSpace(llmOptions.RouterDeepKeywords)
+                ? "пошагово,step-by-step,deep reasoning"
+                : llmOptions.RouterDeepKeywords.Trim(),
             !string.IsNullOrWhiteSpace(llmOptions.ApiKey),
             !string.IsNullOrWhiteSpace(telegramOptions.BotToken),
             telegramOptions.AllowedUserIds.Length,

@@ -540,6 +540,14 @@ public class StorageTests
                 "100",
                 "abc12345",
                 CancellationToken.None);
+            var storedById = await repository.GetPendingConfirmationByIdAsync(
+                "abc12345",
+                CancellationToken.None);
+            var latestByCorrelation = await repository.GetLatestPendingConfirmationAsync(
+                "telegram:200:100",
+                "100",
+                "test-correlation",
+                CancellationToken.None);
             var firstUpdate = await repository.TryUpdateConfirmationStatusAsync(
                 "abc12345",
                 ConfirmationActionStatus.Pending,
@@ -558,7 +566,11 @@ public class StorageTests
                 CancellationToken.None);
 
             Assert.NotNull(stored);
+            Assert.NotNull(storedById);
+            Assert.NotNull(latestByCorrelation);
             Assert.Equal("home_assistant_mcp", stored.ActionKind);
+            Assert.Equal("telegram:200:100", storedById.ConversationKey);
+            Assert.Equal("abc12345", latestByCorrelation.Id);
             Assert.Equal("HassCallService", stored.OperationName);
             Assert.True(firstUpdate);
             Assert.False(secondUpdate);

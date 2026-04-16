@@ -906,6 +906,53 @@ public class TelegramUpdateHandlerTests
     }
 
     [Fact]
+    public async Task Runtime_confirmation_id_overrides_model_confirmation_id_in_telegram_prompt()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var runtime = new FakeAgentRuntime(
+                """
+                Капсула обновлена и ждёт подтверждения.
+                Подтверди: /approve wrong1234
+                """);
+            var confirmationService = new FakeConfirmationService(
+                new ConfirmationDecisionResult(
+                    ConfirmationDecisionOutcome.Completed,
+                    IsSuccess: true,
+                    "unused",
+                    "unused"))
+            {
+                LatestPendingConfirmationId = "real5678",
+            };
+            var handler = CreateHandler(
+                CreateRepository(databasePath),
+                runtime,
+                confirmationService: confirmationService);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 311, chatId: 200, userId: 100, text: "обнови капсулу"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Single(confirmationService.LatestPendingLookupRequests);
+            Assert.Equal("telegram-311", confirmationService.LatestPendingLookupRequests[0].CorrelationId);
+            Assert.Single(adapter.SentConfirmationMessages);
+            Assert.Equal("real5678", adapter.SentConfirmationMessages[0].ConfirmationId);
+            Assert.Contains("/approve real5678", adapter.SentConfirmationMessages[0].Text, StringComparison.Ordinal);
+            Assert.DoesNotContain("/approve wrong1234", adapter.SentConfirmationMessages[0].Text, StringComparison.Ordinal);
+            Assert.Contains("/reject real5678", adapter.SentConfirmationMessages[0].Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Callback_approve_routes_to_confirmation_service_and_answers_callback()
     {
         var databasePath = CreateTemporaryDatabasePath();
@@ -1232,6 +1279,10 @@ public class TelegramUpdateHandlerTests
 
         public List<(DialogueConversation Conversation, string ConfirmationId)> RejectedConfirmations { get; } = new();
 
+        public List<(DialogueConversation Conversation, string CorrelationId)> LatestPendingLookupRequests { get; } = new();
+
+        public string? LatestPendingConfirmationId { get; set; }
+
         public Task<ConfirmationProposalResult> ProposeAsync(
             ConfirmationProposalRequest request,
             CancellationToken cancellationToken) =>
@@ -1261,6 +1312,15 @@ public class TelegramUpdateHandlerTests
             RejectedConfirmations.Add((conversation, confirmationId));
 
             return Task.FromResult(_result);
+        }
+
+        public Task<string?> GetLatestPendingConfirmationIdAsync(
+            DialogueConversation conversation,
+            string correlationId,
+            CancellationToken cancellationToken)
+        {
+            LatestPendingLookupRequests.Add((conversation, correlationId));
+            return Task.FromResult(LatestPendingConfirmationId);
         }
     }
 

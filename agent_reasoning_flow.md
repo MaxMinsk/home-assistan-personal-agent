@@ -11,6 +11,9 @@
 - `TelegramBotGateway` / `TelegramUpdateHandler`: транспортный вход, команды `/status`, `/resetContext`, `/think`, `/approve`, `/reject`.
 - `DialogueService`: transport-agnostic orchestration (history load -> runtime call -> history append).
 - `AgentRuntime`: сборка execution plan, инициализация MAF agent, запуск `RunAsync`.
+- `LlmExecutionRouter`: детерминированный routing-решатель `model + reasoning` перед вызовом LLM.
+- `LlmRoutingFallbackPolicy`: policy одного ретрая `small -> default` на retryable provider/model ошибках.
+- `LlmRoutingTelemetry`: counters/snapshot для `/status` и runtime diagnostics по routing buckets/fallback.
 - `LlmExecutionPlanner`: выбор effective thinking режима на run.
 - `LlmChatCompletionRequestPolicy`: request-level patch JSON перед `/chat/completions`.
 - `ReasoningContentReplayChatClient`: per-run capture+replay reasoning metadata между tool-шагами.
@@ -32,6 +35,9 @@
    - вызывает `AgentRuntime.SendAsync(...)`.
 4. `AgentRuntime`:
    - валидирует LLM config (api key, base url, model, thinking mode);
+   - вычисляет `LlmRoutingDecision` (`off|shadow|enforced`);
+   - при `enforced` применяет routed model + thinking override, при `shadow` только логирует решение;
+   - при routed small-model ошибке делает один retry на default model через `LlmRoutingFallbackPolicy`;
    - строит `LlmExecutionPlan`;
    - загружает MCP tools (если profile допускает tools);
    - создает `ChatClientAgent` (MAF) и запускает `RunAsync`.
@@ -77,6 +83,28 @@
    - результат форматируется и возвращается пользователю.
 
 ## Thinking / reasoning flow
+
+## Unified routing layer (HAAG-048)
+
+`LlmExecutionRouter` — первый decision layer перед planner:
+
+- Вход: `LlmOptions`, текущий `AgentContext`, user message, `LlmExecutionProfile`.
+- Выход: `LlmRoutingDecision`:
+  - `model target`: `small_context_fast | default_model`;
+  - `reasoning target`: `disabled | provider-default | deep`;
+  - `decision bucket`: `small+disabled | default+provider-default | default+deep`;
+  - `isApplied`: зависит от `llm_router_mode`.
+
+Режимы:
+
+- `off`: роутер всегда только диагностический, execution идет по default model.
+- `shadow`: роутер считает decision и пишет telemetry, но execution не меняется.
+- `enforced`: decision реально влияет на `model` и `thinking` override через `LlmExecutionPlanner`.
+
+Fallback:
+
+- Если routed path был `small_context_fast`, и provider вернул retryable status (`400/404/408/409/429/5xx`), runtime делает один retry на default model.
+- Thinking override сохраняется от исходного routing decision, чтобы fallback менял только model, а не semantics run.
 
 ### Кто что делает (по классам)
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.22
+
+- Add adaptive LLM routing layer (`off|shadow|enforced`) with deterministic `model + reasoning` decision and per-run diagnostics.
+- Add retry safety for routed small-model path: one fallback attempt from small model to default model on retryable provider/model errors.
+- Extend add-on/UI and runtime configuration with router options (`llm_router_mode`, `llm_router_small_model`, `llm_router_max_input_chars_for_small`, `llm_router_max_history_messages_for_small`, `llm_router_deep_keywords`).
+- Extend Telegram `/status` with router telemetry, last routing decision details, and fallback visibility.
+- Improve confirmation proposal reliability in Telegram: resolve pending confirmation id directly from runtime scope and normalize approve/reject commands in outbound message text.
+- Add repository/service support methods for scoped confirmation lookup by `(conversation, participant, correlation)` and by `confirmationId`, plus additional diagnostics logs.
+- Update reasoning flow docs and backlog state (HAAG-048 moved to Done) and expand tests for routing decision matrix, fallback policy, and configuration validation.
+
 ## 0.2.21
 
 - Add Telegram command `/showVector [N]` to inspect recent vector-memory entries for the current chat.

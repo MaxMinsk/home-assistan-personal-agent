@@ -670,6 +670,7 @@ public sealed class TelegramUpdateHandler
             chatId,
             executionProfile,
             text.Length);
+        var correlationId = $"telegram-{updateId}";
         var reasoningPreviewSession = new TelegramReasoningPreviewSession(
             client,
             chatId,
@@ -687,15 +688,15 @@ public sealed class TelegramUpdateHandler
             response = await ExecuteWithTypingIndicatorAsync(
                 client,
                 chatId,
-                ct => _dialogueService.SendUserMessageAsync(
-                    DialogueRequest.Create(
-                        conversation,
-                        text,
-                        correlationId: $"telegram-{updateId}",
-                        executionProfile: executionProfile,
-                        onReasoningUpdate: reasoningPreviewSession.IsEnabled
-                            ? reasoningPreviewSession.OnReasoningUpdateAsync
-                            : null),
+                    ct => _dialogueService.SendUserMessageAsync(
+                        DialogueRequest.Create(
+                            conversation,
+                            text,
+                            correlationId: correlationId,
+                            executionProfile: executionProfile,
+                            onReasoningUpdate: reasoningPreviewSession.IsEnabled
+                                ? reasoningPreviewSession.OnReasoningUpdateAsync
+                                : null),
                     ct),
                 cancellationToken);
         }
@@ -717,6 +718,26 @@ public sealed class TelegramUpdateHandler
             response.Text.Length);
 
         var normalizedResponse = NormalizeTelegramText(response.Text);
+        var runtimeConfirmationId = await TryGetRuntimePendingConfirmationIdAsync(
+            conversation,
+            correlationId,
+            cancellationToken);
+        if (!string.IsNullOrWhiteSpace(runtimeConfirmationId))
+        {
+            var correctedResponse = NormalizeTelegramText(
+                EnsureConfirmationCommands(normalizedResponse, runtimeConfirmationId));
+            _logger.LogInformation(
+                "Dialogue request telegram-{TelegramUpdateId} resolved pending confirmation id {ConfirmationId} from runtime scope; sending Telegram inline buttons.",
+                updateId,
+                runtimeConfirmationId);
+            await client.SendConfirmationMessageAsync(
+                chatId,
+                correctedResponse,
+                runtimeConfirmationId,
+                cancellationToken);
+            return;
+        }
+
         if (TryExtractConfirmationPromptId(normalizedResponse, out var confirmationId)
             && !string.IsNullOrWhiteSpace(confirmationId))
         {
@@ -733,6 +754,34 @@ public sealed class TelegramUpdateHandler
         }
 
         await client.SendMessageAsync(chatId, normalizedResponse, cancellationToken);
+    }
+
+    private async Task<string?> TryGetRuntimePendingConfirmationIdAsync(
+        DialogueConversation conversation,
+        string correlationId,
+        CancellationToken cancellationToken)
+    {
+        if (_confirmationService is null || string.IsNullOrWhiteSpace(correlationId))
+        {
+            return null;
+        }
+
+        try
+        {
+            return await _confirmationService.GetLatestPendingConfirmationIdAsync(
+                conversation,
+                correlationId,
+                cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogDebug(
+                exception,
+                "Failed to resolve pending confirmation id for conversation {ConversationKey} and correlation {CorrelationId}.",
+                DialogueConversationKey.Create(conversation),
+                correlationId);
+            return null;
+        }
     }
 
     private async Task<string> FormatStatusAsync(
@@ -756,11 +805,16 @@ public sealed class TelegramUpdateHandler
             $"{status.ApplicationName} {status.Version}",
             $"Runtime: {runtimeText}",
             $"LLM: {runtimeHealth.Provider} / {runtimeHealth.Model} / thinking {runtimeHealth.ThinkingMode}",
+            $"LLM Router: mode {status.Configuration.LlmRouterMode}, small-model {status.Configuration.LlmRouterSmallModel}, max-input-chars {status.Configuration.LlmRouterMaxInputCharsForSmall}, max-history-messages {status.Configuration.LlmRouterMaxHistoryMessagesForSmall}",
             $"ReasoningActive(tool-enabled): {toolReasoningActive}",
             $"ReasoningPlan(tool-enabled): requested {toolEnabledPlan.RequestedThinkingMode}, effective {FormatThinkingMode(toolEnabledPlan.EffectiveThinkingMode)}, patch {toolEnabledPlan.ShouldPatchChatCompletionRequest}",
             $"ReasoningSafetyFallback(tool-enabled): {ShouldUseReasoningSafetyFallback(toolEnabledPlan)}",
             $"ReasoningActive(deep): {deepReasoningActive}",
             $"ReasoningPlan(deep): requested {deepReasoningPlan.RequestedThinkingMode}, effective {FormatThinkingMode(deepReasoningPlan.EffectiveThinkingMode)}, patch {deepReasoningPlan.ShouldPatchChatCompletionRequest}",
+            $"LLM Router telemetry: decisions {status.RoutingTelemetry.DecisionsTotal} (off {status.RoutingTelemetry.DecisionsOff}, shadow {status.RoutingTelemetry.DecisionsShadow}, enforced {status.RoutingTelemetry.DecisionsEnforced}), small-target {status.RoutingTelemetry.SmallModelTargetDecisions}, fallback-to-default {status.RoutingTelemetry.FallbackToDefaultCount}",
+            $"LLM Router buckets: small+disabled {status.RoutingTelemetry.BucketSmallDisabled}, default+provider-default {status.RoutingTelemetry.BucketDefaultProviderDefault}, default+deep {status.RoutingTelemetry.BucketDefaultDeep}",
+            $"LLM Router last: mode {status.RoutingTelemetry.LastRouterMode}, bucket {status.RoutingTelemetry.LastDecisionBucket}, model-target {status.RoutingTelemetry.LastModelTarget}, reasoning-target {status.RoutingTelemetry.LastReasoningTarget}, applied {status.RoutingTelemetry.LastApplied}, fallback {status.RoutingTelemetry.LastFallbackApplied}",
+            $"LLM Router last reason: {status.RoutingTelemetry.LastDecisionReason}",
             $"ReasoningPreview(Telegram): enabled {status.Configuration.TelegramReasoningPreviewEnabled}, delay {status.Configuration.TelegramReasoningPreviewDelaySeconds}s",
             $"Uptime: {status.Uptime}",
             $"Configuration: {status.ConfigurationMode}",
@@ -889,6 +943,55 @@ public sealed class TelegramUpdateHandler
             ? approveMatch.Groups[1].Value
             : rejectMatch.Groups[1].Value;
         return !string.IsNullOrWhiteSpace(confirmationId);
+    }
+
+    private static string EnsureConfirmationCommands(
+        string text,
+        string confirmationId)
+    {
+        var normalizedId = confirmationId.Trim();
+        if (string.IsNullOrWhiteSpace(normalizedId))
+        {
+            return text;
+        }
+
+        var hasApprove = ApproveCommandRegex.IsMatch(text);
+        var hasReject = RejectCommandRegex.IsMatch(text);
+
+        var normalizedText = ApproveCommandRegex.Replace(
+            text,
+            $"/approve {normalizedId}");
+        normalizedText = RejectCommandRegex.Replace(
+            normalizedText,
+            $"/reject {normalizedId}");
+
+        var hasApproveAfterNormalization = ApproveCommandRegex.IsMatch(normalizedText);
+        var hasRejectAfterNormalization = RejectCommandRegex.IsMatch(normalizedText);
+        if (hasApproveAfterNormalization && hasRejectAfterNormalization)
+        {
+            return normalizedText;
+        }
+
+        var lines = new List<string> { normalizedText };
+        if (!hasApproveAfterNormalization || !hasRejectAfterNormalization || (!hasApprove && !hasReject))
+        {
+            lines.Add(string.Empty);
+        }
+
+        if (!hasApproveAfterNormalization)
+        {
+            lines.Add("Подтвердить:");
+            lines.Add($"/approve {normalizedId}");
+            lines.Add(string.Empty);
+        }
+
+        if (!hasRejectAfterNormalization)
+        {
+            lines.Add("Отклонить:");
+            lines.Add($"/reject {normalizedId}");
+        }
+
+        return string.Join(Environment.NewLine, lines);
     }
 
     private static string NormalizeTelegramText(string text)

@@ -18,4 +18,14 @@ public sealed class LlmOptions
     public string ApiKey { get; set; } = string.Empty;
 
     public string ThinkingMode { get; set; } = LlmThinkingModes.Auto;
+
+    public string RouterMode { get; set; } = LlmRouterModes.Off;
+
+    public string RouterSmallModel { get; set; } = "moonshot-v1-8k";
+
+    public int RouterMaxInputCharsForSmall { get; set; } = 1_800;
+
+    public int RouterMaxHistoryMessagesForSmall { get; set; } = 10;
+
+    public string RouterDeepKeywords { get; set; } = "пошагово,step-by-step,deep reasoning";
 }

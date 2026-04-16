@@ -1440,6 +1440,96 @@ public sealed class AgentStateRepository
             : null;
     }
 
+    public async Task<PendingConfirmation?> GetPendingConfirmationByIdAsync(
+        string confirmationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(confirmationId);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                id,
+                action_kind,
+                conversation_key,
+                participant_id,
+                operation_name,
+                payload_json,
+                summary,
+                risk,
+                status,
+                created_utc,
+                expires_utc,
+                completed_utc,
+                correlation_id,
+                result_json,
+                error
+            FROM pending_confirmations
+            WHERE id = $id;
+            """;
+        command.Parameters.AddWithValue("$id", confirmationId);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? ReadPendingConfirmation(reader)
+            : null;
+    }
+
+    public async Task<PendingConfirmation?> GetLatestPendingConfirmationAsync(
+        string conversationKey,
+        string participantId,
+        string correlationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
+        ArgumentException.ThrowIfNullOrWhiteSpace(participantId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                id,
+                action_kind,
+                conversation_key,
+                participant_id,
+                operation_name,
+                payload_json,
+                summary,
+                risk,
+                status,
+                created_utc,
+                expires_utc,
+                completed_utc,
+                correlation_id,
+                result_json,
+                error
+            FROM pending_confirmations
+            WHERE conversation_key = $conversationKey
+              AND participant_id = $participantId
+              AND correlation_id = $correlationId
+              AND status = $status
+            ORDER BY created_utc DESC, id DESC
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("$conversationKey", conversationKey);
+        command.Parameters.AddWithValue("$participantId", participantId);
+        command.Parameters.AddWithValue("$correlationId", correlationId);
+        command.Parameters.AddWithValue("$status", ConfirmationActionStatus.Pending.ToString());
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? ReadPendingConfirmation(reader)
+            : null;
+    }
+
     public async Task<bool> TryUpdateConfirmationStatusAsync(
         string confirmationId,
         ConfirmationActionStatus expectedStatus,

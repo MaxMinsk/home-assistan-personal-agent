@@ -35,6 +35,21 @@ configuration:
   llm_thinking_mode:
     name: LLM thinking mode
     description: auto keeps tool calls stable, disabled forces no thinking when supported, enabled allows provider defaults unless explicit enable is supported.
+  llm_router_mode:
+    name: LLM router mode
+    description: off disables adaptive routing; shadow logs routing decisions only; enforced applies model+reasoning routing per request.
+  llm_router_small_model:
+    name: LLM router small model
+    description: Fast/cheap model used by router for short operational requests in small-context budget.
+  llm_router_max_input_chars_for_small:
+    name: LLM router input chars limit
+    description: Maximum estimated input characters allowed for routing to the small model.
+  llm_router_max_history_messages_for_small:
+    name: LLM router history messages limit
+    description: Maximum history message count allowed for routing to the small model.
+  llm_router_deep_keywords:
+    name: LLM router deep keywords
+    description: Optional comma-separated keywords that force deep reasoning route (default keywords are used when empty).
   state_database_path:
     name: State database path
     description: SQLite database path for persistent agent state.

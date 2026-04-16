@@ -13,4 +13,5 @@ public sealed record AgentStatusSnapshot(
     string TargetFramework,
     string Uptime,
     string ConfigurationMode,
-    ConfigurationStatus Configuration);
+    ConfigurationStatus Configuration,
+    LlmRoutingTelemetrySnapshot RoutingTelemetry);

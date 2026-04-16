@@ -22,4 +22,9 @@ public interface IConfirmationService
         DialogueConversation conversation,
         string confirmationId,
         CancellationToken cancellationToken);
+
+    Task<string?> GetLatestPendingConfirmationIdAsync(
+        DialogueConversation conversation,
+        string correlationId,
+        CancellationToken cancellationToken);
 }

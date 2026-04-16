@@ -52,6 +52,8 @@ public sealed class AgentRuntime : IAgentRuntime
     private readonly IHomeAssistantMcpAgentToolProvider? _homeAssistantMcpToolProvider;
     private readonly HomeAssistantMcpStatusTool? _homeAssistantMcpStatusTool;
     private readonly LlmExecutionPlanner _executionPlanner;
+    private readonly LlmExecutionRouter _executionRouter;
+    private readonly LlmRoutingTelemetry _routingTelemetry;
     private readonly BoundedChatHistoryProvider? _boundedChatHistoryProvider;
     private readonly ILogger<AgentRuntime> _logger;
     private readonly ILoggerFactory _loggerFactory;
@@ -70,11 +72,15 @@ public sealed class AgentRuntime : IAgentRuntime
         AgentStateRepository? stateRepository = null,
         IHomeAssistantMcpAgentToolProvider? homeAssistantMcpToolProvider = null,
         IConfirmationService? confirmationService = null,
-        HomeAssistantMcpStatusTool? homeAssistantMcpStatusTool = null)
+        HomeAssistantMcpStatusTool? homeAssistantMcpStatusTool = null,
+        LlmExecutionRouter? executionRouter = null,
+        LlmRoutingTelemetry? routingTelemetry = null)
     {
         _llmOptions = llmOptions;
         _statusTool = statusTool;
         _executionPlanner = executionPlanner;
+        _executionRouter = executionRouter ?? new LlmExecutionRouter();
+        _routingTelemetry = routingTelemetry ?? new LlmRoutingTelemetry();
         _boundedChatHistoryProvider = boundedChatHistoryProvider;
         _loggerFactory = loggerFactory;
         _logger = loggerFactory.CreateLogger<AgentRuntime>();
@@ -109,6 +115,11 @@ public sealed class AgentRuntime : IAgentRuntime
             return AgentRuntimeHealth.NotConfigured(options, "Llm:ThinkingMode must be one of: auto, disabled, enabled.");
         }
 
+        if (!LlmRouterModes.IsValid(options.RouterMode))
+        {
+            return AgentRuntimeHealth.NotConfigured(options, "Llm:RouterMode must be one of: off, shadow, enforced.");
+        }
+
         return AgentRuntimeHealth.Configured(options);
     }
 
@@ -131,22 +142,50 @@ public sealed class AgentRuntime : IAgentRuntime
                 health);
         }
 
-        var executionPlan = _executionPlanner.CreatePlan(_llmOptions.Value, context.ExecutionProfile);
+        var llmOptions = _llmOptions.Value;
+        var defaultModel = llmOptions.Model.Trim();
+        var routingDecision = _executionRouter.Decide(
+            llmOptions,
+            context,
+            message,
+            context.ExecutionProfile);
+        _routingTelemetry.RecordDecision(routingDecision);
+
+        var routedModel = routingDecision.IsApplied
+            ? routingDecision.SelectedModel
+            : defaultModel;
+        var routedThinkingModeOverride = routingDecision.IsApplied
+            ? routingDecision.ThinkingModeOverride
+            : null;
+
+        // Extension point: здесь можно добавить per-provider request budgets (tokens/$),
+        // чтобы router decision учитывал дневные лимиты и SLA по latency.
+        var executionPlan = _executionPlanner.CreatePlan(
+            llmOptions,
+            context.ExecutionProfile,
+            routedThinkingModeOverride);
         var reasoningDiagnostics = new ReasoningRunDiagnostics();
         var compactionDiagnostics = new CompactionRunDiagnostics();
         await using var homeAssistantMcpTools = await CreateHomeAssistantMcpToolsAsync(
             executionPlan,
             cancellationToken);
         _logger.LogInformation(
-            "Agent run {CorrelationId} starting with provider {Provider}, model {Model}, profile {ExecutionProfile}, provider profile {ProviderProfile}, thinking requested {RequestedThinkingMode}, thinking effective {EffectiveThinkingMode}, thinking reason {ThinkingReason}, history messages {HistoryMessageCount}, memory retrieval mode {MemoryRetrievalMode}, persisted summary present {PersistedSummaryPresent}, persisted summary length {PersistedSummaryLength}, retrieved memories {RetrievedMemoryCount}, retrieved memory text length {RetrievedMemoryLength}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}, persisted summary refresh forced {ForcePersistedSummaryRefresh}, MCP status {McpStatus}, read-only MCP tools {ReadOnlyToolCount}, confirmation MCP tools {ConfirmationToolCount}.",
+            "Agent run {CorrelationId} starting with provider {Provider}, default model {DefaultModel}, selected model {SelectedModel}, profile {ExecutionProfile}, provider profile {ProviderProfile}, thinking requested {RequestedThinkingMode}, thinking effective {EffectiveThinkingMode}, thinking reason {ThinkingReason}, router mode {RouterMode}, router applied {RouterApplied}, router model target {RouterModelTarget}, router reasoning target {RouterReasoningTarget}, router decision bucket {RouterDecisionBucket}, router reason {RouterReason}, history messages {HistoryMessageCount}, memory retrieval mode {MemoryRetrievalMode}, persisted summary present {PersistedSummaryPresent}, persisted summary length {PersistedSummaryLength}, retrieved memories {RetrievedMemoryCount}, retrieved memory text length {RetrievedMemoryLength}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}, persisted summary refresh forced {ForcePersistedSummaryRefresh}, MCP status {McpStatus}, read-only MCP tools {ReadOnlyToolCount}, confirmation MCP tools {ConfirmationToolCount}.",
             context.CorrelationId,
             health.Provider,
-            health.Model,
+            defaultModel,
+            routedModel,
             executionPlan.Profile,
             executionPlan.Capabilities.ProviderKey,
             executionPlan.RequestedThinkingMode,
             executionPlan.EffectiveThinkingMode,
             executionPlan.Reason,
+            routingDecision.RouterMode,
+            routingDecision.IsApplied,
+            routingDecision.ModelTarget,
+            routingDecision.ReasoningTarget,
+            routingDecision.DecisionBucket,
+            routingDecision.Reason,
             context.ConversationMessages.Count,
             context.MemoryRetrievalMode,
             !string.IsNullOrWhiteSpace(context.PersistedSummary),
@@ -160,56 +199,94 @@ public sealed class AgentRuntime : IAgentRuntime
             homeAssistantMcpTools.ExposedToolCount,
             homeAssistantMcpTools.ConfirmationRequiredTools.Count);
 
-        var agent = CreateAgent(
-            _llmOptions.Value,
-            homeAssistantMcpTools,
-            context,
-            executionPlan,
-            reasoningDiagnostics,
-            compactionDiagnostics);
-        var runOptions = new ChatClientAgentRunOptions(new ChatOptions())
-        {
-            AdditionalProperties = new AdditionalPropertiesDictionary
-            {
-                ["correlation_id"] = context.CorrelationId,
-            },
-        };
-
         AgentResponse response;
-        AgentRuntimeResponse? failureResponse = null;
+        var executedModel = routedModel;
+        var executedPlan = executionPlan;
+        var fallbackApplied = false;
         try
         {
-            var messages = CreateMessages(message, context);
-            if (onReasoningUpdate is null)
+            response = await RunAgentOnceAsync(
+                message,
+                context,
+                llmOptions,
+                homeAssistantMcpTools,
+                routedModel,
+                executionPlan,
+                reasoningDiagnostics,
+                compactionDiagnostics,
+                onReasoningUpdate,
+                cancellationToken);
+        }
+        catch (ClientResultException exception) when (
+            LlmRoutingFallbackPolicy.CanRetryWithDefaultModel(
+                routingDecision,
+                routedModel,
+                defaultModel,
+                exception.Status))
+        {
+            fallbackApplied = true;
+            executedModel = defaultModel;
+            // Extension point: если позже добавим multi-tier routing (small -> medium -> default),
+            // здесь можно строить следующую "ступень" fallback из policy-таблицы вместо hardcoded default model.
+            executedPlan = _executionPlanner.CreatePlan(
+                llmOptions,
+                context.ExecutionProfile,
+                routedThinkingModeOverride);
+
+            _logger.LogWarning(
+                exception,
+                "LLM routed request failed for run {CorrelationId} on model {FailedModel} with HTTP status {Status}; retrying once with default model {DefaultModel}.",
+                context.CorrelationId,
+                routedModel,
+                exception.Status,
+                defaultModel);
+
+            try
             {
-                response = await agent.RunAsync(
-                    messages,
-                    session: null,
-                    options: runOptions,
+                response = await RunAgentOnceAsync(
+                    message,
+                    context,
+                    llmOptions,
+                    homeAssistantMcpTools,
+                    defaultModel,
+                    executedPlan,
+                    reasoningDiagnostics,
+                    compactionDiagnostics,
+                    onReasoningUpdate,
                     cancellationToken);
             }
-            else
+            catch (ClientResultException fallbackException)
             {
-                // MAF pattern: stream updates, process intermediate deltas, then assemble AgentResponse.
-                // Ref: dotnet/samples/02-agents/Agents/Agent_Step02_StructuredOutput/Program.cs (RunStreamingAsync + ToAgentResponseAsync).
-                var updates = new List<AgentResponseUpdate>();
-                await foreach (var update in agent.RunStreamingAsync(
-                                   messages,
-                                   session: null,
-                                   options: runOptions,
-                                   cancellationToken).WithCancellation(cancellationToken))
-                {
-                    updates.Add(update);
-                    var reasoningTextDelta = ExtractReasoningTextDelta(update);
-                    if (!string.IsNullOrWhiteSpace(reasoningTextDelta))
-                    {
-                        await onReasoningUpdate(
-                            new AgentRuntimeReasoningUpdate(context.CorrelationId, reasoningTextDelta),
-                            cancellationToken);
-                    }
-                }
+                _logger.LogWarning(
+                    fallbackException,
+                    "LLM provider request failed with HTTP status {Status} after fallback to default model.",
+                    fallbackException.Status);
 
-                response = updates.ToAgentResponse();
+                _routingTelemetry.RecordExecutionBucket(
+                    ResolveExecutionBucket(routingDecision, executedPlan),
+                    fallbackApplied: true);
+                LogReasoningDiagnostics(context.CorrelationId, executedPlan, reasoningDiagnostics, success: false);
+                LogCompactionDiagnostics(context.CorrelationId, compactionDiagnostics, success: false);
+                return CreateProviderFailureResponse(
+                    context,
+                    health,
+                    fallbackException.Status);
+            }
+            catch (Exception fallbackException) when (fallbackException is not OperationCanceledException)
+            {
+                _logger.LogWarning(
+                    fallbackException,
+                    "Agent runtime fallback run failed before returning a response.");
+
+                _routingTelemetry.RecordExecutionBucket(
+                    ResolveExecutionBucket(routingDecision, executedPlan),
+                    fallbackApplied: true);
+                LogReasoningDiagnostics(context.CorrelationId, executedPlan, reasoningDiagnostics, success: false);
+                LogCompactionDiagnostics(context.CorrelationId, compactionDiagnostics, success: false);
+                return CreateProviderFailureResponse(
+                    context,
+                    health,
+                    status: null);
             }
         }
         catch (ClientResultException exception)
@@ -219,13 +296,15 @@ public sealed class AgentRuntime : IAgentRuntime
                 "LLM provider request failed with HTTP status {Status}.",
                 exception.Status);
 
-            failureResponse = CreateProviderFailureResponse(
+            _routingTelemetry.RecordExecutionBucket(
+                ResolveExecutionBucket(routingDecision, executedPlan),
+                fallbackApplied);
+            LogReasoningDiagnostics(context.CorrelationId, executedPlan, reasoningDiagnostics, success: false);
+            LogCompactionDiagnostics(context.CorrelationId, compactionDiagnostics, success: false);
+            return CreateProviderFailureResponse(
                 context,
                 health,
                 exception.Status);
-            LogReasoningDiagnostics(context.CorrelationId, executionPlan, reasoningDiagnostics, success: false);
-            LogCompactionDiagnostics(context.CorrelationId, compactionDiagnostics, success: false);
-            return failureResponse;
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
@@ -233,20 +312,29 @@ public sealed class AgentRuntime : IAgentRuntime
                 exception,
                 "Agent runtime failed before returning a response.");
 
-            failureResponse = CreateProviderFailureResponse(
+            _routingTelemetry.RecordExecutionBucket(
+                ResolveExecutionBucket(routingDecision, executedPlan),
+                fallbackApplied);
+            LogReasoningDiagnostics(context.CorrelationId, executedPlan, reasoningDiagnostics, success: false);
+            LogCompactionDiagnostics(context.CorrelationId, compactionDiagnostics, success: false);
+            return CreateProviderFailureResponse(
                 context,
                 health,
                 status: null);
-            LogReasoningDiagnostics(context.CorrelationId, executionPlan, reasoningDiagnostics, success: false);
-            LogCompactionDiagnostics(context.CorrelationId, compactionDiagnostics, success: false);
-            return failureResponse;
         }
 
+        _routingTelemetry.RecordExecutionBucket(
+            ResolveExecutionBucket(routingDecision, executedPlan),
+            fallbackApplied);
         _logger.LogInformation(
-            "Agent run {CorrelationId} completed with response length {ResponseLength}.",
+            "Agent run {CorrelationId} completed with response length {ResponseLength}; selected model {SelectedModel}; router applied {RouterApplied}; fallback applied {FallbackApplied}; executed bucket {ExecutedBucket}.",
             context.CorrelationId,
-            response.Text.Length);
-        LogReasoningDiagnostics(context.CorrelationId, executionPlan, reasoningDiagnostics, success: true);
+            response.Text.Length,
+            executedModel,
+            routingDecision.IsApplied,
+            fallbackApplied,
+            ResolveExecutionBucket(routingDecision, executedPlan));
+        LogReasoningDiagnostics(context.CorrelationId, executedPlan, reasoningDiagnostics, success: true);
         LogCompactionDiagnostics(context.CorrelationId, compactionDiagnostics, success: true);
         var compactionSnapshot = compactionDiagnostics.Snapshot();
         var responseText = compactionSnapshot.SummarizationTriggered
@@ -280,8 +368,85 @@ public sealed class AgentRuntime : IAgentRuntime
             health);
     }
 
+    private async Task<AgentResponse> RunAgentOnceAsync(
+        string message,
+        AgentContext context,
+        LlmOptions llmOptions,
+        HomeAssistantMcpAgentToolSet homeAssistantMcpTools,
+        string model,
+        LlmExecutionPlan executionPlan,
+        ReasoningRunDiagnostics reasoningDiagnostics,
+        CompactionRunDiagnostics compactionDiagnostics,
+        Func<AgentRuntimeReasoningUpdate, CancellationToken, Task>? onReasoningUpdate,
+        CancellationToken cancellationToken)
+    {
+        var agent = CreateAgent(
+            llmOptions,
+            model,
+            homeAssistantMcpTools,
+            context,
+            executionPlan,
+            reasoningDiagnostics,
+            compactionDiagnostics);
+        var runOptions = new ChatClientAgentRunOptions(new ChatOptions())
+        {
+            AdditionalProperties = new AdditionalPropertiesDictionary
+            {
+                ["correlation_id"] = context.CorrelationId,
+            },
+        };
+        var messages = CreateMessages(message, context);
+
+        if (onReasoningUpdate is null)
+        {
+            return await agent.RunAsync(
+                messages,
+                session: null,
+                options: runOptions,
+                cancellationToken);
+        }
+
+        // MAF pattern: stream updates, process intermediate deltas, then assemble AgentResponse.
+        // Ref: dotnet/samples/02-agents/Agents/Agent_Step02_StructuredOutput/Program.cs (RunStreamingAsync + ToAgentResponseAsync).
+        var updates = new List<AgentResponseUpdate>();
+        await foreach (var update in agent.RunStreamingAsync(
+                           messages,
+                           session: null,
+                           options: runOptions,
+                           cancellationToken).WithCancellation(cancellationToken))
+        {
+            updates.Add(update);
+            var reasoningTextDelta = ExtractReasoningTextDelta(update);
+            if (!string.IsNullOrWhiteSpace(reasoningTextDelta))
+            {
+                await onReasoningUpdate(
+                    new AgentRuntimeReasoningUpdate(context.CorrelationId, reasoningTextDelta),
+                    cancellationToken);
+            }
+        }
+
+        return updates.ToAgentResponse();
+    }
+
+    private static string ResolveExecutionBucket(
+        LlmRoutingDecision routingDecision,
+        LlmExecutionPlan executionPlan)
+    {
+        if (routingDecision.IsApplied)
+        {
+            return routingDecision.DecisionBucket;
+        }
+
+        // Extension point: когда добавим больше routing bucket'ов (например default+disabled или tool-heavy),
+        // здесь можно вычислять bucket по фактическому executionPlan/profile, а не сводить всё к двум default веткам.
+        return executionPlan.Profile == LlmExecutionProfile.DeepReasoning
+            ? LlmRoutingDecision.DecisionBucketDefaultDeep
+            : LlmRoutingDecision.DecisionBucketDefaultProviderDefault;
+    }
+
     private ChatClientAgent CreateAgent(
         LlmOptions options,
+        string model,
         HomeAssistantMcpAgentToolSet homeAssistantMcpTools,
         AgentContext context,
         LlmExecutionPlan executionPlan,
@@ -289,7 +454,7 @@ public sealed class AgentRuntime : IAgentRuntime
         CompactionRunDiagnostics compactionDiagnostics)
     {
         var chatClient = new ChatClient(
-            model: options.Model,
+            model: model,
             credential: new ApiKeyCredential(options.ApiKey),
             options: CreateOpenAIClientOptions(
                 options,

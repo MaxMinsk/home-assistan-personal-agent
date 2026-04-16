@@ -10,11 +10,15 @@ namespace HaPersonalAgent.Agent;
 public sealed class AgentStatusTool
 {
     private readonly ConfigurationStatusProvider _configurationStatusProvider;
+    private readonly LlmRoutingTelemetry _routingTelemetry;
     private readonly DateTimeOffset _startedAtUtc = DateTimeOffset.UtcNow;
 
-    public AgentStatusTool(ConfigurationStatusProvider configurationStatusProvider)
+    public AgentStatusTool(
+        ConfigurationStatusProvider configurationStatusProvider,
+        LlmRoutingTelemetry? routingTelemetry = null)
     {
         _configurationStatusProvider = configurationStatusProvider;
+        _routingTelemetry = routingTelemetry ?? new LlmRoutingTelemetry();
     }
 
     public AgentStatusSnapshot GetStatus()
@@ -27,7 +31,8 @@ public sealed class AgentStatusTool
             ApplicationInfo.TargetFramework,
             FormatUptime(uptime),
             DetectConfigurationMode(),
-            _configurationStatusProvider.Create());
+            _configurationStatusProvider.Create(),
+            _routingTelemetry.Snapshot());
     }
 
     private static string DetectConfigurationMode() =>

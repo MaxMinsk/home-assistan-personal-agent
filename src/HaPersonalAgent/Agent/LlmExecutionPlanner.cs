@@ -18,12 +18,17 @@ public sealed class LlmExecutionPlanner
 
     public LlmExecutionPlan CreatePlan(
         LlmOptions options,
-        LlmExecutionProfile profile)
+        LlmExecutionProfile profile,
+        string? requestedThinkingModeOverride = null)
     {
         ArgumentNullException.ThrowIfNull(options);
 
         var capabilities = _capabilitiesResolver.Resolve(options);
-        var requestedThinkingMode = LlmThinkingModes.Normalize(options.ThinkingMode);
+        // Extension point: per-request router/experiments могут подменять requested thinking mode
+        // без изменения глобального LlmOptions. Здесь остается единая точка нормализации.
+        var requestedThinkingMode = string.IsNullOrWhiteSpace(requestedThinkingModeOverride)
+            ? LlmThinkingModes.Normalize(options.ThinkingMode)
+            : LlmThinkingModes.Normalize(requestedThinkingModeOverride);
         if (profile == LlmExecutionProfile.Summarization)
         {
             return CreateSummarizationPlan(capabilities, requestedThinkingMode);

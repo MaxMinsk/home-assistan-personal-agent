@@ -92,6 +92,13 @@ public sealed class ConfirmationService : IConfirmationService
             details: null,
             now,
             cancellationToken);
+        _logger.LogInformation(
+            "Confirmation proposed: id {ConfirmationId}, action {ActionKind}, conversation {ConversationKey}, participant {ParticipantId}, expires {ExpiresUtc}.",
+            pendingConfirmation.Id,
+            pendingConfirmation.ActionKind,
+            pendingConfirmation.ConversationKey,
+            pendingConfirmation.ParticipantId,
+            pendingConfirmation.ExpiresAtUtc);
 
         var approveCommand = $"/approve {confirmationId}";
         var rejectCommand = $"/reject {confirmationId}";
@@ -294,18 +301,70 @@ public sealed class ConfirmationService : IConfirmationService
             pendingConfirmation.Id);
     }
 
+    public async Task<string?> GetLatestPendingConfirmationIdAsync(
+        DialogueConversation conversation,
+        string correlationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+        ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
+
+        var conversationKey = DialogueConversationKey.Create(conversation);
+        var pendingConfirmation = await _stateRepository.GetLatestPendingConfirmationAsync(
+            conversationKey,
+            conversation.ParticipantId,
+            correlationId.Trim(),
+            cancellationToken);
+        return pendingConfirmation?.Id;
+    }
+
     private async Task<PendingConfirmation?> GetScopedConfirmationAsync(
         DialogueConversation conversation,
         string confirmationId,
         CancellationToken cancellationToken)
     {
         var conversationKey = DialogueConversationKey.Create(conversation);
-
-        return await _stateRepository.GetPendingConfirmationAsync(
+        var normalizedConfirmationId = confirmationId.Trim();
+        var scopedConfirmation = await _stateRepository.GetPendingConfirmationAsync(
             conversationKey,
             conversation.ParticipantId,
-            confirmationId.Trim(),
+            normalizedConfirmationId,
             cancellationToken);
+        if (scopedConfirmation is not null)
+        {
+            return scopedConfirmation;
+        }
+
+        var byIdConfirmation = await _stateRepository.GetPendingConfirmationByIdAsync(
+            normalizedConfirmationId,
+            cancellationToken);
+        if (byIdConfirmation is null)
+        {
+            _logger.LogInformation(
+                "Confirmation {ConfirmationId} was not found for conversation {ConversationKey}, participant {ParticipantId}, and does not exist globally.",
+                normalizedConfirmationId,
+                conversationKey,
+                conversation.ParticipantId);
+            return null;
+        }
+
+        if (!string.Equals(byIdConfirmation.ParticipantId, conversation.ParticipantId, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Confirmation {ConfirmationId} exists but participant mismatch: requested {RequestedParticipantId}, stored {StoredParticipantId}.",
+                normalizedConfirmationId,
+                conversation.ParticipantId,
+                byIdConfirmation.ParticipantId);
+            return null;
+        }
+
+        _logger.LogWarning(
+            "Confirmation {ConfirmationId} found via participant fallback: requested conversation {RequestedConversationKey}, stored conversation {StoredConversationKey}, participant {ParticipantId}.",
+            normalizedConfirmationId,
+            conversationKey,
+            byIdConfirmation.ConversationKey,
+            conversation.ParticipantId);
+        return byIdConfirmation;
     }
 
     private async Task TryCompleteAsync(

@@ -68,6 +68,98 @@ public class ConfirmationServiceTests
     }
 
     [Fact]
+    public async Task Approve_uses_participant_fallback_when_conversation_key_differs()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var executor = new FakeActionExecutor(ConfirmationActionExecutionResult.Success("{\"ok\":true}"));
+            var service = CreateService(repository, executor);
+            var sourceConversation = DialogueConversation.Create("telegram", "200", "100");
+            var fallbackConversation = DialogueConversation.Create("telegram", "201", "100");
+
+            var proposal = await service.ProposeAsync(
+                CreateRequest(sourceConversation, payloadJson: "{}"),
+                CancellationToken.None);
+            var approved = await service.ApproveAsync(
+                fallbackConversation,
+                proposal.ConfirmationId!,
+                CancellationToken.None);
+
+            Assert.True(proposal.IsCreated);
+            Assert.True(approved.IsSuccess);
+            Assert.Equal(ConfirmationDecisionOutcome.Completed, approved.Outcome);
+            Assert.Single(executor.ExecutedConfirmations);
+            Assert.Equal("100", executor.ExecutedConfirmations[0].ParticipantId);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Approve_with_different_participant_remains_not_found()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var executor = new FakeActionExecutor(ConfirmationActionExecutionResult.Success("{\"ok\":true}"));
+            var service = CreateService(repository, executor);
+            var sourceConversation = DialogueConversation.Create("telegram", "200", "100");
+            var differentParticipantConversation = DialogueConversation.Create("telegram", "200", "999");
+
+            var proposal = await service.ProposeAsync(
+                CreateRequest(sourceConversation, payloadJson: "{}"),
+                CancellationToken.None);
+            var approved = await service.ApproveAsync(
+                differentParticipantConversation,
+                proposal.ConfirmationId!,
+                CancellationToken.None);
+
+            Assert.False(approved.IsSuccess);
+            Assert.Equal(ConfirmationDecisionOutcome.NotFound, approved.Outcome);
+            Assert.Empty(executor.ExecutedConfirmations);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Get_latest_pending_confirmation_id_returns_id_for_same_correlation_scope()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var service = CreateService(repository);
+            var conversation = DialogueConversation.Create("telegram", "200", "100");
+
+            var proposal = await service.ProposeAsync(
+                CreateRequest(conversation, payloadJson: "{}"),
+                CancellationToken.None);
+            var latestId = await service.GetLatestPendingConfirmationIdAsync(
+                conversation,
+                "test-correlation",
+                CancellationToken.None);
+
+            Assert.True(proposal.IsCreated);
+            Assert.Equal(proposal.ConfirmationId, latestId);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Approve_returns_sanitized_truncated_result_preview()
     {
         var databasePath = CreateTemporaryDatabasePath();

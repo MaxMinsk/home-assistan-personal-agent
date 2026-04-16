@@ -22,6 +22,10 @@ public class ConfigurationTests
         Assert.Equal("https://api.moonshot.ai/v1", llmOptions.BaseUrl);
         Assert.Equal("kimi-k2.5", llmOptions.Model);
         Assert.Equal(LlmThinkingModes.Auto, llmOptions.ThinkingMode);
+        Assert.Equal(LlmRouterModes.Off, llmOptions.RouterMode);
+        Assert.Equal("moonshot-v1-8k", llmOptions.RouterSmallModel);
+        Assert.Equal(1800, llmOptions.RouterMaxInputCharsForSmall);
+        Assert.Equal(10, llmOptions.RouterMaxHistoryMessagesForSmall);
         Assert.Equal("/data/state.sqlite", agentOptions.StateDatabasePath);
         Assert.Equal("/data/workspace", agentOptions.WorkspacePath);
         Assert.Equal(AgentOptions.MemoryRetrievalModeBeforeInvoke, agentOptions.MemoryRetrievalMode);
@@ -71,6 +75,11 @@ public class ConfigurationTests
                   "llm_model": "kimi-k2.5",
                   "llm_api_key": "moonshot-secret",
                   "llm_thinking_mode": "disabled",
+                  "llm_router_mode": "enforced",
+                  "llm_router_small_model": "moonshot-v1-8k",
+                  "llm_router_max_input_chars_for_small": 1600,
+                  "llm_router_max_history_messages_for_small": 8,
+                  "llm_router_deep_keywords": "пошагово,deep reasoning",
                   "state_database_path": "/tmp/state.sqlite",
                   "workspace_path": "/tmp/workspace",
                   "workspace_max_mb": 128,
@@ -96,6 +105,11 @@ public class ConfigurationTests
             Assert.Equal("moonshot-secret", llmOptions.ApiKey);
             Assert.Equal("kimi-k2.5", llmOptions.Model);
             Assert.Equal(LlmThinkingModes.Disabled, llmOptions.ThinkingMode);
+            Assert.Equal(LlmRouterModes.Enforced, llmOptions.RouterMode);
+            Assert.Equal("moonshot-v1-8k", llmOptions.RouterSmallModel);
+            Assert.Equal(1600, llmOptions.RouterMaxInputCharsForSmall);
+            Assert.Equal(8, llmOptions.RouterMaxHistoryMessagesForSmall);
+            Assert.Equal("пошагово,deep reasoning", llmOptions.RouterDeepKeywords);
             Assert.Equal("http://homeassistant.local:8123", homeAssistantOptions.Url);
             Assert.Equal("ha-secret", homeAssistantOptions.LongLivedAccessToken);
             Assert.Equal("/tmp/state.sqlite", agentOptions.StateDatabasePath);
@@ -182,6 +196,10 @@ public class ConfigurationTests
 
         Assert.True(status.LlmApiKeyConfigured);
         Assert.Equal(LlmThinkingModes.Auto, status.LlmThinkingMode);
+        Assert.Equal(LlmRouterModes.Off, status.LlmRouterMode);
+        Assert.Equal("moonshot-v1-8k", status.LlmRouterSmallModel);
+        Assert.Equal(1800, status.LlmRouterMaxInputCharsForSmall);
+        Assert.Equal(10, status.LlmRouterMaxHistoryMessagesForSmall);
         Assert.Equal(AgentOptions.MemoryRetrievalModeBeforeInvoke, status.MemoryRetrievalMode);
         Assert.True(status.TelegramBotTokenConfigured);
         Assert.False(status.TelegramReasoningPreviewEnabled);
