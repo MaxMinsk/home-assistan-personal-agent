@@ -1,5 +1,5 @@
 name: Home Assistant Personal Agent
-version: "0.2.24"
+version: "0.2.25"
 slug: ha_personal_agent
 description: Learning-first Microsoft Agent Framework assistant for Home Assistant.
 url: https://github.com/MaxMinsk/home-assistan-personal-agent/tree/main/addon
@@ -55,9 +55,9 @@ schema:
   llm_router_small_model: str
   llm_router_max_input_chars_for_small: int(200,24000)
   llm_router_max_history_messages_for_small: int(2,64)
-  llm_router_simple_max_input_chars: int(400,24000)
-  llm_router_simple_max_history_messages: int(2,64)
-  llm_router_simple_allow_tools: bool
+  llm_router_simple_max_input_chars: int(400,24000)?
+  llm_router_simple_max_history_messages: int(2,64)?
+  llm_router_simple_allow_tools: bool?
   llm_router_deep_keywords: str?
   state_database_path: str
   workspace_path: str

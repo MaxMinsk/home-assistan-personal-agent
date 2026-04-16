@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.25
+
+- Add Telegram command `/routerProbe <text>` to inspect routing decision without LLM call (intent, context profile, blocker reason, model target, reasoning mode, bucket).
+- Add dialogue API to build real current-chat runtime context for routing probe, so probe diagnostics match actual bounded-history/summary retrieval inputs.
+- Register `routerprobe` in Telegram bot command hints and update `/start` help text.
+- Fix Home Assistant add-on options backward compatibility: make `llm_router_simple_max_input_chars`, `llm_router_simple_max_history_messages`, and `llm_router_simple_allow_tools` optional in schema for existing installations.
+- Expand Telegram handler tests for `/routerProbe` (success path and missing-argument path).
+
+
 ## 0.2.24
 
 - Complete HAAG-056 routing overhaul for `enforced` mode: deterministic intent classes (`simple_chat`, `complex_analysis`, `tool_heavy`, `deep_reasoning`) with explicit `simple_packed` vs `default_full` context profiles.

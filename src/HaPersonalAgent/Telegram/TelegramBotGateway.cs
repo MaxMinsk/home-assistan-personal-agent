@@ -28,6 +28,7 @@ public sealed class TelegramBotGateway : BackgroundService
         ("refreshsummary", "Принудительно пересобрать summary"),
         ("showrawevents", "Показать последние raw events"),
         ("showvector", "Показать записи vector memory"),
+        ("routerprobe", "Показать routing decision без вызова LLM"),
         ("showcapsules", "Показать project capsules"),
         ("refreshcapsules", "Обновить project capsules"),
         ("think", "Deep reasoning без tools"),

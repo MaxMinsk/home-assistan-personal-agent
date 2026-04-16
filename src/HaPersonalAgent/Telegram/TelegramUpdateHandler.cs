@@ -44,6 +44,7 @@ public sealed class TelegramUpdateHandler
     private readonly IConfirmationService? _confirmationService;
     private readonly AgentStatusTool _statusTool;
     private readonly IAgentRuntime _agentRuntime;
+    private readonly AgentExecutionResolver _executionResolver;
     private readonly LlmExecutionPlanner _executionPlanner;
     private readonly IOptions<LlmOptions> _llmOptions;
     private readonly ILogger<TelegramUpdateHandler> _logger;
@@ -53,6 +54,7 @@ public sealed class TelegramUpdateHandler
         IHomeAssistantMcpClient homeAssistantMcpClient,
         AgentStatusTool statusTool,
         IAgentRuntime agentRuntime,
+        AgentExecutionResolver executionResolver,
         LlmExecutionPlanner executionPlanner,
         IOptions<LlmOptions> llmOptions,
         ILogger<TelegramUpdateHandler> logger,
@@ -62,6 +64,7 @@ public sealed class TelegramUpdateHandler
         _homeAssistantMcpClient = homeAssistantMcpClient;
         _statusTool = statusTool;
         _agentRuntime = agentRuntime;
+        _executionResolver = executionResolver;
         _executionPlanner = executionPlanner;
         _llmOptions = llmOptions;
         _logger = logger;
@@ -123,7 +126,7 @@ public sealed class TelegramUpdateHandler
                 update.Id);
             await client.SendMessageAsync(
                 chatId,
-                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary, /showRawEvents [N] покажет последние сырые события памяти, /showVector [N] покажет записи vector memory, /showCapsules [N] покажет project capsules, /refreshCapsules обновит project capsules из raw events. Для действий с подтверждением можно нажать кнопки Подтвердить/Отклонить, а также доступны команды /approve <id> и /reject <id>.",
+                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /routerProbe <текст> покажет как роутер классифицирует запрос, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary, /showRawEvents [N] покажет последние сырые события памяти, /showVector [N] покажет записи vector memory, /showCapsules [N] покажет project capsules, /refreshCapsules обновит project capsules из raw events. Для действий с подтверждением можно нажать кнопки Подтвердить/Отклонить, а также доступны команды /approve <id> и /reject <id>.",
                 cancellationToken);
             return;
         }
@@ -194,6 +197,21 @@ public sealed class TelegramUpdateHandler
                 chatId,
                 conversation,
                 vectorMemoryLimitArgument,
+                cancellationToken);
+            return;
+        }
+
+        if (TryReadCommandArgument(text, "/routerProbe", out var routerProbeMessage))
+        {
+            _logger.LogInformation(
+                "Telegram update {TelegramUpdateId} routed to /routerProbe command for conversation {ConversationKey}.",
+                update.Id,
+                DialogueConversationKey.Create(conversation));
+            await HandleRouterProbeCommandAsync(
+                client,
+                chatId,
+                conversation,
+                routerProbeMessage,
                 cancellationToken);
             return;
         }
@@ -585,6 +603,51 @@ public sealed class TelegramUpdateHandler
         await client.SendMessageAsync(
             chatId,
             NormalizeTelegramText(string.Join(Environment.NewLine, lines)),
+            cancellationToken);
+    }
+
+    private async Task HandleRouterProbeCommandAsync(
+        ITelegramBotClientAdapter client,
+        long chatId,
+        DialogueConversation conversation,
+        string? probeMessage,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(probeMessage))
+        {
+            await client.SendMessageAsync(
+                chatId,
+                "Укажи текст для анализа роутера: /routerProbe <текст>.",
+                cancellationToken);
+            return;
+        }
+
+        var runtimeContext = await _dialogueService.BuildRoutingProbeContextAsync(
+            conversation,
+            probeMessage,
+            LlmExecutionProfile.ToolEnabled,
+            cancellationToken);
+        var decision = _executionResolver.Resolve(
+            _llmOptions.Value,
+            runtimeContext,
+            probeMessage);
+        var response = string.Join(
+            Environment.NewLine,
+            "Router probe (без вызова LLM):",
+            $"Message: {NormalizeSingleLine(probeMessage, 280)}",
+            $"Router: mode {decision.RoutingDecision.RouterMode}, applied {decision.RoutingDecision.IsApplied}",
+            $"Intent: {decision.RoutingDecision.IntentClass}",
+            $"Context profile: candidate {decision.RoutingDecision.ContextProfile}, effective {decision.EffectiveContextProfile}",
+            $"Context blocker: {decision.RoutingDecision.ContextProfileBlockerReason ?? "none"}",
+            $"Model: target {decision.RoutingDecision.ModelTarget}, selected {decision.SelectedModel}",
+            $"Reasoning: target {decision.RoutingDecision.ReasoningTarget}, override {decision.SelectedThinkingModeOverride ?? "none"}, effective {decision.SelectedPlan.EffectiveThinkingMode}",
+            $"Execution profile: original {decision.OriginalContext.ExecutionProfile}, effective {decision.EffectiveContext.ExecutionProfile}",
+            $"Context sizes: estimated input chars {decision.RoutingDecision.EstimatedInputChars}, history messages {decision.RoutingDecision.HistoryMessageCount}",
+            $"Decision bucket: {decision.RoutingDecision.DecisionBucket}",
+            $"Decision reason: {decision.RoutingDecision.Reason}");
+        await client.SendMessageAsync(
+            chatId,
+            NormalizeTelegramText(response),
             cancellationToken);
     }
 
@@ -1060,6 +1123,25 @@ public sealed class TelegramUpdateHandler
         }
 
         return normalizedPayload[..MaxRawEventPayloadPreviewLength] + "...";
+    }
+
+    private static string NormalizeSingleLine(string text, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var normalized = text
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\n', ' ')
+            .Trim();
+        if (normalized.Length <= maxLength)
+        {
+            return normalized;
+        }
+
+        return normalized[..maxLength] + "...";
     }
 
     private static int CountEmbeddingDimensions(string embedding)

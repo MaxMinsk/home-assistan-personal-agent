@@ -579,6 +579,65 @@ public sealed class DialogueService
             EstimatedMessageScaffoldingTokenCount: contextTokenEstimate.ScaffoldingTokens);
     }
 
+    public async Task<AgentContext> BuildRoutingProbeContextAsync(
+        DialogueConversation conversation,
+        string userMessage,
+        LlmExecutionProfile executionProfile,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+        ArgumentException.ThrowIfNullOrWhiteSpace(userMessage);
+
+        var conversationKey = DialogueConversationKey.Create(conversation);
+        var maxMessages = GetMaxContextMessages();
+        var persistedSummary = await _stateRepository.GetConversationSummaryAsync(
+            conversationKey,
+            cancellationToken);
+        var latestMessageId = await _stateRepository.GetLatestConversationMessageIdAsync(
+            conversationKey,
+            cancellationToken);
+        var messagesSincePersistedSummary = CountMessagesSinceSummary(
+            persistedSummary,
+            latestMessageId);
+        var memoryRetrievalMode = AgentOptions.NormalizeMemoryRetrievalMode(_agentOptions.Value.MemoryRetrievalMode);
+        var autoMemoryRetrievalEnabled = AgentOptions.IsBeforeInvokeRetrieval(memoryRetrievalMode);
+        var boundedHistory = await _boundedChatHistoryProvider.LoadAsync(
+            conversationKey,
+            userMessage,
+            maxMessages,
+            includeRetrievedMemory: autoMemoryRetrievalEnabled,
+            cancellationToken);
+        var summaryRefreshDecision = PersistedSummaryRefreshPolicy.EvaluateAuto(
+            persistedSummary,
+            messagesSincePersistedSummary,
+            PersistedSummaryRefreshMessageThreshold,
+            userMessage,
+            boundedHistory.RecentMessages);
+        var capsulePromptContext = await _projectCapsuleService.BuildPromptContextAsync(
+            conversationKey,
+            cancellationToken);
+        var combinedMemoryContext = CombineContextBlocks(
+            capsulePromptContext.PromptText,
+            boundedHistory.RetrievedMemoryContext);
+        var combinedMemoryCount = capsulePromptContext.CapsuleCount + boundedHistory.RetrievedMemoryCount;
+
+        return AgentContext.Create(
+            correlationId: $"router-probe-{Guid.NewGuid():N}",
+            conversationMessages: boundedHistory.RecentMessages,
+            persistedSummary: persistedSummary?.Summary,
+            retrievedMemoryContext: combinedMemoryContext,
+            retrievedMemoryCount: combinedMemoryCount,
+            shouldRefreshPersistedSummary: summaryRefreshDecision.ShouldRefresh,
+            persistedSummaryRefreshReason: summaryRefreshDecision.Reason,
+            messagesSincePersistedSummary: messagesSincePersistedSummary,
+            memoryRetrievalMode: memoryRetrievalMode,
+            conversationKey: conversationKey,
+            transport: conversation.Transport,
+            conversationId: conversation.ConversationId,
+            participantId: conversation.ParticipantId,
+            executionProfile: executionProfile);
+    }
+
     public Task RecordSystemNotificationAsync(
         DialogueSystemNotification notification,
         CancellationToken cancellationToken)

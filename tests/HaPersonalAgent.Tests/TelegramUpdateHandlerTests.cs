@@ -648,6 +648,102 @@ public class TelegramUpdateHandlerTests
     }
 
     [Fact]
+    public async Task Router_probe_command_returns_routing_decision_without_calling_runtime()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            await repository.AppendConversationMessagesAsync(
+                "telegram:200:100",
+                Enumerable.Range(1, 16)
+                    .Select(index => new AgentConversationMessage(
+                        index % 2 == 0 ? AgentConversationRole.Assistant : AgentConversationRole.User,
+                        $"m{index} " + new string('x', 120),
+                        DateTimeOffset.UtcNow))
+                    .ToArray(),
+                CancellationToken.None);
+            var latestMessageId = await repository.GetLatestConversationMessageIdAsync(
+                "telegram:200:100",
+                CancellationToken.None);
+            Assert.True(latestMessageId.HasValue);
+            await repository.UpsertConversationSummaryAsync(
+                new ConversationSummaryMemory(
+                    "telegram:200:100",
+                    new string('s', 3000),
+                    DateTimeOffset.UtcNow,
+                    latestMessageId!.Value,
+                    SummaryVersion: 1),
+                CancellationToken.None);
+
+            var runtime = new FakeAgentRuntime("unused");
+            var handler = CreateHandler(
+                repository,
+                runtime,
+                llmOptionsOverride: new LlmOptions
+                {
+                    ApiKey = "configured",
+                    Provider = "moonshot",
+                    BaseUrl = "https://api.moonshot.ai/v1",
+                    Model = "kimi-k2.5",
+                    ThinkingMode = LlmThinkingModes.Auto,
+                    RouterMode = LlmRouterModes.Enforced,
+                    RouterSmallModel = "moonshot-v1-8k",
+                    RouterSimpleMaxInputChars = 3500,
+                    RouterSimpleMaxHistoryMessages = 6,
+                    RouterSimpleAllowTools = false,
+                });
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 181, chatId: 200, userId: 100, text: "/routerProbe ну шо, чувствуешь себя обновленным?"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Empty(runtime.Calls);
+            Assert.Single(adapter.SentMessages);
+            Assert.Contains("Router probe (без вызова LLM)", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("Intent: simple_chat", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("Context profile: candidate simple_packed, effective simple_packed", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("selected moonshot-v1-8k", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+            Assert.Contains("Execution profile: original ToolEnabled, effective PureChat", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Router_probe_command_requires_argument()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var runtime = new FakeAgentRuntime("unused");
+            var handler = CreateHandler(CreateRepository(databasePath), runtime);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateTextUpdate(updateId: 182, chatId: 200, userId: 100, text: "/routerProbe"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Empty(runtime.Calls);
+            Assert.Single(adapter.SentMessages);
+            Assert.Contains("Укажи текст для анализа роутера", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Reasoning_preview_is_sent_and_deleted_for_long_running_reasoning_stream()
     {
         var databasePath = CreateTemporaryDatabasePath();
@@ -1035,17 +1131,19 @@ public class TelegramUpdateHandlerTests
         AgentStateRepository repository,
         FakeAgentRuntime runtime,
         IHomeAssistantMcpClient? homeAssistantMcpClient = null,
-        IConfirmationService? confirmationService = null)
+        IConfirmationService? confirmationService = null,
+        LlmOptions? llmOptionsOverride = null)
     {
+        var llmOptionsValue = llmOptionsOverride ?? new LlmOptions
+        {
+            ApiKey = "configured",
+        };
         var statusProvider = new ConfigurationStatusProvider(
             Options.Create(new AgentOptions()),
             Options.Create(new TelegramOptions { AllowedUserIds = new long[] { 100 } }),
-            Options.Create(new LlmOptions { ApiKey = "configured" }),
+            Options.Create(llmOptionsValue),
             Options.Create(new HomeAssistantOptions()));
-        var llmOptions = Options.Create(new LlmOptions
-        {
-            ApiKey = "configured",
-        });
+        var llmOptions = Options.Create(llmOptionsValue);
         var loggerFactory = LoggerFactory.Create(_ => { });
         var boundedProvider = new BoundedChatHistoryProvider(
             repository,
@@ -1063,6 +1161,11 @@ public class TelegramUpdateHandlerTests
             projectCapsuleService,
             repository,
             loggerFactory.CreateLogger<DialogueService>());
+        var planner = new LlmExecutionPlanner(new LlmProviderCapabilitiesResolver());
+        var executionResolver = new AgentExecutionResolver(
+            new LlmExecutionRouter(),
+            planner,
+            new LlmRoutingContextProfileBuilder());
 
         return new TelegramUpdateHandler(
             dialogueService,
@@ -1071,7 +1174,8 @@ public class TelegramUpdateHandlerTests
                 "HomeAssistant:LongLivedAccessToken is empty.")),
             new AgentStatusTool(statusProvider),
             runtime,
-            new LlmExecutionPlanner(new LlmProviderCapabilitiesResolver()),
+            executionResolver,
+            planner,
             llmOptions,
             loggerFactory.CreateLogger<TelegramUpdateHandler>(),
             confirmationService);
