@@ -28,6 +28,7 @@ public sealed record LlmRoutingDecision(
     public const string ReasoningTargetDeep = "deep";
 
     public const string DecisionBucketSmallDisabled = "small+disabled";
+    public const string DecisionBucketDefaultDisabled = "default+disabled";
     public const string DecisionBucketDefaultProviderDefault = "default+provider-default";
     public const string DecisionBucketDefaultDeep = "default+deep";
 

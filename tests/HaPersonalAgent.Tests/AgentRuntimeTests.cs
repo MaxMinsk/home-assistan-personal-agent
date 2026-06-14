@@ -404,9 +404,33 @@ public class AgentRuntimeTests
         Assert.True(decision.IsApplied);
         Assert.Equal(LlmRoutingDecision.ModelTargetDefault, decision.ModelTarget);
         Assert.Equal("kimi-k2.5", decision.SelectedModel);
+        Assert.Equal(LlmRoutingDecision.ReasoningTargetDisabled, decision.ReasoningTarget);
+        Assert.Equal(LlmThinkingModes.Disabled, decision.ThinkingModeOverride);
+        Assert.Equal(LlmRoutingDecision.DecisionBucketDefaultDisabled, decision.DecisionBucket);
         Assert.Equal(LlmRoutingDecision.IntentClassToolHeavy, decision.IntentClass);
         Assert.Equal(LlmRoutingDecision.ContextProfileDefaultFull, decision.ContextProfile);
         Assert.NotNull(decision.ContextProfileBlockerReason);
+    }
+
+    [Fact]
+    public void Router_keeps_reasoning_for_complex_analysis_that_also_mentions_tools()
+    {
+        var router = new LlmExecutionRouter();
+        var decision = router.Decide(
+            new LlmOptions
+            {
+                Model = "kimi-k2.5",
+                RouterMode = LlmRouterModes.Enforced,
+                RouterSmallModel = "moonshot-v1-8k",
+            },
+            AgentContext.Create(),
+            userMessage: "проанализируй почему датчик температуры ведет себя странно",
+            profile: LlmExecutionProfile.ToolEnabled);
+
+        Assert.True(decision.IsApplied);
+        Assert.Equal(LlmRoutingDecision.IntentClassComplexAnalysis, decision.IntentClass);
+        Assert.Equal(LlmRoutingDecision.ReasoningTargetProviderDefault, decision.ReasoningTarget);
+        Assert.Null(decision.ThinkingModeOverride);
     }
 
     [Fact]

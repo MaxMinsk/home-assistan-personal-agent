@@ -19,7 +19,7 @@ public sealed class LlmOptions
 
     public string ThinkingMode { get; set; } = LlmThinkingModes.Auto;
 
-    public string RouterMode { get; set; } = LlmRouterModes.Off;
+    public string RouterMode { get; set; } = LlmRouterModes.Enforced;
 
     public string RouterSmallModel { get; set; } = "moonshot-v1-8k";
 

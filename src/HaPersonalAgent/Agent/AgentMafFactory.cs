@@ -20,6 +20,9 @@ namespace HaPersonalAgent.Agent;
 /// </summary>
 public sealed class AgentMafFactory
 {
+    private const int MaximumToolIterationsPerRequest = 6;
+    private const int MaximumConsecutiveToolErrorsPerRequest = 1;
+
     private readonly AgentToolCatalog _toolCatalog;
     private readonly AgentCompactionPipelineFactory _compactionPipelineFactory;
     private readonly ILoggerFactory _loggerFactory;
@@ -87,6 +90,13 @@ public sealed class AgentMafFactory
                     compactionDiagnostics),
                 stateKey: "ha_compaction_pipeline",
                 loggerFactory: _loggerFactory))
+            .UseFunctionInvocation(
+                _loggerFactory,
+                functionInvokingClient =>
+                {
+                    functionInvokingClient.MaximumIterationsPerRequest = MaximumToolIterationsPerRequest;
+                    functionInvokingClient.MaximumConsecutiveErrorsPerRequest = MaximumConsecutiveToolErrorsPerRequest;
+                })
             .Build();
 
         var tools = _toolCatalog.CreateTools(

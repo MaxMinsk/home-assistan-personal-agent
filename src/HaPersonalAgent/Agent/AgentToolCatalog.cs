@@ -19,6 +19,7 @@ namespace HaPersonalAgent.Agent;
 public sealed class AgentToolCatalog
 {
     private const int ProjectCapsuleToolListLimit = 8;
+    private const int ProjectCapsuleListPreviewLength = 320;
     private const int ConversationMemorySearchDefaultTopK = 4;
     private const int ConversationMemorySearchMaxTopK = 8;
     private static readonly JsonSerializerOptions ToolJsonOptions = new(JsonSerializerDefaults.Web);
@@ -307,7 +308,9 @@ public sealed class AgentToolCatalog
                     sourceEventId = capsule.SourceEventId,
                     version = capsule.Version,
                     updatedAtUtc = capsule.UpdatedAtUtc.ToString("O", CultureInfo.InvariantCulture),
-                    contentMarkdown = capsule.ContentMarkdown,
+                    contentPreview = NormalizeSingleLine(
+                        capsule.ContentMarkdown,
+                        ProjectCapsuleListPreviewLength),
                 }),
             };
 
@@ -317,7 +320,7 @@ public sealed class AgentToolCatalog
         return AIFunctionFactory.Create(
             (Func<CancellationToken, Task<string>>)ListProjectCapsulesAsync,
             name: "project_capsules_list",
-            description: $"Returns up to {ProjectCapsuleToolListLimit} latest project capsules for this conversation as JSON.",
+            description: $"Returns metadata and short previews for up to {ProjectCapsuleToolListLimit} latest project capsules. Use project_capsule_get for full content.",
             serializerOptions: null);
     }
 

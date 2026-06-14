@@ -327,6 +327,55 @@ public class DialogueServiceTests
     }
 
     [Fact]
+    public async Task Unchanged_persisted_summary_advances_source_watermark_without_incrementing_version()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var runtime = new FakeAgentRuntime(new (string Text, string? SummaryCandidate)[]
+            {
+                ("Первый ответ.", "Стабильный summary."),
+                ("Второй ответ.", "Стабильный summary."),
+                ("Третий ответ.", null),
+            });
+            var service = CreateService(repository, runtime);
+            var conversation = DialogueConversation.Create("telegram", "200", "100");
+            var conversationKey = DialogueConversationKey.Create(conversation);
+
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "Первое сообщение", "run-1"),
+                CancellationToken.None);
+            var firstSummary = await repository.GetConversationSummaryAsync(
+                conversationKey,
+                CancellationToken.None);
+
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "Второе сообщение", "run-2"),
+                CancellationToken.None);
+            var secondSummary = await repository.GetConversationSummaryAsync(
+                conversationKey,
+                CancellationToken.None);
+
+            await service.SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "Третье сообщение", "run-3"),
+                CancellationToken.None);
+
+            Assert.NotNull(firstSummary);
+            Assert.NotNull(secondSummary);
+            Assert.Equal(firstSummary.SummaryVersion, secondSummary.SummaryVersion);
+            Assert.True(secondSummary.SourceLastMessageId > firstSummary.SourceLastMessageId);
+            Assert.Equal(0, runtime.Calls[2].Context.MessagesSincePersistedSummary);
+            Assert.False(runtime.Calls[2].Context.ShouldRefreshPersistedSummary);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Bounded_history_archives_overflow_and_recalls_relevant_vector_memory()
     {
         var databasePath = CreateTemporaryDatabasePath();

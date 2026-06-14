@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.26
+
+- Enable enforced cost-aware routing by default: simple chat uses `moonshot-v1-8k` without tools/reasoning, while simple tool-heavy requests keep tools but disable expensive reasoning.
+- Add explicit MAF function-loop safety limits to prevent excessive repeated LLM round trips.
+- Guard oversized Home Assistant MCP tool results before the next LLM tool step and return compact project capsule previews from list calls.
+- Stabilize MCP tool ordering and add detailed per-request diagnostics for prompt/tool/result sizes, estimated input tokens, cached input tokens, cache-hit ratio, and prefix hashes.
+- Fix repeated persisted-summary generation when summarization returns unchanged text by advancing the processed-message watermark without incrementing summary version.
+
 ## 0.2.25
 
 - Add Telegram command `/routerProbe <text>` to inspect routing decision without LLM call (intent, context profile, blocker reason, model target, reasoning mode, bucket).

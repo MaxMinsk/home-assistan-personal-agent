@@ -16,6 +16,7 @@ public sealed class LlmRoutingTelemetry
     private long _smallModelTargetDecisions;
     private long _fallbackToDefaultCount;
     private long _bucketSmallDisabled;
+    private long _bucketDefaultDisabled;
     private long _bucketDefaultProviderDefault;
     private long _bucketDefaultDeep;
 
@@ -72,6 +73,10 @@ public sealed class LlmRoutingTelemetry
         {
             Interlocked.Increment(ref _bucketSmallDisabled);
         }
+        else if (string.Equals(bucket, LlmRoutingDecision.DecisionBucketDefaultDisabled, StringComparison.Ordinal))
+        {
+            Interlocked.Increment(ref _bucketDefaultDisabled);
+        }
         else if (string.Equals(bucket, LlmRoutingDecision.DecisionBucketDefaultDeep, StringComparison.Ordinal))
         {
             Interlocked.Increment(ref _bucketDefaultDeep);
@@ -98,6 +103,7 @@ public sealed class LlmRoutingTelemetry
             SmallModelTargetDecisions: Interlocked.Read(ref _smallModelTargetDecisions),
             FallbackToDefaultCount: Interlocked.Read(ref _fallbackToDefaultCount),
             BucketSmallDisabled: Interlocked.Read(ref _bucketSmallDisabled),
+            BucketDefaultDisabled: Interlocked.Read(ref _bucketDefaultDisabled),
             BucketDefaultProviderDefault: Interlocked.Read(ref _bucketDefaultProviderDefault),
             BucketDefaultDeep: Interlocked.Read(ref _bucketDefaultDeep),
             LastRouterMode: _lastRouterMode,
@@ -125,6 +131,7 @@ public sealed record LlmRoutingTelemetrySnapshot(
     long SmallModelTargetDecisions,
     long FallbackToDefaultCount,
     long BucketSmallDisabled,
+    long BucketDefaultDisabled,
     long BucketDefaultProviderDefault,
     long BucketDefaultDeep,
     string LastRouterMode,

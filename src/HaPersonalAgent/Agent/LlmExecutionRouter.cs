@@ -171,13 +171,13 @@ public sealed class LlmExecutionRouter
                 IsApplied: false,
                 ModelTarget: LlmRoutingDecision.ModelTargetDefault,
                 SelectedModel: defaultModel,
-                ReasoningTarget: LlmRoutingDecision.ReasoningTargetProviderDefault,
-                ThinkingModeOverride: null,
-                DecisionBucket: LlmRoutingDecision.DecisionBucketDefaultProviderDefault,
+                ReasoningTarget: LlmRoutingDecision.ReasoningTargetDisabled,
+                ThinkingModeOverride: LlmThinkingModes.Disabled,
+                DecisionBucket: LlmRoutingDecision.DecisionBucketDefaultDisabled,
                 IntentClass: intentClass,
                 ContextProfile: LlmRoutingDecision.ContextProfileDefaultFull,
                 ContextProfileBlockerReason: "tool intent requires full tool-enabled context profile.",
-                Reason: "tool-heavy intent detected; keep default model/profile.",
+                Reason: "tool-heavy intent detected; keep default model/tools and disable expensive reasoning.",
                 EstimatedInputChars: defaultProfile.EstimatedInputChars,
                 HistoryMessageCount: defaultProfile.HistoryMessageCount);
         }
@@ -316,14 +316,14 @@ public sealed class LlmExecutionRouter
             return LlmRoutingDecision.IntentClassDeepReasoning;
         }
 
-        if (HasToolIntent(message))
-        {
-            return LlmRoutingDecision.IntentClassToolHeavy;
-        }
-
         if (IsComplexIntent(message))
         {
             return LlmRoutingDecision.IntentClassComplexAnalysis;
+        }
+
+        if (HasToolIntent(message))
+        {
+            return LlmRoutingDecision.IntentClassToolHeavy;
         }
 
         return LlmRoutingDecision.IntentClassSimpleChat;

@@ -728,20 +728,33 @@ public sealed class DialogueService
             return;
         }
 
-        if (currentSummary is not null
-            && string.Equals(currentSummary.Summary, normalizedSummary, StringComparison.Ordinal))
-        {
-            _logger.LogInformation(
-                "Persisted summary update skipped for {ConversationKey}: summary text is unchanged.",
-                conversationKey);
-            return;
-        }
-
         var latestMessageId = await _stateRepository.GetLatestConversationMessageIdAsync(
             conversationKey,
             cancellationToken);
         if (!latestMessageId.HasValue)
         {
+            return;
+        }
+
+        if (currentSummary is not null
+            && string.Equals(currentSummary.Summary, normalizedSummary, StringComparison.Ordinal))
+        {
+            if (latestMessageId.Value > currentSummary.SourceLastMessageId)
+            {
+                await _stateRepository.UpsertConversationSummaryAsync(
+                    currentSummary with
+                    {
+                        UpdatedAtUtc = DateTimeOffset.UtcNow,
+                        SourceLastMessageId = latestMessageId.Value,
+                    },
+                    cancellationToken);
+            }
+
+            _logger.LogInformation(
+                "Persisted summary text is unchanged for {ConversationKey}; source last message id advanced from {PreviousSourceLastMessageId} to {SourceLastMessageId} without incrementing version.",
+                conversationKey,
+                currentSummary.SourceLastMessageId,
+                Math.Max(currentSummary.SourceLastMessageId, latestMessageId.Value));
             return;
         }
 

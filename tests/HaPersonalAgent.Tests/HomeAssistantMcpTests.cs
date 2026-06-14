@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.Json;
 using HaPersonalAgent.Configuration;
 using HaPersonalAgent.HomeAssistant;
 using Microsoft.Extensions.AI;
@@ -193,7 +194,7 @@ public class HomeAssistantMcpTests
         Assert.Equal(4, toolSet.TotalToolCount);
         Assert.Equal(2, toolSet.ExposedToolCount);
         Assert.Equal(2, toolSet.BlockedToolCount);
-        Assert.Equal(new[] { "HassGetState", "GetLiveContext" }, toolSet.Tools.Select(tool => tool.Name));
+        Assert.Equal(new[] { "GetLiveContext", "HassGetState" }, toolSet.Tools.Select(tool => tool.Name));
         Assert.Equal(new[] { "HassCallService", "HassUnknown" }, toolSet.ConfirmationRequiredTools.Select(tool => tool.Name));
         Assert.True(connector.WasCalled);
         Assert.False(connector.SessionDisposed);
@@ -219,6 +220,27 @@ public class HomeAssistantMcpTests
         Assert.Equal(HomeAssistantMcpStatus.NotConfigured, toolSet.Status);
         Assert.Empty(toolSet.Tools);
         Assert.False(connector.WasCalled);
+    }
+
+    [Fact]
+    public async Task Mcp_tool_result_guard_compacts_oversized_results()
+    {
+        var oversized = new string('x', McpToolResultGuardFunction.MaximumResultChars + 1_000);
+        var inner = AIFunctionFactory.Create(
+            (Func<string>)(() => oversized),
+            name: "GetLiveContext",
+            description: "Returns a large Home Assistant state dump.",
+            serializerOptions: null);
+        var guard = new McpToolResultGuardFunction(
+            inner,
+            LoggerFactory.Create(_ => { }).CreateLogger<HomeAssistantMcpAgentToolProvider>());
+
+        var result = await guard.InvokeAsync(new AIFunctionArguments(), CancellationToken.None);
+        var json = Assert.IsType<JsonElement>(result);
+
+        Assert.True(json.GetProperty("truncated").GetBoolean());
+        Assert.True(json.GetProperty("originalChars").GetInt32() >= oversized.Length);
+        Assert.True(json.GetRawText().Length < oversized.Length);
     }
 
     private static HomeAssistantMcpClient CreateClient(

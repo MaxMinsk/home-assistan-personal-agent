@@ -22,7 +22,7 @@ public class ConfigurationTests
         Assert.Equal("https://api.moonshot.ai/v1", llmOptions.BaseUrl);
         Assert.Equal("kimi-k2.5", llmOptions.Model);
         Assert.Equal(LlmThinkingModes.Auto, llmOptions.ThinkingMode);
-        Assert.Equal(LlmRouterModes.Off, llmOptions.RouterMode);
+        Assert.Equal(LlmRouterModes.Enforced, llmOptions.RouterMode);
         Assert.Equal("moonshot-v1-8k", llmOptions.RouterSmallModel);
         Assert.Equal(1800, llmOptions.RouterMaxInputCharsForSmall);
         Assert.Equal(10, llmOptions.RouterMaxHistoryMessagesForSmall);
@@ -205,7 +205,7 @@ public class ConfigurationTests
 
         Assert.True(status.LlmApiKeyConfigured);
         Assert.Equal(LlmThinkingModes.Auto, status.LlmThinkingMode);
-        Assert.Equal(LlmRouterModes.Off, status.LlmRouterMode);
+        Assert.Equal(LlmRouterModes.Enforced, status.LlmRouterMode);
         Assert.Equal("moonshot-v1-8k", status.LlmRouterSmallModel);
         Assert.Equal(1800, status.LlmRouterMaxInputCharsForSmall);
         Assert.Equal(10, status.LlmRouterMaxHistoryMessagesForSmall);

@@ -135,6 +135,8 @@ public class AgentExecutionResolverTests
         Assert.True(decision.RoutingDecision.IsApplied);
         Assert.Equal("kimi-k2.5", decision.SelectedModel);
         Assert.Equal(LlmRoutingDecision.IntentClassToolHeavy, decision.RoutingDecision.IntentClass);
+        Assert.Equal(LlmThinkingModes.Disabled, decision.SelectedThinkingModeOverride);
+        Assert.Equal(LlmEffectiveThinkingMode.Disabled, decision.SelectedPlan.EffectiveThinkingMode);
         Assert.Equal(LlmRoutingDecision.ContextProfileDefaultFull, decision.EffectiveContextProfile);
         Assert.Equal(context.ExecutionProfile, decision.EffectiveContext.ExecutionProfile);
     }

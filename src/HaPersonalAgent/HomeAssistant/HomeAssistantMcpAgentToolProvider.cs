@@ -90,7 +90,8 @@ public sealed class HomeAssistantMcpAgentToolProvider : IHomeAssistantMcpAgentTo
                 .ToArray();
             var exposedTools = classifiedTools
                 .Where(tool => tool.Safety == HomeAssistantMcpToolSafety.ReadOnly)
-                .Select(tool => tool.Tool)
+                .Select(tool => new McpToolResultGuardFunction(tool.Tool, _logger))
+                .OrderBy(tool => tool.Name, StringComparer.Ordinal)
                 .ToArray();
             var confirmationRequiredTools = classifiedTools
                 .Where(tool => tool.Safety == HomeAssistantMcpToolSafety.RequiresConfirmation)
@@ -98,6 +99,7 @@ public sealed class HomeAssistantMcpAgentToolProvider : IHomeAssistantMcpAgentTo
                     tool.Tool.Name,
                     tool.Tool.Name,
                     tool.Tool.Description))
+                .OrderBy(tool => tool.Name, StringComparer.Ordinal)
                 .ToArray();
 
             if (exposedTools.Length == 0)

@@ -72,6 +72,10 @@ public class LlmRequestLoggingChatClientTests
         Assert.Contains(logs, log => log.Contains("thinking requested auto", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(logs, log => log.Contains("thinking effective ProviderDefault", StringComparison.Ordinal));
         Assert.Contains(logs, log => log.Contains("assistant tool-call messages missing reasoning 1", StringComparison.Ordinal));
+        Assert.Contains(logs, log => log.Contains("tool result chars 19", StringComparison.Ordinal));
+        Assert.Contains(logs, log => log.Contains("estimated input tokens", StringComparison.Ordinal));
+        Assert.Contains(logs, log => log.Contains("static prefix hash", StringComparison.Ordinal));
+        Assert.Contains(logs, log => log.Contains("leading system hash", StringComparison.Ordinal));
     }
 
     private static LlmExecutionPlan CreateExecutionPlan() =>
