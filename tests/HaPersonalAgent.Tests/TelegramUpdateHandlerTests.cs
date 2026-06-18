@@ -235,78 +235,6 @@ public class TelegramUpdateHandlerTests
     }
 
     [Fact]
-    public async Task Show_vector_returns_vector_memory_for_current_conversation()
-    {
-        var databasePath = CreateTemporaryDatabasePath();
-
-        try
-        {
-            var repository = CreateRepository(databasePath);
-            await repository.UpsertConversationVectorMemoryAsync(
-                new[]
-                {
-                    new ConversationVectorMemoryEntry(
-                        "telegram:200:100",
-                        SourceMessageId: 12,
-                        AgentConversationRole.User,
-                        "Кодовое слово KESTREL-917.",
-                        "0.1,0.2,0.3,0.4",
-                        DateTimeOffset.UtcNow),
-                },
-                CancellationToken.None);
-            var runtime = new FakeAgentRuntime("unused");
-            var handler = CreateHandler(repository, runtime);
-            var adapter = new FakeTelegramBotClientAdapter();
-
-            await handler.HandleAsync(
-                adapter,
-                CreateTextUpdate(updateId: 290, chatId: 200, userId: 100, text: "/showVector"),
-                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
-                CancellationToken.None);
-
-            Assert.Empty(runtime.Calls);
-            Assert.Single(adapter.SentMessages);
-            Assert.Contains("Vector memory:", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
-            Assert.Contains("sourceMessageId=12", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
-            Assert.Contains("embeddingDims=4", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
-            Assert.Contains("KESTREL-917", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
-        }
-        finally
-        {
-            DeleteTemporaryDatabaseDirectory(databasePath);
-        }
-    }
-
-    [Fact]
-    public async Task Show_vector_returns_empty_message_when_vector_memory_is_missing()
-    {
-        var databasePath = CreateTemporaryDatabasePath();
-
-        try
-        {
-            var repository = CreateRepository(databasePath);
-            var runtime = new FakeAgentRuntime("unused");
-            var handler = CreateHandler(repository, runtime);
-            var adapter = new FakeTelegramBotClientAdapter();
-
-            await handler.HandleAsync(
-                adapter,
-                CreateTextUpdate(updateId: 291, chatId: 200, userId: 100, text: "/showVector 5"),
-                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
-                CancellationToken.None);
-
-            Assert.Empty(runtime.Calls);
-            Assert.Single(adapter.SentMessages);
-            Assert.Contains("Vector memory", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
-            Assert.Contains("отсутствует", adapter.SentMessages.Single().Text, StringComparison.OrdinalIgnoreCase);
-        }
-        finally
-        {
-            DeleteTemporaryDatabaseDirectory(databasePath);
-        }
-    }
-
-    [Fact]
     public async Task Refresh_capsules_extracts_capsules_from_raw_events_without_regular_dialogue_turn()
     {
         var databasePath = CreateTemporaryDatabasePath();
@@ -605,7 +533,6 @@ public class TelegramUpdateHandlerTests
             Assert.Contains("ReasoningPlan(tool-enabled): requested auto, effective provider-default", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("Context(stored): 0 messages", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("RawEvents(stored): 0 events", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
-            Assert.Contains("VectorMemory(stored): 0 entries", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("MemoryRetrieval: mode before_invoke, before-invoke True, on-demand-tool False", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("ProjectCapsules(stored): 0 entries", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
             Assert.Contains("Context(loaded): 0 / 24 messages", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
@@ -1155,6 +1082,7 @@ public class TelegramUpdateHandlerTests
             runtime,
             agentOptions,
             repository,
+            TestCapsuleMirror.CreateNoOp(),
             loggerFactory.CreateLogger<ProjectCapsuleService>());
         var dialogueService = new DialogueService(
             runtime,

@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using HaPersonalAgent.Agent;
 using HaPersonalAgent.Configuration;
+using HaPersonalAgent.Memory;
 using HaPersonalAgent.Storage;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -31,16 +32,19 @@ public sealed class ProjectCapsuleService
     private readonly IOptions<AgentOptions> _agentOptions;
     private readonly ILogger<ProjectCapsuleService> _logger;
     private readonly AgentStateRepository _stateRepository;
+    private readonly MemoryMcpCapsuleMirror _capsuleMirror;
 
     public ProjectCapsuleService(
         IAgentRuntime agentRuntime,
         IOptions<AgentOptions> agentOptions,
         AgentStateRepository stateRepository,
+        MemoryMcpCapsuleMirror capsuleMirror,
         ILogger<ProjectCapsuleService> logger)
     {
         _agentRuntime = agentRuntime;
         _agentOptions = agentOptions;
         _stateRepository = stateRepository;
+        _capsuleMirror = capsuleMirror;
         _logger = logger;
     }
 
@@ -230,6 +234,7 @@ public sealed class ProjectCapsuleService
         await _stateRepository.UpsertProjectCapsulesAsync(
             mergedCapsules,
             cancellationToken);
+        await _capsuleMirror.MirrorAsync(mergedCapsules, cancellationToken);
         await _stateRepository.UpsertProjectCapsuleExtractionStateAsync(
             new ProjectCapsuleExtractionState(
                 conversationKey,

@@ -1,38 +1,41 @@
-using System.Globalization;
-using System.Text;
-using HaPersonalAgent.Agent;
+using HaPersonalAgent.Configuration;
+using HaPersonalAgent.Memory;
 using HaPersonalAgent.Storage;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using System.Text.Json;
 
 namespace HaPersonalAgent.Dialogue;
 
 /// <summary>
-/// Что: bounded chat history provider с overflow в локальную vector memory.
-/// Зачем: держим короткое окно recent turns в conversation_messages, а вытесненные сообщения архивируем и семантически достаем при релевантном запросе.
-/// Как: реализует MAF Step05 паттерн (BoundedChatHistory + overflow retrieval), но как адаптер поверх нашей SQLite схемы.
-/// Ссылки:
-/// - https://github.com/microsoft/agent-framework/blob/main/dotnet/samples/02-agents/AgentWithMemory/AgentWithMemory_Step05_BoundedChatHistory/BoundedChatHistoryProvider.cs
-/// - https://github.com/microsoft/agent-framework/blob/main/dotnet/samples/02-agents/AgentWithMemory/AgentWithMemory_Step05_BoundedChatHistory/Program.cs
-/// - https://github.com/microsoft/agent-framework/blob/main/dotnet/src/Microsoft.Agents.AI/TextSearchProviderOptions.cs
-/// - https://github.com/microsoft/agent-framework/blob/main/dotnet/src/Microsoft.Agents.AI/Memory/ChatHistoryMemoryProviderOptions.cs
+/// What: bounded recent-window provider whose long-term recall is served by Memory MCP (HPA-005).
+/// Why: the short window of recent turns stays in conversation_messages; the local hash-vector store is
+/// retired, so long-term recall now comes from Memory MCP (durable notes in the `home` domain) when configured.
+/// How: loads the recent window from the local store, optionally injects a recall block from a Memory MCP
+/// notes_search (best-effort, bounded timeout, never throws), and trims the window after a turn. The rolling
+/// summary remains the always-present long-term context.
+/// References: MAF AgentWithMemory_Step05_BoundedChatHistory (bounded window) + Agent_Step22_MemorySearch (recall layer).
 /// </summary>
 public sealed class BoundedChatHistoryProvider
 {
-    private const int EmbeddingDimensions = 128;
     private const int DefaultRecallTopK = 4;
-    private const int DefaultSearchLimit = 1200;
-    private const float SimilarityThreshold = 0.30f;
-    private const int MemorySnippetMaxLength = 220;
+    private static readonly TimeSpan RecallTimeout = TimeSpan.FromSeconds(4);
 
-    private readonly ILogger<BoundedChatHistoryProvider> _logger;
     private readonly IConversationMemoryStore _memoryStore;
+    private readonly IMemoryMcpClient? _memoryMcpClient;
+    private readonly IOptions<MemoryMcpOptions>? _memoryMcpOptions;
+    private readonly ILogger<BoundedChatHistoryProvider> _logger;
 
     public BoundedChatHistoryProvider(
         IConversationMemoryStore memoryStore,
-        ILogger<BoundedChatHistoryProvider> logger)
+        ILogger<BoundedChatHistoryProvider> logger,
+        IMemoryMcpClient? memoryMcpClient = null,
+        IOptions<MemoryMcpOptions>? memoryMcpOptions = null)
     {
         _memoryStore = memoryStore;
         _logger = logger;
+        _memoryMcpClient = memoryMcpClient;
+        _memoryMcpOptions = memoryMcpOptions;
     }
 
     public async Task<BoundedChatHistorySnapshot> LoadAsync(
@@ -49,336 +52,109 @@ public sealed class BoundedChatHistoryProvider
             conversationKey,
             maxRecentMessages,
             cancellationToken);
-        var retrieved = includeRetrievedMemory
-            ? await SearchAsync(
-                conversationKey,
-                userMessage,
-                topK: DefaultRecallTopK,
-                cancellationToken)
-            : Array.Empty<BoundedRetrievedMemoryHit>();
-        var contextText = BuildRetrievedMemoryContext(retrieved);
+
+        var (contextText, retrievedCount) = includeRetrievedMemory
+            ? await RecallFromMemoryMcpAsync(userMessage, cancellationToken)
+            : (null, 0);
 
         _logger.LogInformation(
             "Bounded chat history load for {ConversationKey}: recent messages {RecentMessages}, retrieval mode {RetrievalMode}, retrieved memories {RetrievedMemories}.",
             conversationKey,
             recentMessages.Count,
             includeRetrievedMemory ? "before_invoke" : "on_demand_tool",
-            retrieved.Count);
+            retrievedCount);
 
-        return new BoundedChatHistorySnapshot(
-            recentMessages,
-            contextText,
-            retrieved.Count);
+        return new BoundedChatHistorySnapshot(recentMessages, contextText, retrievedCount);
     }
 
-    public async Task<IReadOnlyList<BoundedRetrievedMemoryHit>> SearchAsync(
-        string conversationKey,
-        string query,
-        int topK,
-        CancellationToken cancellationToken)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
-        ArgumentException.ThrowIfNullOrWhiteSpace(query);
-
-        var normalizedTopK = Math.Clamp(topK, 1, 12);
-        return await RetrieveMemoriesAsync(
-            conversationKey,
-            query,
-            normalizedTopK,
-            cancellationToken);
-    }
-
-    public async Task ArchiveOverflowAndTrimAsync(
+    /// <summary>
+    /// Trim the conversation window down to the most recent messages after a turn. Overflow is captured by
+    /// the rolling summary; the retired local vector store no longer archives it.
+    /// </summary>
+    public async Task TrimOverflowAsync(
         string conversationKey,
         int maxRecentMessages,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
 
-        var overflowMessages = await _memoryStore.GetOverflowConversationMessagesAsync(
-            conversationKey,
-            maxRecentMessages,
-            cancellationToken);
-        if (overflowMessages.Count == 0)
-        {
-            return;
-        }
-
-        var vectorEntries = new List<ConversationVectorMemoryEntry>(overflowMessages.Count);
-        foreach (var message in overflowMessages)
-        {
-            if (string.IsNullOrWhiteSpace(message.Text))
-            {
-                continue;
-            }
-
-            var embedding = BuildEmbedding(message.Text);
-            if (!HasMeaningfulSignal(embedding))
-            {
-                continue;
-            }
-
-            vectorEntries.Add(new ConversationVectorMemoryEntry(
-                conversationKey,
-                message.Id,
-                message.Role,
-                message.Text,
-                SerializeEmbedding(embedding),
-                message.CreatedAtUtc));
-        }
-
-        await _memoryStore.UpsertConversationVectorMemoryAsync(
-            vectorEntries,
-            cancellationToken);
-        await _memoryStore.TrimConversationMessagesAsync(
-            conversationKey,
-            maxRecentMessages,
-            cancellationToken);
-
-        _logger.LogInformation(
-            "Bounded chat history archived overflow for {ConversationKey}: overflow messages {OverflowMessages}, archived vectors {ArchivedVectors}, max recent {MaxRecentMessages}.",
-            conversationKey,
-            overflowMessages.Count,
-            vectorEntries.Count,
-            maxRecentMessages);
+        await _memoryStore.TrimConversationMessagesAsync(conversationKey, maxRecentMessages, cancellationToken);
     }
 
-    private async Task<IReadOnlyList<BoundedRetrievedMemoryHit>> RetrieveMemoriesAsync(
-        string conversationKey,
+    private async Task<(string? Context, int Count)> RecallFromMemoryMcpAsync(
         string query,
-        int topK,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(query))
+        if (_memoryMcpClient is null
+            || _memoryMcpOptions?.Value.IsConfigured != true
+            || string.IsNullOrWhiteSpace(query))
         {
-            return Array.Empty<BoundedRetrievedMemoryHit>();
+            return (null, 0);
         }
 
-        var queryEmbedding = BuildEmbedding(query);
-        if (!HasMeaningfulSignal(queryEmbedding))
+        try
         {
-            return Array.Empty<BoundedRetrievedMemoryHit>();
-        }
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(RecallTimeout);
 
-        var vectorRecords = await _memoryStore.GetConversationVectorMemoryAsync(
-            conversationKey,
-            DefaultSearchLimit,
-            cancellationToken);
-        if (vectorRecords.Count == 0)
-        {
-            return Array.Empty<BoundedRetrievedMemoryHit>();
-        }
+            var result = await _memoryMcpClient.CallToolAsync(
+                "notes_search",
+                new Dictionary<string, object?>
+                {
+                    ["domain"] = "home",
+                    ["query"] = query,
+                    ["tags"] = new[] { "ha-personal-agent" },
+                    ["limit"] = DefaultRecallTopK,
+                },
+                timeout.Token);
 
-        var candidates = new List<BoundedRetrievedMemoryHit>(capacity: Math.Min(vectorRecords.Count, 32));
-        foreach (var record in vectorRecords)
-        {
-            var embedding = ParseEmbedding(record.Embedding);
-            if (embedding is null)
+            if (result.IsError || string.IsNullOrWhiteSpace(result.Text))
             {
-                continue;
+                return (null, 0);
             }
 
-            var score = DotProduct(queryEmbedding, embedding);
-            if (score < SimilarityThreshold)
+            var count = CountHits(result.Text);
+            if (count == 0)
             {
-                continue;
+                return (null, 0);
             }
 
-            candidates.Add(new BoundedRetrievedMemoryHit(
-                record.SourceMessageId,
-                record.Role,
-                record.Content,
-                score));
+            var context =
+                "Relevant durable memory from the long-term store (Memory MCP). Use as supporting context; prioritize the latest turns and explicit user corrections.\n"
+                + result.Text;
+            return (context, count);
         }
-
-        return candidates
-            .OrderByDescending(candidate => candidate.Score)
-            .ThenByDescending(candidate => candidate.SourceMessageId)
-            .Take(topK)
-            .ToArray();
+        catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // Recall is best-effort: a Memory MCP outage or timeout must never break a dialogue turn.
+            _logger.LogWarning(exception, "Memory MCP recall failed; continuing without long-term recall.");
+            return (null, 0);
+        }
     }
 
-    private static string? BuildRetrievedMemoryContext(IReadOnlyList<BoundedRetrievedMemoryHit> candidates)
+    private static int CountHits(string searchResultJson)
     {
-        if (candidates.Count == 0)
+        try
         {
-            return null;
-        }
-
-        var builder = new StringBuilder(
-            """
-            Older relevant memories from this conversation (retrieved from vector overflow).
-            Use them as supporting context, but prioritize explicit user corrections and the latest turns.
-            """);
-        foreach (var candidate in candidates)
-        {
-            var normalizedText = NormalizeSnippet(candidate.Text);
-            if (normalizedText.Length == 0)
+            using var document = JsonDocument.Parse(searchResultJson);
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.Object)
             {
-                continue;
-            }
+                if (root.TryGetProperty("items", out var items) && items.ValueKind == JsonValueKind.Array)
+                {
+                    return items.GetArrayLength();
+                }
 
-            builder.AppendLine();
-            builder.Append("- [");
-            builder.Append(candidate.Role == AgentConversationRole.User ? "user" : "assistant");
-            builder.Append(" #");
-            builder.Append(candidate.SourceMessageId.ToString(CultureInfo.InvariantCulture));
-            builder.Append("] ");
-            builder.Append(normalizedText);
-        }
-
-        return builder.ToString();
-    }
-
-    private static string NormalizeSnippet(string text)
-    {
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return string.Empty;
-        }
-
-        var normalized = text
-            .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace('\n', ' ')
-            .Trim();
-
-        return normalized.Length <= MemorySnippetMaxLength
-            ? normalized
-            : normalized[..MemorySnippetMaxLength] + "...";
-    }
-
-    private static float[] BuildEmbedding(string text)
-    {
-        var vector = new float[EmbeddingDimensions];
-        foreach (var token in Tokenize(text))
-        {
-            var hash = StableHash(token);
-            var index = Math.Abs(hash % EmbeddingDimensions);
-            vector[index] += 1f;
-        }
-
-        NormalizeInPlace(vector);
-        return vector;
-    }
-
-    private static IEnumerable<string> Tokenize(string text)
-    {
-        var tokenBuilder = new StringBuilder(capacity: 32);
-        foreach (var character in text)
-        {
-            if (char.IsLetterOrDigit(character))
-            {
-                tokenBuilder.Append(char.ToLowerInvariant(character));
-                continue;
-            }
-
-            if (tokenBuilder.Length > 1)
-            {
-                yield return tokenBuilder.ToString();
-            }
-
-            tokenBuilder.Clear();
-        }
-
-        if (tokenBuilder.Length > 1)
-        {
-            yield return tokenBuilder.ToString();
-        }
-    }
-
-    private static void NormalizeInPlace(float[] vector)
-    {
-        var norm = 0d;
-        for (var index = 0; index < vector.Length; index++)
-        {
-            norm += vector[index] * vector[index];
-        }
-
-        if (norm <= 0d)
-        {
-            return;
-        }
-
-        var inverseNorm = 1f / (float)Math.Sqrt(norm);
-        for (var index = 0; index < vector.Length; index++)
-        {
-            vector[index] *= inverseNorm;
-        }
-    }
-
-    private static bool HasMeaningfulSignal(float[] vector)
-    {
-        for (var index = 0; index < vector.Length; index++)
-        {
-            if (vector[index] > 0f)
-            {
-                return true;
+                if (root.TryGetProperty("total", out var total) && total.TryGetInt32(out var totalValue))
+                {
+                    return totalValue;
+                }
             }
         }
+        catch (JsonException)
+        {
+        }
 
-        return false;
+        return 1;
     }
-
-    private static string SerializeEmbedding(float[] vector) =>
-        string.Join(
-            ",",
-            vector.Select(value => value.ToString("R", CultureInfo.InvariantCulture)));
-
-    private static float[]? ParseEmbedding(string rawEmbedding)
-    {
-        if (string.IsNullOrWhiteSpace(rawEmbedding))
-        {
-            return null;
-        }
-
-        var tokens = rawEmbedding.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (tokens.Length != EmbeddingDimensions)
-        {
-            return null;
-        }
-
-        var embedding = new float[EmbeddingDimensions];
-        for (var index = 0; index < tokens.Length; index++)
-        {
-            if (!float.TryParse(tokens[index], NumberStyles.Float, CultureInfo.InvariantCulture, out var value))
-            {
-                return null;
-            }
-
-            embedding[index] = value;
-        }
-
-        return embedding;
-    }
-
-    private static float DotProduct(float[] left, float[] right)
-    {
-        if (left.Length != right.Length)
-        {
-            return 0f;
-        }
-
-        var sum = 0f;
-        for (var index = 0; index < left.Length; index++)
-        {
-            sum += left[index] * right[index];
-        }
-
-        return sum;
-    }
-
-    private static int StableHash(string token)
-    {
-        unchecked
-        {
-            var hash = 17;
-            foreach (var character in token)
-            {
-                hash = (hash * 31) + character;
-            }
-
-            return hash;
-        }
-    }
-
 }

@@ -72,18 +72,6 @@ public class DialogueServiceTests
                 DialogueConversationKey.Create(conversation),
                 CancellationToken.None);
             Assert.True(latestMessageId.HasValue);
-            await repository.UpsertConversationVectorMemoryAsync(
-                new[]
-                {
-                    new ConversationVectorMemoryEntry(
-                        DialogueConversationKey.Create(conversation),
-                        latestMessageId!.Value,
-                        AgentConversationRole.User,
-                        "legacy memory",
-                        string.Join(",", Enumerable.Repeat("1", 128)),
-                        DateTimeOffset.UtcNow),
-                },
-                CancellationToken.None);
             await repository.UpsertConversationSummaryAsync(
                 new ConversationSummaryMemory(
                     DialogueConversationKey.Create(conversation),
@@ -124,9 +112,6 @@ public class DialogueServiceTests
             var summary = await repository.GetConversationSummaryAsync(
                 DialogueConversationKey.Create(conversation),
                 CancellationToken.None);
-            var vectorMemoryCount = await repository.GetConversationVectorMemoryCountAsync(
-                DialogueConversationKey.Create(conversation),
-                CancellationToken.None);
             var projectCapsuleCount = await repository.GetProjectCapsuleCountAsync(
                 DialogueConversationKey.Create(conversation),
                 CancellationToken.None);
@@ -140,7 +125,6 @@ public class DialogueServiceTests
 
             Assert.Empty(stored);
             Assert.Null(summary);
-            Assert.Equal(0, vectorMemoryCount);
             Assert.Equal(0, projectCapsuleCount);
             Assert.Null(projectCapsuleExtractionState);
             Assert.Single(rawEvents);
@@ -376,7 +360,7 @@ public class DialogueServiceTests
     }
 
     [Fact]
-    public async Task Bounded_history_archives_overflow_and_recalls_relevant_vector_memory()
+    public async Task Bounded_history_trims_overflow_without_local_vector_recall()
     {
         var databasePath = CreateTemporaryDatabasePath();
 
@@ -412,20 +396,18 @@ public class DialogueServiceTests
 
             Assert.Equal(3, runtime.Calls.Count);
             Assert.Equal(2, runtime.Calls[2].Context.ConversationMessages.Count);
-            Assert.True(runtime.Calls[2].Context.RetrievedMemoryCount > 0);
-            Assert.Contains("alpha likes tea", runtime.Calls[2].Context.RetrievedMemoryContext, StringComparison.OrdinalIgnoreCase);
+
+            // HPA-005: the local vector store is retired; without Memory MCP configured there is no local recall.
+            Assert.Equal(0, runtime.Calls[2].Context.RetrievedMemoryCount);
 
             var storedMessages = await repository.GetConversationMessagesAsync(
                 conversationKey,
                 10,
                 CancellationToken.None);
-            var vectorMemoryCount = await repository.GetConversationVectorMemoryCountAsync(
-                conversationKey,
-                CancellationToken.None);
 
+            // Overflow is trimmed (no longer archived to a local vector store); only the latest turn remains.
             Assert.Equal(2, storedMessages.Count);
             Assert.Equal(new[] { "remind me: alpha likes tea?", "noted three" }, storedMessages.Select(message => message.Text));
-            Assert.True(vectorMemoryCount >= 2);
         }
         finally
         {
@@ -563,7 +545,6 @@ public class DialogueServiceTests
             Assert.Equal(key, snapshot.ConversationKey);
             Assert.Equal(3, snapshot.StoredMessageCount);
             Assert.Equal(0, snapshot.RawEventCount);
-            Assert.Equal(0, snapshot.VectorMemoryCount);
             Assert.Equal(0, snapshot.ProjectCapsuleCount);
             Assert.Equal(0, snapshot.ProjectCapsuleLatestSourceEventId);
             Assert.Null(snapshot.ProjectCapsuleLastUpdatedAtUtc);
@@ -759,6 +740,7 @@ public class DialogueServiceTests
             runtime,
             Options.Create(agentOptions ?? new AgentOptions()),
             repository,
+            TestCapsuleMirror.CreateNoOp(),
             loggerFactory.CreateLogger<ProjectCapsuleService>());
 
         return new DialogueService(

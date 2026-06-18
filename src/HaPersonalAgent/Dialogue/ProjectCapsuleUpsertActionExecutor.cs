@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using HaPersonalAgent.Confirmation;
+using HaPersonalAgent.Memory;
 using HaPersonalAgent.Storage;
 using Microsoft.Extensions.Logging;
 
@@ -25,12 +26,15 @@ public sealed class ProjectCapsuleUpsertActionExecutor : IConfirmationActionExec
 
     private readonly ILogger<ProjectCapsuleUpsertActionExecutor> _logger;
     private readonly AgentStateRepository _stateRepository;
+    private readonly MemoryMcpCapsuleMirror _capsuleMirror;
 
     public ProjectCapsuleUpsertActionExecutor(
         AgentStateRepository stateRepository,
+        MemoryMcpCapsuleMirror capsuleMirror,
         ILogger<ProjectCapsuleUpsertActionExecutor> logger)
     {
         _stateRepository = stateRepository;
+        _capsuleMirror = capsuleMirror;
         _logger = logger;
     }
 
@@ -90,6 +94,7 @@ public sealed class ProjectCapsuleUpsertActionExecutor : IConfirmationActionExec
         await _stateRepository.UpsertProjectCapsulesAsync(
             new[] { persisted },
             cancellationToken);
+        await _capsuleMirror.MirrorAsync(new[] { persisted }, cancellationToken);
 
         var resultJson = JsonSerializer.Serialize(new
         {

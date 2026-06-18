@@ -142,6 +142,7 @@ public class ProjectCapsuleServiceTests
             runtime,
             options,
             repository,
+            TestCapsuleMirror.CreateNoOp(),
             loggerFactory.CreateLogger<ProjectCapsuleService>());
     }
 

@@ -28,6 +28,7 @@ builder.Services.AddHomeAssistantMcp();
 builder.Services.AddMemoryMcp();
 builder.Services.AddTelegramGateway();
 builder.Services.AddHostedService<Worker>();
+builder.Services.AddHostedService<MemoryMcpBackfillService>();
 
 var host = builder.Build();
 

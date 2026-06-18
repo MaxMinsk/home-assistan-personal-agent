@@ -43,7 +43,6 @@ public sealed class AgentToolCatalog
 
     private readonly AgentStatusTool _statusTool;
     private readonly HomeAssistantMcpStatusTool? _homeAssistantMcpStatusTool;
-    private readonly BoundedChatHistoryProvider? _boundedChatHistoryProvider;
     private readonly AgentStateRepository? _stateRepository;
     private readonly IConfirmationService? _confirmationService;
     private readonly IMemoryMcpClient? _memoryMcpClient;
@@ -54,7 +53,6 @@ public sealed class AgentToolCatalog
         AgentStatusTool statusTool,
         ILogger<AgentToolCatalog> logger,
         HomeAssistantMcpStatusTool? homeAssistantMcpStatusTool = null,
-        BoundedChatHistoryProvider? boundedChatHistoryProvider = null,
         AgentStateRepository? stateRepository = null,
         IConfirmationService? confirmationService = null,
         IMemoryMcpClient? memoryMcpClient = null,
@@ -63,7 +61,6 @@ public sealed class AgentToolCatalog
         _statusTool = statusTool ?? throw new ArgumentNullException(nameof(statusTool));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _homeAssistantMcpStatusTool = homeAssistantMcpStatusTool;
-        _boundedChatHistoryProvider = boundedChatHistoryProvider;
         _stateRepository = stateRepository;
         _confirmationService = confirmationService;
         _memoryMcpClient = memoryMcpClient;
@@ -109,12 +106,6 @@ public sealed class AgentToolCatalog
             tools.Add(CreateHomeAssistantActionProposalTool(
                 context,
                 homeAssistantMcpTools.ConfirmationRequiredTools));
-        }
-
-        if (string.Equals(context.MemoryRetrievalMode, AgentOptions.MemoryRetrievalModeOnDemandTool, StringComparison.Ordinal)
-            && _boundedChatHistoryProvider is not null)
-        {
-            tools.Add(CreateConversationMemorySearchTool(context));
         }
 
         if (_stateRepository is not null)
@@ -181,18 +172,11 @@ public sealed class AgentToolCatalog
         instructions.AppendLine("Conversation memory retrieval mode: " + context.MemoryRetrievalMode + ".");
         if (string.Equals(context.MemoryRetrievalMode, AgentOptions.MemoryRetrievalModeOnDemandTool, StringComparison.Ordinal))
         {
-            if (_boundedChatHistoryProvider is null)
-            {
-                instructions.AppendLine("On-demand memory search tool is unavailable in this runtime.");
-            }
-            else
-            {
-                instructions.AppendLine("Older vector memory is not auto-injected in this mode; call search_conversation_memory when historical facts are needed.");
-            }
+            instructions.AppendLine("Long-term memory is not auto-injected in this mode; call memory_recall when you need durable facts from long-term memory.");
         }
         else
         {
-            instructions.AppendLine("Older relevant vector memories are auto-injected as context before this run.");
+            instructions.AppendLine("Relevant durable long-term memory is auto-injected as context before this run when long-term memory is available.");
         }
 
         instructions.AppendLine();
@@ -212,79 +196,6 @@ public sealed class AgentToolCatalog
         }
 
         return instructions.ToString();
-    }
-
-    private AIFunction CreateConversationMemorySearchTool(AgentContext context)
-    {
-        async Task<string> SearchConversationMemoryAsync(
-            string query,
-            int topK,
-            CancellationToken cancellationToken)
-        {
-            if (_boundedChatHistoryProvider is null)
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    available = false,
-                    reason = "Bounded chat history provider is not registered.",
-                }, ToolJsonOptions);
-            }
-
-            if (string.IsNullOrWhiteSpace(context.ConversationKey))
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    available = false,
-                    reason = "Conversation scope is missing for this run.",
-                }, ToolJsonOptions);
-            }
-
-            if (string.IsNullOrWhiteSpace(query))
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    available = true,
-                    count = 0,
-                    hits = Array.Empty<object>(),
-                    reason = "query must be non-empty.",
-                }, ToolJsonOptions);
-            }
-
-            var normalizedTopK = Math.Clamp(topK <= 0 ? ConversationMemorySearchDefaultTopK : topK, 1, ConversationMemorySearchMaxTopK);
-            var hits = await _boundedChatHistoryProvider.SearchAsync(
-                context.ConversationKey,
-                query,
-                normalizedTopK,
-                cancellationToken);
-            _logger.LogInformation(
-                "On-demand conversation memory search for run {CorrelationId}: mode {MemoryRetrievalMode}, topK {TopK}, query length {QueryLength}, hits {HitCount}.",
-                context.CorrelationId,
-                context.MemoryRetrievalMode,
-                normalizedTopK,
-                query.Length,
-                hits.Count);
-
-            return JsonSerializer.Serialize(new
-            {
-                available = true,
-                count = hits.Count,
-                query = NormalizeSingleLine(query, maxLength: 240),
-                topK = normalizedTopK,
-                hits = hits.Select(hit => new
-                {
-                    sourceMessageId = hit.SourceMessageId,
-                    role = hit.Role == AgentConversationRole.User ? "user" : "assistant",
-                    score = Math.Round(hit.Score, 4),
-                    text = NormalizeSingleLine(hit.Text, maxLength: 320),
-                }),
-            }, ToolJsonOptions);
-        }
-
-        return AIFunctionFactory.Create(
-            (Func<string, int, CancellationToken, Task<string>>)SearchConversationMemoryAsync,
-            name: "search_conversation_memory",
-            description: "Searches older vector-overflow memory for this conversation. Use when memory retrieval mode is on_demand_tool.",
-            serializerOptions: null);
     }
 
     private AIFunction CreateProjectCapsulesListTool(AgentContext context)

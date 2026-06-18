@@ -206,6 +206,7 @@ public class ProjectCapsuleUpsertActionExecutorTests
 
         return new ProjectCapsuleUpsertActionExecutor(
             repository,
+            TestCapsuleMirror.CreateNoOp(),
             loggerFactory.CreateLogger<ProjectCapsuleUpsertActionExecutor>());
     }
 

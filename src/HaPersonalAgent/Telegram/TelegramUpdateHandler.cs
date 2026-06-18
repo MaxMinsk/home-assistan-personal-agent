@@ -22,8 +22,6 @@ public sealed class TelegramUpdateHandler
     private const int MaxRawEventPayloadPreviewLength = 180;
     private const int DefaultRawEventLimit = 10;
     private const int MaxRawEventLimit = 25;
-    private const int DefaultVectorMemoryLimit = 10;
-    private const int MaxVectorMemoryLimit = 25;
     private const int DefaultProjectCapsuleLimit = 6;
     private const int MaxProjectCapsuleLimit = 12;
     private const int MaxReasoningPreviewLength = 1_500;
@@ -126,7 +124,7 @@ public sealed class TelegramUpdateHandler
                 update.Id);
             await client.SendMessageAsync(
                 chatId,
-                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /routerProbe <текст> покажет как роутер классифицирует запрос, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary, /showRawEvents [N] покажет последние сырые события памяти, /showVector [N] покажет записи vector memory, /showCapsules [N] покажет project capsules, /refreshCapsules обновит project capsules из raw events. Для действий с подтверждением можно нажать кнопки Подтвердить/Отклонить, а также доступны команды /approve <id> и /reject <id>.",
+                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /routerProbe <текст> покажет как роутер классифицирует запрос, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary, /showRawEvents [N] покажет последние сырые события памяти, /showCapsules [N] покажет project capsules, /refreshCapsules обновит project capsules из raw events. Для действий с подтверждением можно нажать кнопки Подтвердить/Отклонить, а также доступны команды /approve <id> и /reject <id>.",
                 cancellationToken);
             return;
         }
@@ -182,21 +180,6 @@ public sealed class TelegramUpdateHandler
                 chatId,
                 conversation,
                 rawEventsLimitArgument,
-                cancellationToken);
-            return;
-        }
-
-        if (TryReadCommandArgument(text, "/showVector", out var vectorMemoryLimitArgument))
-        {
-            _logger.LogInformation(
-                "Telegram update {TelegramUpdateId} routed to /showVector command for conversation {ConversationKey}.",
-                update.Id,
-                DialogueConversationKey.Create(conversation));
-            await HandleShowVectorMemoryCommandAsync(
-                client,
-                chatId,
-                conversation,
-                vectorMemoryLimitArgument,
                 cancellationToken);
             return;
         }
@@ -566,46 +549,6 @@ public sealed class TelegramUpdateHandler
             cancellationToken);
     }
 
-    private async Task HandleShowVectorMemoryCommandAsync(
-        ITelegramBotClientAdapter client,
-        long chatId,
-        DialogueConversation conversation,
-        string? limitArgument,
-        CancellationToken cancellationToken)
-    {
-        var vectorLimit = ParseVectorMemoryLimit(limitArgument);
-        var vectorEntries = await _dialogueService.GetVectorMemoryAsync(
-            conversation,
-            vectorLimit,
-            cancellationToken);
-
-        if (vectorEntries.Count == 0)
-        {
-            await client.SendMessageAsync(
-                chatId,
-                "Vector memory для этого чата пока отсутствует.",
-                cancellationToken);
-            return;
-        }
-
-        var lines = new List<string>
-        {
-            $"Vector memory: последние {vectorEntries.Count} (из запрошенных {vectorLimit})",
-        };
-
-        foreach (var entry in vectorEntries)
-        {
-            lines.Add(
-                $"#{entry.Id} sourceMessageId={entry.SourceMessageId} role={entry.Role} created={entry.CreatedAtUtc:O} embeddingDims={CountEmbeddingDimensions(entry.Embedding)}");
-            lines.Add($"  {FormatRawEventPayload(entry.Content)}");
-        }
-
-        await client.SendMessageAsync(
-            chatId,
-            NormalizeTelegramText(string.Join(Environment.NewLine, lines)),
-            cancellationToken);
-    }
-
     private async Task HandleRouterProbeCommandAsync(
         ITelegramBotClientAdapter client,
         long chatId,
@@ -886,7 +829,6 @@ public sealed class TelegramUpdateHandler
             $"HA MCP: {FormatMcpStatus(mcpDiscovery)}",
             $"Context(stored): {contextSnapshot.StoredMessageCount} messages",
             $"RawEvents(stored): {contextSnapshot.RawEventCount} events",
-            $"VectorMemory(stored): {contextSnapshot.VectorMemoryCount} entries",
             $"MemoryRetrieval: mode {contextSnapshot.MemoryRetrievalMode}, before-invoke {contextSnapshot.MemoryRetrievalBeforeInvokeEnabled}, on-demand-tool {contextSnapshot.MemoryRetrievalOnDemandToolEnabled}",
             $"ProjectCapsules(stored): {contextSnapshot.ProjectCapsuleCount} entries",
             $"ProjectCapsules(lastSourceEventId): {contextSnapshot.ProjectCapsuleLatestSourceEventId}",
@@ -1099,18 +1041,6 @@ public sealed class TelegramUpdateHandler
             : DefaultProjectCapsuleLimit;
     }
 
-    private static int ParseVectorMemoryLimit(string? argument)
-    {
-        if (string.IsNullOrWhiteSpace(argument))
-        {
-            return DefaultVectorMemoryLimit;
-        }
-
-        return int.TryParse(argument, out var parsedLimit)
-            ? Math.Clamp(parsedLimit, 1, MaxVectorMemoryLimit)
-            : DefaultVectorMemoryLimit;
-    }
-
     private static string FormatRawEventPayload(string payload)
     {
         var normalizedPayload = payload
@@ -1142,16 +1072,6 @@ public sealed class TelegramUpdateHandler
         }
 
         return normalized[..maxLength] + "...";
-    }
-
-    private static int CountEmbeddingDimensions(string embedding)
-    {
-        if (string.IsNullOrWhiteSpace(embedding))
-        {
-            return 0;
-        }
-
-        return embedding.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Length;
     }
 
     private static bool IsReasoningActive(LlmExecutionPlan plan) =>

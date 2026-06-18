@@ -31,12 +31,6 @@ public sealed class SqliteConversationMemoryStore : IConversationMemoryStore
         CancellationToken cancellationToken) =>
         _repository.GetConversationMessageCountAsync(conversationKey, cancellationToken);
 
-    public Task<IReadOnlyList<StoredConversationMessage>> GetOverflowConversationMessagesAsync(
-        string conversationKey,
-        int retainedMessageCount,
-        CancellationToken cancellationToken) =>
-        _repository.GetOverflowConversationMessagesAsync(conversationKey, retainedMessageCount, cancellationToken);
-
     public Task AppendConversationMessagesAsync(
         string conversationKey,
         IEnumerable<AgentConversationMessage> messages,
@@ -73,27 +67,6 @@ public sealed class SqliteConversationMemoryStore : IConversationMemoryStore
         string conversationKey,
         CancellationToken cancellationToken) =>
         _repository.ClearConversationSummaryAsync(conversationKey, cancellationToken);
-
-    public Task UpsertConversationVectorMemoryAsync(
-        IEnumerable<ConversationVectorMemoryEntry> entries,
-        CancellationToken cancellationToken) =>
-        _repository.UpsertConversationVectorMemoryAsync(entries, cancellationToken);
-
-    public Task<IReadOnlyList<ConversationVectorMemoryRecord>> GetConversationVectorMemoryAsync(
-        string conversationKey,
-        int limit,
-        CancellationToken cancellationToken) =>
-        _repository.GetConversationVectorMemoryAsync(conversationKey, limit, cancellationToken);
-
-    public Task<int> GetConversationVectorMemoryCountAsync(
-        string conversationKey,
-        CancellationToken cancellationToken) =>
-        _repository.GetConversationVectorMemoryCountAsync(conversationKey, cancellationToken);
-
-    public Task ClearConversationVectorMemoryAsync(
-        string conversationKey,
-        CancellationToken cancellationToken) =>
-        _repository.ClearConversationVectorMemoryAsync(conversationKey, cancellationToken);
 
     public Task AppendRawEventsAsync(
         IEnumerable<RawEventEntry> events,

@@ -29,7 +29,6 @@ public class StorageTests
             Assert.Equal(1L, await CountTablesAsync(databasePath, "agent_state"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "conversation_messages"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "conversation_summary"));
-            Assert.Equal(1L, await CountTablesAsync(databasePath, "conversation_vector_memory"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "project_capsules"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "project_capsule_extraction_state"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "raw_events"));
@@ -109,39 +108,6 @@ public class StorageTests
                 CancellationToken.None);
 
             Assert.Equal(new[] { "two", "three", "four" }, messages.Select(message => message.Text));
-        }
-        finally
-        {
-            DeleteTemporaryDatabaseDirectory(databasePath);
-        }
-    }
-
-    [Fact]
-    public async Task Overflow_messages_query_returns_messages_outside_recent_window()
-    {
-        var databasePath = CreateTemporaryDatabasePath();
-
-        try
-        {
-            var repository = CreateRepository(databasePath);
-            await repository.AppendConversationMessagesAsync(
-                "telegram:1:2",
-                new[]
-                {
-                    new AgentConversationMessage(AgentConversationRole.User, "one", DateTimeOffset.UtcNow),
-                    new AgentConversationMessage(AgentConversationRole.Assistant, "two", DateTimeOffset.UtcNow),
-                    new AgentConversationMessage(AgentConversationRole.User, "three", DateTimeOffset.UtcNow),
-                    new AgentConversationMessage(AgentConversationRole.Assistant, "four", DateTimeOffset.UtcNow),
-                },
-                CancellationToken.None);
-
-            var overflow = await repository.GetOverflowConversationMessagesAsync(
-                "telegram:1:2",
-                retainedMessageCount: 2,
-                CancellationToken.None);
-
-            Assert.Equal(2, overflow.Count);
-            Assert.Equal(new[] { "one", "two" }, overflow.Select(message => message.Text));
         }
         finally
         {
@@ -367,76 +333,6 @@ public class StorageTests
     }
 
     [Fact]
-    public async Task Conversation_vector_memory_upsert_get_count_and_clear_roundtrip()
-    {
-        var databasePath = CreateTemporaryDatabasePath();
-
-        try
-        {
-            var repository = CreateRepository(databasePath);
-            var createdAtUtc = DateTimeOffset.UtcNow;
-            var embedding = string.Join(",", Enumerable.Repeat("0.01", 128));
-
-            await repository.UpsertConversationVectorMemoryAsync(
-                new[]
-                {
-                    new ConversationVectorMemoryEntry(
-                        "telegram:1:2",
-                        SourceMessageId: 1,
-                        AgentConversationRole.User,
-                        "alpha likes tea",
-                        embedding,
-                        createdAtUtc),
-                    new ConversationVectorMemoryEntry(
-                        "telegram:1:2",
-                        SourceMessageId: 2,
-                        AgentConversationRole.Assistant,
-                        "noted",
-                        embedding,
-                        createdAtUtc),
-                },
-                CancellationToken.None);
-
-            await repository.UpsertConversationVectorMemoryAsync(
-                new[]
-                {
-                    new ConversationVectorMemoryEntry(
-                        "telegram:1:2",
-                        SourceMessageId: 1,
-                        AgentConversationRole.User,
-                        "alpha likes green tea",
-                        embedding,
-                        createdAtUtc.AddMinutes(1)),
-                },
-                CancellationToken.None);
-
-            var count = await repository.GetConversationVectorMemoryCountAsync(
-                "telegram:1:2",
-                CancellationToken.None);
-            var records = await repository.GetConversationVectorMemoryAsync(
-                "telegram:1:2",
-                limit: 10,
-                CancellationToken.None);
-
-            Assert.Equal(2, count);
-            Assert.Equal(2, records.Count);
-            Assert.Contains(records, record => record.SourceMessageId == 1 && record.Content == "alpha likes green tea");
-
-            await repository.ClearConversationVectorMemoryAsync(
-                "telegram:1:2",
-                CancellationToken.None);
-            var clearedCount = await repository.GetConversationVectorMemoryCountAsync(
-                "telegram:1:2",
-                CancellationToken.None);
-            Assert.Equal(0, clearedCount);
-        }
-        finally
-        {
-            DeleteTemporaryDatabaseDirectory(databasePath);
-        }
-    }
-
-    [Fact]
     public async Task Project_capsules_and_extraction_state_roundtrip()
     {
         var databasePath = CreateTemporaryDatabasePath();
@@ -595,6 +491,95 @@ public class StorageTests
             var offset = await secondRepository.GetTelegramUpdateOffsetAsync(CancellationToken.None);
 
             Assert.Equal(42, offset);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Get_all_conversation_summaries_returns_rows_across_conversation_keys()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            await repository.UpsertConversationSummaryAsync(
+                new ConversationSummaryMemory(
+                    "telegram:1:2",
+                    "summary-a",
+                    DateTimeOffset.UtcNow,
+                    SourceLastMessageId: 5,
+                    SummaryVersion: 1),
+                CancellationToken.None);
+            await repository.UpsertConversationSummaryAsync(
+                new ConversationSummaryMemory(
+                    "telegram:3:4",
+                    "summary-b",
+                    DateTimeOffset.UtcNow,
+                    SourceLastMessageId: 9,
+                    SummaryVersion: 2),
+                CancellationToken.None);
+
+            var summaries = await repository.GetAllConversationSummariesAsync(CancellationToken.None);
+
+            Assert.Equal(2, summaries.Count);
+            Assert.Equal(new[] { "telegram:1:2", "telegram:3:4" }, summaries.Select(summary => summary.ConversationKey));
+            Assert.Equal(new[] { "summary-a", "summary-b" }, summaries.Select(summary => summary.Summary));
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Get_all_project_capsules_returns_rows_across_conversation_keys()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var now = DateTimeOffset.UtcNow;
+            await repository.UpsertProjectCapsulesAsync(
+                new[]
+                {
+                    new ProjectCapsuleMemory("telegram:1:2", "dog", "Щенок", "## Факты", "conversation", 0.8d, 5L, now, 1),
+                    new ProjectCapsuleMemory("telegram:3:4", "house", "Стройка", "## Status", "conversation", 0.9d, 7L, now, 2),
+                },
+                CancellationToken.None);
+
+            var capsules = await repository.GetAllProjectCapsulesAsync(CancellationToken.None);
+
+            Assert.Equal(2, capsules.Count);
+            Assert.Equal(new[] { "telegram:1:2", "telegram:3:4" }, capsules.Select(capsule => capsule.ConversationKey));
+            Assert.Equal(new[] { "dog", "house" }, capsules.Select(capsule => capsule.CapsuleKey));
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Agent_state_value_roundtrips_and_overwrites()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var repository = CreateRepository(databasePath);
+
+            Assert.Null(await repository.GetAgentStateValueAsync("backfill_flag", CancellationToken.None));
+
+            await repository.SetAgentStateValueAsync("backfill_flag", "done", CancellationToken.None);
+            Assert.Equal("done", await repository.GetAgentStateValueAsync("backfill_flag", CancellationToken.None));
+
+            await repository.SetAgentStateValueAsync("backfill_flag", "pending", CancellationToken.None);
+            Assert.Equal("pending", await repository.GetAgentStateValueAsync("backfill_flag", CancellationToken.None));
         }
         finally
         {

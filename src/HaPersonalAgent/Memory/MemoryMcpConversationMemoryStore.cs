@@ -82,16 +82,13 @@ public sealed class MemoryMcpConversationMemoryStore : IConversationMemoryStore
         }
     }
 
-    // --- Short-term window, vector overflow, raw events, capsule reads, extraction state: stay local ---
+    // --- Short-term window, raw events, capsule reads, extraction state: stay local ---
 
     public Task<IReadOnlyList<AgentConversationMessage>> GetConversationMessagesAsync(string conversationKey, int limit, CancellationToken cancellationToken) =>
         _inner.GetConversationMessagesAsync(conversationKey, limit, cancellationToken);
 
     public Task<int> GetConversationMessageCountAsync(string conversationKey, CancellationToken cancellationToken) =>
         _inner.GetConversationMessageCountAsync(conversationKey, cancellationToken);
-
-    public Task<IReadOnlyList<StoredConversationMessage>> GetOverflowConversationMessagesAsync(string conversationKey, int retainedMessageCount, CancellationToken cancellationToken) =>
-        _inner.GetOverflowConversationMessagesAsync(conversationKey, retainedMessageCount, cancellationToken);
 
     public Task AppendConversationMessagesAsync(string conversationKey, IEnumerable<AgentConversationMessage> messages, CancellationToken cancellationToken) =>
         _inner.AppendConversationMessagesAsync(conversationKey, messages, cancellationToken);
@@ -104,18 +101,6 @@ public sealed class MemoryMcpConversationMemoryStore : IConversationMemoryStore
 
     public Task<long?> GetLatestConversationMessageIdAsync(string conversationKey, CancellationToken cancellationToken) =>
         _inner.GetLatestConversationMessageIdAsync(conversationKey, cancellationToken);
-
-    public Task UpsertConversationVectorMemoryAsync(IEnumerable<ConversationVectorMemoryEntry> entries, CancellationToken cancellationToken) =>
-        _inner.UpsertConversationVectorMemoryAsync(entries, cancellationToken);
-
-    public Task<IReadOnlyList<ConversationVectorMemoryRecord>> GetConversationVectorMemoryAsync(string conversationKey, int limit, CancellationToken cancellationToken) =>
-        _inner.GetConversationVectorMemoryAsync(conversationKey, limit, cancellationToken);
-
-    public Task<int> GetConversationVectorMemoryCountAsync(string conversationKey, CancellationToken cancellationToken) =>
-        _inner.GetConversationVectorMemoryCountAsync(conversationKey, cancellationToken);
-
-    public Task ClearConversationVectorMemoryAsync(string conversationKey, CancellationToken cancellationToken) =>
-        _inner.ClearConversationVectorMemoryAsync(conversationKey, cancellationToken);
 
     public Task AppendRawEventsAsync(IEnumerable<RawEventEntry> events, CancellationToken cancellationToken) =>
         _inner.AppendRawEventsAsync(events, cancellationToken);

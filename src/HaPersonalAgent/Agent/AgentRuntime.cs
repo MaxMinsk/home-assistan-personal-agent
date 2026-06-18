@@ -74,7 +74,6 @@ public sealed class AgentRuntime : IAgentRuntime
             statusTool,
             loggerFactory.CreateLogger<AgentToolCatalog>(),
             homeAssistantMcpStatusTool,
-            boundedChatHistoryProvider,
             stateRepository,
             confirmationService,
             serviceProvider.GetService<IMemoryMcpClient>(),

@@ -9,7 +9,7 @@ namespace HaPersonalAgent.Dialogue;
 /// <summary>
 /// Что: transport-agnostic сервис диалога с агентом.
 /// Зачем: Telegram и будущий Web UI должны переиспользовать одну логику загрузки истории, вызова IAgentRuntime, сохранения turns и reset.
-/// Как: получает DialogueRequest, строит storage key через DialogueConversationKey, загружает bounded history + vector recall, вызывает runtime и сохраняет только user/assistant turns.
+/// Как: получает DialogueRequest, строит storage key через DialogueConversationKey, загружает bounded history, вызывает runtime и сохраняет только user/assistant turns.
 /// </summary>
 public sealed class DialogueService
 {
@@ -215,7 +215,7 @@ public sealed class DialogueService
             },
             cancellationToken);
 
-        await _boundedChatHistoryProvider.ArchiveOverflowAndTrimAsync(
+        await _boundedChatHistoryProvider.TrimOverflowAsync(
             conversationKey,
             maxMessages,
             cancellationToken);
@@ -249,9 +249,6 @@ public sealed class DialogueService
             conversationKey,
             cancellationToken);
         await _memoryStore.ClearConversationSummaryAsync(
-            conversationKey,
-            cancellationToken);
-        await _memoryStore.ClearConversationVectorMemoryAsync(
             conversationKey,
             cancellationToken);
         await _memoryStore.ClearProjectCapsulesAsync(
@@ -298,20 +295,6 @@ public sealed class DialogueService
 
         var conversationKey = DialogueConversationKey.Create(conversation);
         return await _memoryStore.GetRawEventsAsync(
-            conversationKey,
-            limit,
-            cancellationToken);
-    }
-
-    public async Task<IReadOnlyList<ConversationVectorMemoryRecord>> GetVectorMemoryAsync(
-        DialogueConversation conversation,
-        int limit,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(conversation);
-
-        var conversationKey = DialogueConversationKey.Create(conversation);
-        return await _memoryStore.GetConversationVectorMemoryAsync(
             conversationKey,
             limit,
             cancellationToken);
@@ -502,9 +485,6 @@ public sealed class DialogueService
         var rawEventCount = await _memoryStore.GetRawEventCountAsync(
             conversationKey,
             cancellationToken);
-        var vectorMemoryCount = await _memoryStore.GetConversationVectorMemoryCountAsync(
-            conversationKey,
-            cancellationToken);
         var projectCapsuleCount = await _memoryStore.GetProjectCapsuleCountAsync(
             conversationKey,
             cancellationToken);
@@ -548,7 +528,6 @@ public sealed class DialogueService
             conversationKey,
             StoredMessageCount: storedMessageCount,
             RawEventCount: rawEventCount,
-            VectorMemoryCount: vectorMemoryCount,
             ProjectCapsuleCount: projectCapsuleCount,
             ProjectCapsuleLatestSourceEventId: projectCapsuleLatestSourceEventId ?? 0,
             ProjectCapsuleLastUpdatedAtUtc: projectCapsuleLastUpdatedAtUtc,

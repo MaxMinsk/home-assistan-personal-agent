@@ -5,7 +5,7 @@ namespace HaPersonalAgent.Storage;
 /// <summary>
 /// What: the conversation-scoped persistence surface used by the dialogue layer
 /// (<see cref="DialogueService"/> and <see cref="BoundedChatHistoryProvider"/>) — recent messages,
-/// the rolling summary, vector overflow memory, raw events and project-capsule reads.
+/// the rolling summary, raw events and project-capsule reads.
 /// Why: HPA-002 introduces this seam so the conversation-memory backend can be swapped (SQLite today,
 /// Memory MCP later per HPA-004) without touching the dialogue layer. Pure seam: no behavior change.
 /// How: <see cref="SqliteConversationMemoryStore"/> delegates 1:1 to <see cref="AgentStateRepository"/>;
@@ -22,11 +22,6 @@ public interface IConversationMemoryStore
 
     Task<int> GetConversationMessageCountAsync(
         string conversationKey,
-        CancellationToken cancellationToken);
-
-    Task<IReadOnlyList<StoredConversationMessage>> GetOverflowConversationMessagesAsync(
-        string conversationKey,
-        int retainedMessageCount,
         CancellationToken cancellationToken);
 
     Task AppendConversationMessagesAsync(
@@ -57,24 +52,6 @@ public interface IConversationMemoryStore
         CancellationToken cancellationToken);
 
     Task ClearConversationSummaryAsync(
-        string conversationKey,
-        CancellationToken cancellationToken);
-
-    // Vector overflow memory.
-    Task UpsertConversationVectorMemoryAsync(
-        IEnumerable<ConversationVectorMemoryEntry> entries,
-        CancellationToken cancellationToken);
-
-    Task<IReadOnlyList<ConversationVectorMemoryRecord>> GetConversationVectorMemoryAsync(
-        string conversationKey,
-        int limit,
-        CancellationToken cancellationToken);
-
-    Task<int> GetConversationVectorMemoryCountAsync(
-        string conversationKey,
-        CancellationToken cancellationToken);
-
-    Task ClearConversationVectorMemoryAsync(
         string conversationKey,
         CancellationToken cancellationToken);
 
