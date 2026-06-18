@@ -1,3 +1,4 @@
+using HaPersonalAgent.Confirmation;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace HaPersonalAgent.Memory;
@@ -19,6 +20,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMemoryMcpConnector>(
             provider => provider.GetRequiredService<ModelContextProtocolMemoryMcpConnector>());
         services.AddSingleton<IMemoryMcpClient, MemoryMcpClient>();
+        services.AddSingleton<IConfirmationActionExecutor, MemoryMcpSaveActionExecutor>();
 
         return services;
     }

@@ -2,8 +2,10 @@ using HaPersonalAgent.Configuration;
 using HaPersonalAgent.Confirmation;
 using HaPersonalAgent.Dialogue;
 using HaPersonalAgent.HomeAssistant;
+using HaPersonalAgent.Memory;
 using HaPersonalAgent.Storage;
 using Microsoft.Agents.AI;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using System.ClientModel;
@@ -74,7 +76,9 @@ public sealed class AgentRuntime : IAgentRuntime
             homeAssistantMcpStatusTool,
             boundedChatHistoryProvider,
             stateRepository,
-            confirmationService);
+            confirmationService,
+            serviceProvider.GetService<IMemoryMcpClient>(),
+            serviceProvider.GetService<IOptions<MemoryMcpOptions>>());
         var compactionPipelineFactory = new AgentCompactionPipelineFactory(
             executionPlanner,
             loggerFactory);

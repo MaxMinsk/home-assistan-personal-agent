@@ -2,9 +2,11 @@ using HaPersonalAgent.Configuration;
 using HaPersonalAgent.Confirmation;
 using HaPersonalAgent.Dialogue;
 using HaPersonalAgent.HomeAssistant;
+using HaPersonalAgent.Memory;
 using HaPersonalAgent.Storage;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
@@ -34,6 +36,7 @@ public sealed class AgentToolCatalog
         For Home Assistant requests that change state, call propose_home_assistant_mcp_action when it is available.
         Use project_capsules_list and project_capsule_get to inspect durable memory capsules for this conversation.
         To create or update durable memory capsules, call propose_project_capsule_upsert and wait for explicit user approval before claiming the update is applied.
+        When the memory tools are available, use memory_recall to look up durable long-term facts about the user before answering, and call propose_memory_save to persist an important durable fact (it requires explicit user approval, like other write actions).
         Never claim a Home Assistant control action was executed until the app reports completion after user approval.
         Never reveal secrets or raw tokens.
         """;
@@ -43,6 +46,8 @@ public sealed class AgentToolCatalog
     private readonly BoundedChatHistoryProvider? _boundedChatHistoryProvider;
     private readonly AgentStateRepository? _stateRepository;
     private readonly IConfirmationService? _confirmationService;
+    private readonly IMemoryMcpClient? _memoryMcpClient;
+    private readonly IOptions<MemoryMcpOptions>? _memoryMcpOptions;
     private readonly ILogger<AgentToolCatalog> _logger;
 
     public AgentToolCatalog(
@@ -51,7 +56,9 @@ public sealed class AgentToolCatalog
         HomeAssistantMcpStatusTool? homeAssistantMcpStatusTool = null,
         BoundedChatHistoryProvider? boundedChatHistoryProvider = null,
         AgentStateRepository? stateRepository = null,
-        IConfirmationService? confirmationService = null)
+        IConfirmationService? confirmationService = null,
+        IMemoryMcpClient? memoryMcpClient = null,
+        IOptions<MemoryMcpOptions>? memoryMcpOptions = null)
     {
         _statusTool = statusTool ?? throw new ArgumentNullException(nameof(statusTool));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -59,6 +66,8 @@ public sealed class AgentToolCatalog
         _boundedChatHistoryProvider = boundedChatHistoryProvider;
         _stateRepository = stateRepository;
         _confirmationService = confirmationService;
+        _memoryMcpClient = memoryMcpClient;
+        _memoryMcpOptions = memoryMcpOptions;
     }
 
     public IReadOnlyList<AITool> CreateTools(
@@ -116,6 +125,15 @@ public sealed class AgentToolCatalog
             if (_confirmationService is not null)
             {
                 tools.Add(CreateProjectCapsuleUpsertProposalTool(context));
+            }
+        }
+
+        if (_memoryMcpClient is not null && _memoryMcpOptions?.Value.IsConfigured == true)
+        {
+            tools.Add(CreateMemoryRecallTool(context));
+            if (_confirmationService is not null)
+            {
+                tools.Add(CreateMemorySaveProposalTool(context));
             }
         }
 
@@ -556,6 +574,123 @@ public sealed class AgentToolCatalog
         return normalized
             .ToString()
             .Trim('_');
+    }
+
+    private AIFunction CreateMemoryRecallTool(AgentContext context)
+    {
+        async Task<string> RecallMemoryAsync(
+            string query,
+            int topK,
+            CancellationToken cancellationToken)
+        {
+            if (_memoryMcpClient is null)
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    available = false,
+                    reason = "Memory MCP is not configured.",
+                }, ToolJsonOptions);
+            }
+
+            if (string.IsNullOrWhiteSpace(query))
+            {
+                return JsonSerializer.Serialize(new
+                {
+                    available = true,
+                    count = 0,
+                    reason = "query must be non-empty.",
+                }, ToolJsonOptions);
+            }
+
+            var normalizedTopK = Math.Clamp(topK <= 0 ? ConversationMemorySearchDefaultTopK : topK, 1, ConversationMemorySearchMaxTopK);
+            try
+            {
+                var result = await _memoryMcpClient.CallToolAsync(
+                    "notes_search",
+                    new Dictionary<string, object?>
+                    {
+                        ["domain"] = MemoryMcpSaveActionExecutor.MemoryDomain,
+                        ["query"] = query,
+                        ["tags"] = new[] { "ha-personal-agent" },
+                        ["limit"] = normalizedTopK,
+                    },
+                    cancellationToken);
+
+                return JsonSerializer.Serialize(new
+                {
+                    available = true,
+                    query = NormalizeSingleLine(query, maxLength: 240),
+                    topK = normalizedTopK,
+                    isError = result.IsError,
+                    hits = result.Text,
+                }, ToolJsonOptions);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                _logger.LogWarning(exception, "Memory MCP recall failed for run {CorrelationId}.", context.CorrelationId);
+                return JsonSerializer.Serialize(new
+                {
+                    available = true,
+                    error = $"Recall failed: {exception.GetType().Name}",
+                }, ToolJsonOptions);
+            }
+        }
+
+        return AIFunctionFactory.Create(
+            (Func<string, int, CancellationToken, Task<string>>)RecallMemoryAsync,
+            name: "memory_recall",
+            description: "Searches durable long-term memory (Memory MCP, domain home) for facts relevant to a query. Read-only.",
+            serializerOptions: null);
+    }
+
+    private AIFunction CreateMemorySaveProposalTool(AgentContext context)
+    {
+        Task<ConfirmationProposalResult> ProposeMemorySaveAsync(
+            string statement,
+            string key,
+            string tags,
+            string summary,
+            string risk,
+            CancellationToken cancellationToken)
+        {
+            if (_confirmationService is null)
+            {
+                return Task.FromResult(ConfirmationProposalResult.Rejected("Confirmation service is not available."));
+            }
+
+            var normalizedStatement = NormalizeSingleLine(statement, maxLength: 600);
+            if (string.IsNullOrWhiteSpace(normalizedStatement))
+            {
+                return Task.FromResult(ConfirmationProposalResult.Rejected("statement must be non-empty."));
+            }
+
+            var payloadJson = JsonSerializer.Serialize(new
+            {
+                statement = normalizedStatement,
+                key = NormalizeSingleLine(key, maxLength: 80),
+                tags = NormalizeSingleLine(tags, maxLength: 160),
+            }, ToolJsonOptions);
+
+            return _confirmationService.ProposeAsync(
+                new ConfirmationProposalRequest(
+                    context,
+                    MemoryMcpSaveActionExecutor.MemoryMcpSaveActionKind,
+                    $"memory_save:{context.ConversationKey}",
+                    payloadJson,
+                    string.IsNullOrWhiteSpace(summary)
+                        ? $"Save durable memory: {Truncate(normalizedStatement, 80)}"
+                        : NormalizeSingleLine(summary, maxLength: 200),
+                    string.IsNullOrWhiteSpace(risk)
+                        ? "A durable fact will be written to shared long-term memory (Memory MCP, domain home)."
+                        : NormalizeSingleLine(risk, maxLength: 200)),
+                cancellationToken);
+        }
+
+        return AIFunctionFactory.Create(
+            (Func<string, string, string, string, string, CancellationToken, Task<ConfirmationProposalResult>>)ProposeMemorySaveAsync,
+            name: "propose_memory_save",
+            description: "Creates a pending confirmation to save a durable fact to long-term memory (Memory MCP). Arguments: statement, key (optional stable id), tags (comma-separated, optional), summary, risk. Requires explicit user approval via /approve.",
+            serializerOptions: null);
     }
 
     private static string NormalizeSingleLine(string? value, int maxLength)

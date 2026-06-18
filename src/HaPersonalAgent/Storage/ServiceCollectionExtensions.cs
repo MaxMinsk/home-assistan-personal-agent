@@ -1,4 +1,8 @@
+using HaPersonalAgent.Configuration;
+using HaPersonalAgent.Memory;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace HaPersonalAgent.Storage;
 
@@ -15,7 +19,26 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<SqliteConnectionFactory>();
         services.AddSingleton<AgentStateRepository>();
-        services.AddSingleton<IConversationMemoryStore, SqliteConversationMemoryStore>();
+        services.AddSingleton<SqliteConversationMemoryStore>();
+        services.AddSingleton<IConversationMemoryStore>(provider =>
+        {
+            var sqliteStore = provider.GetRequiredService<SqliteConversationMemoryStore>();
+            var memoryOptions = provider.GetRequiredService<IOptions<MemoryMcpOptions>>().Value;
+
+            // HPA-004: route durable memory to Memory MCP only when explicitly selected and configured;
+            // otherwise keep the local SQLite store (default, unchanged behavior).
+            if (string.Equals(memoryOptions.StoreType, MemoryMcpOptions.StoreTypeMemoryMcp, StringComparison.OrdinalIgnoreCase)
+                && memoryOptions.IsConfigured)
+            {
+                return new MemoryMcpConversationMemoryStore(
+                    sqliteStore,
+                    provider.GetRequiredService<IMemoryMcpClient>(),
+                    provider.GetRequiredService<IOptions<MemoryMcpOptions>>(),
+                    provider.GetRequiredService<ILogger<MemoryMcpConversationMemoryStore>>());
+            }
+
+            return sqliteStore;
+        });
 
         return services;
     }
