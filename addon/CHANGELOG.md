@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+- Retire the local vector-memory store: long-term recall now comes from Memory MCP (when configured) instead of the local hash-vector index, and the `/showVector` command is removed. Without Memory MCP configured, the rolling conversation summary remains the long-term context.
+- Mirror project capsules to Memory MCP as `project_capsule` notes in the `home` domain when `memory_store_type` is `memory_mcp`.
+- Back-fill existing local conversation summaries and project capsules into Memory MCP on first start when `memory_store_type` is `memory_mcp` (one-time and idempotent).
+- Internal: remove the `conversation_vector_memory` table, types and hash-embedding code.
+
+
 ## 0.4.0
 
 - Add agent-facing long-term memory tools (active only when Memory MCP is configured): `memory_recall` to look up durable facts, and `propose_memory_save` to save a durable fact through the existing approval flow (`/approve`).
