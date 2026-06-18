@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0
+
+- Fix age/date reasoning: every run now includes the real current date/time, so the assistant no longer computes ages, "tomorrow"/"in a week", or memory timestamps from a stale remembered date.
+- Add a `memory_mcp_status` tool and list the long-term-memory tools in the assistant's instructions when Memory MCP is configured, so it can see its memory capabilities instead of guessing.
+- Make the active model/routing profile explicit to the assistant, and state that tools withheld on the cost-optimized profile are intentional (not an outage).
+- Clarify when to use project capsules (structured topic cards) vs. saving an ad-hoc durable fact.
+
+
 ## 0.5.0
 
 - Retire the local vector-memory store: long-term recall now comes from Memory MCP (when configured) instead of the local hash-vector index, and the `/showVector` command is removed. Without Memory MCP configured, the rolling conversation summary remains the long-term context.
