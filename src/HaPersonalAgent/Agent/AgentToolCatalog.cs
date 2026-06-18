@@ -119,6 +119,11 @@ public sealed class AgentToolCatalog
             }
         }
 
+        if (_memoryMcpClient is not null)
+        {
+            tools.Add(CreateMemoryMcpStatusTool());
+        }
+
         if (_memoryMcpClient is not null && _memoryMcpOptions?.Value.IsConfigured == true)
         {
             tools.Add(CreateMemoryRecallTool(context));
@@ -142,15 +147,23 @@ public sealed class AgentToolCatalog
 
         var instructions = new StringBuilder(BaseInstructions);
 
+        instructions.AppendLine();
+        instructions.AppendLine($"Current date/time (UTC): {DateTimeOffset.UtcNow:O}. Use this for any age, relative-date (\"tomorrow\"/\"in a week\"), scheduling, or memory-timestamp reasoning; do not rely on a date remembered from earlier in the conversation.");
+
         if (!executionPlan.UsesTools)
         {
             instructions.AppendLine();
             instructions.AppendLine(
                 "This run uses a no-tools profile. Do not claim to inspect Home Assistant, call tools, read files, or control devices.");
             instructions.AppendLine(
+                "This is the cost-optimized profile (" + context.ExecutionProfile + "); tools are intentionally withheld here, this is NOT an error or outage.");
+            instructions.AppendLine(
                 "If the user asks for live home state or control, explain that this requires the normal tool-enabled dialogue profile.");
             return instructions.ToString();
         }
+
+        instructions.AppendLine();
+        instructions.AppendLine("Active execution profile: " + context.ExecutionProfile + ".");
 
         if (_confirmationService is not null
             && homeAssistantMcpTools.ConfirmationRequiredTools.Count > 0)
@@ -179,8 +192,14 @@ public sealed class AgentToolCatalog
             instructions.AppendLine("Relevant durable long-term memory is auto-injected as context before this run when long-term memory is available.");
         }
 
+        if (_memoryMcpClient is not null && _memoryMcpOptions?.Value.IsConfigured == true)
+        {
+            instructions.AppendLine("Long-term memory tools are available: memory_recall (read durable facts), propose_memory_save (save a durable fact via approval), memory_mcp_status (check Memory MCP availability).");
+        }
+
         instructions.AppendLine();
         instructions.AppendLine("Use project_capsules_list/project_capsule_get when you need long-term project facts from capsule memory.");
+        instructions.AppendLine("Memory model: project capsules (project_capsules_list/get, propose_project_capsule_upsert) are structured, conversation-scoped cards about ongoing topics/projects; memory_recall / propose_memory_save handle ad-hoc durable facts and preferences in long-term memory. Use capsules for structured project state, memory_save for standalone facts.");
 
         if (_stateRepository is null)
         {
@@ -485,6 +504,29 @@ public sealed class AgentToolCatalog
         return normalized
             .ToString()
             .Trim('_');
+    }
+
+    private AIFunction CreateMemoryMcpStatusTool()
+    {
+        async Task<string> GetMemoryMcpStatusAsync(CancellationToken cancellationToken)
+        {
+            var result = await _memoryMcpClient!.DiscoverAsync(cancellationToken);
+            return JsonSerializer.Serialize(new
+            {
+                configured = _memoryMcpOptions?.Value.IsConfigured ?? false,
+                status = result.Status.ToString(),
+                serverVersion = result.ServerVersion,
+                toolCount = result.ToolCount,
+                endpoint = result.EndpointUrl,
+                storeType = _memoryMcpOptions?.Value.StoreType,
+            }, ToolJsonOptions);
+        }
+
+        return AIFunctionFactory.Create(
+            (Func<CancellationToken, Task<string>>)GetMemoryMcpStatusAsync,
+            name: "memory_mcp_status",
+            description: "Returns Memory MCP reachability, server version, tool count, and the active memory store type, without exposing the token.",
+            serializerOptions: null);
     }
 
     private AIFunction CreateMemoryRecallTool(AgentContext context)

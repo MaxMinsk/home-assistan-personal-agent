@@ -75,6 +75,28 @@ public class AgentToolCatalogTests
         Assert.Contains("no-tools profile", instructions, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void CreateInstructions_injects_current_utc_datetime()
+    {
+        var catalog = new AgentToolCatalog(
+            new AgentStatusTool(CreateStatusProvider()),
+            NullLogger<AgentToolCatalog>.Instance);
+        var executionPlan = CreatePlan(LlmExecutionProfile.ToolEnabled);
+        var context = AgentContext.Create();
+        var toolSet = HomeAssistantMcpAgentToolSet.Available(
+            Array.Empty<Microsoft.Extensions.AI.AIFunction>(),
+            Array.Empty<HomeAssistantMcpItemInfo>(),
+            totalToolCount: 0,
+            ownsSession: null);
+
+        var instructions = catalog.CreateInstructions(
+            context,
+            executionPlan,
+            toolSet);
+
+        Assert.Contains("Current date/time (UTC)", instructions, StringComparison.Ordinal);
+    }
+
     private static LlmExecutionPlan CreatePlan(LlmExecutionProfile profile) =>
         new(
             profile,
