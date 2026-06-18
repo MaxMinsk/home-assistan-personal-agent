@@ -13,7 +13,7 @@ public sealed class LlmOptions
 
     public string BaseUrl { get; set; } = "https://api.moonshot.ai/v1";
 
-    public string Model { get; set; } = "kimi-k2.5";
+    public string Model { get; set; } = "kimi-k2.6";
 
     public string ApiKey { get; set; } = string.Empty;
 

@@ -51,12 +51,16 @@ public sealed class LlmRoutingContextProfileBuilder
                 ? LlmExecutionProfile.PureChat
                 : context.ExecutionProfile;
 
+        // Keep long-term memory on the cost route. Dropping it here blinded the assistant
+        // on short personal-fact questions ("how many pepper varieties do I have?") that
+        // look like simple chat but are answerable only from durable memory — the prime
+        // cause of confabulated answers. Memory is already retrieved upstream; counting its
+        // length in the budget estimate means memory-heavy turns naturally fall back to the
+        // default model, while memory-light chit-chat stays on the cheap small model.
         var packedContext = context with
         {
             ConversationMessages = packedHistory,
             PersistedSummary = packedSummary,
-            RetrievedMemoryContext = null,
-            RetrievedMemoryCount = 0,
             ExecutionProfile = packedExecutionProfile,
         };
 
@@ -66,7 +70,7 @@ public sealed class LlmRoutingContextProfileBuilder
             EstimateInputChars(packedContext, userMessage),
             packedHistory.Length,
             packedSummary?.Length ?? 0,
-            RetrievedMemoryChars: 0);
+            packedContext.RetrievedMemoryContext?.Length ?? 0);
     }
 
     private static int EstimateInputChars(AgentContext context, string message)

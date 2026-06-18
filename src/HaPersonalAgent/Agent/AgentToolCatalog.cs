@@ -195,6 +195,8 @@ public sealed class AgentToolCatalog
         if (_memoryMcpClient is not null && _memoryMcpOptions?.Value.IsConfigured == true)
         {
             instructions.AppendLine("Long-term memory tools are available: memory_recall (read durable facts), propose_memory_save (save a durable fact via approval), memory_mcp_status (check Memory MCP availability).");
+            instructions.AppendLine("Grounding rule (no fabrication): answer from memory only when a tool actually returned matching results. If memory_recall or the auto-injected context returns no hits, say plainly that you found nothing and ask the user — never invent facts, lists, variety names, or counts to fill the gap. Never claim you saved or updated a note unless a save/upsert tool reported success; proposing a save still needs explicit user approval.");
+            instructions.AppendLine("memory_recall does full-text relevance search inside the user's home domain — pass a short natural-language query (e.g. 'pepper seed varieties', 'dog feeding schedule'), not tag syntax like 'crop:pepper'.");
         }
 
         instructions.AppendLine();
@@ -562,9 +564,11 @@ public sealed class AgentToolCatalog
                     "notes_search",
                     new Dictionary<string, object?>
                     {
+                        // Scope by domain only — see BoundedChatHistoryProvider.RecallFromMemoryMcpAsync:
+                        // a marker-tag filter ANDs against every note and hides the user's imported
+                        // notes (seed lists etc.), so recall returned nothing for real questions.
                         ["domain"] = MemoryMcpSaveActionExecutor.MemoryDomain,
                         ["query"] = query,
-                        ["tags"] = new[] { "ha-personal-agent" },
                         ["limit"] = normalizedTopK,
                     },
                     cancellationToken);
@@ -592,7 +596,7 @@ public sealed class AgentToolCatalog
         return AIFunctionFactory.Create(
             (Func<string, int, CancellationToken, Task<string>>)RecallMemoryAsync,
             name: "memory_recall",
-            description: "Searches durable long-term memory (Memory MCP, domain home) for facts relevant to a query. Read-only.",
+            description: "Searches the user's durable long-term memory (Memory MCP, domain home: garden/seeds, pets, property, saved facts) by full-text relevance. Pass a natural-language query (e.g. 'pepper seed varieties'), not tag syntax. Returns matching notes or an empty result — if empty, say so; do not invent facts. Read-only.",
             serializerOptions: null);
     }
 

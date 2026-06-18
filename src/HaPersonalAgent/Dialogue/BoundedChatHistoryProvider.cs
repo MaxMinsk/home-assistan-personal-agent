@@ -101,9 +101,14 @@ public sealed class BoundedChatHistoryProvider
                 "notes_search",
                 new Dictionary<string, object?>
                 {
+                    // Scope by domain only. Every note in the user's `home` domain is durable
+                    // personal context worth recalling (imported seed lists, pets, property,
+                    // agent-saved facts). Do NOT additionally require a marker tag: the user's
+                    // imported notes carry their own facets (crop:pepper, form:seeds, ...) and
+                    // never the agent tag, so a tag filter (notes_search ANDs every tag) hides
+                    // almost the entire store and recall silently returns nothing.
                     ["domain"] = "home",
                     ["query"] = query,
-                    ["tags"] = new[] { "ha-personal-agent" },
                     ["limit"] = DefaultRecallTopK,
                 },
                 timeout.Token);

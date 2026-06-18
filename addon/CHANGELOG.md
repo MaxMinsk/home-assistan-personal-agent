@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.1
+
+- Fix long-term memory recall returning nothing: both recall paths required a `ha-personal-agent` marker tag that the user's imported notes never carry, so `memory_recall` and the auto-injected context found almost nothing and the assistant confabulated answers. Recall now scopes by domain only and finds all of the user's durable notes.
+- Stop dropping long-term memory on the cost-optimized "simple" route: short personal-fact questions ("how many pepper varieties do I have?") looked like simple chat and were answered by the small model with memory stripped. Memory now survives the cost route, and memory-heavy turns fall back to the default model.
+- Add a grounding rule to the assistant's instructions: if memory search returns nothing, say so and ask — never invent facts/lists/counts, and never claim a save happened without tool confirmation.
+- Clarify the `memory_recall` tool: full-text relevance search over the user's memory; pass a natural-language query, not tag syntax.
+- Raise the default model from `kimi-k2.5` to `kimi-k2.6` (newer general-purpose Moonshot model). Existing installs keep their configured value — change it in the add-on options to adopt the new default.
+
+
 ## 0.6.0
 
 - Fix age/date reasoning: every run now includes the real current date/time, so the assistant no longer computes ages, "tomorrow"/"in a week", or memory timestamps from a stale remembered date.

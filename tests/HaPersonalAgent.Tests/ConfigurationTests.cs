@@ -20,7 +20,7 @@ public class ConfigurationTests
 
         Assert.Equal("moonshot", llmOptions.Provider);
         Assert.Equal("https://api.moonshot.ai/v1", llmOptions.BaseUrl);
-        Assert.Equal("kimi-k2.5", llmOptions.Model);
+        Assert.Equal("kimi-k2.6", llmOptions.Model);
         Assert.Equal(LlmThinkingModes.Auto, llmOptions.ThinkingMode);
         Assert.Equal(LlmRouterModes.Enforced, llmOptions.RouterMode);
         Assert.Equal("moonshot-v1-8k", llmOptions.RouterSmallModel);
