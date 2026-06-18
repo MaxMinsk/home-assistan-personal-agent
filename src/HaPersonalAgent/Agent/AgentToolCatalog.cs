@@ -23,7 +23,7 @@ public sealed class AgentToolCatalog
     private const int ProjectCapsuleToolListLimit = 8;
     private const int ProjectCapsuleListPreviewLength = 320;
     private const int ConversationMemorySearchDefaultTopK = 4;
-    private const int ConversationMemorySearchMaxTopK = 8;
+    private const int ConversationMemorySearchMaxTopK = 25;
     private static readonly JsonSerializerOptions ToolJsonOptions = new(JsonSerializerDefaults.Web);
 
     private const string BaseInstructions =
@@ -197,6 +197,7 @@ public sealed class AgentToolCatalog
             instructions.AppendLine("Long-term memory tools are available: memory_recall (read durable facts), propose_memory_save (save a durable fact via approval), memory_mcp_status (check Memory MCP availability).");
             instructions.AppendLine("Grounding rule (no fabrication): answer from memory only when a tool actually returned matching results. If memory_recall or the auto-injected context returns no hits, say plainly that you found nothing and ask the user — never invent facts, lists, variety names, or counts to fill the gap. Never claim you saved or updated a note unless a save/upsert tool reported success; proposing a save still needs explicit user approval.");
             instructions.AppendLine("memory_recall does full-text relevance search inside the user's home domain — pass a short natural-language query (e.g. 'pepper seed varieties', 'dog feeding schedule'), not tag syntax like 'crop:pepper'.");
+            instructions.AppendLine("Counting and listing: a recall result shows only a page of snippets but reports the full match count as `total`. Answer 'how many X' from `total`, not from the number of snippets shown. To enumerate every item, if `hasMore` is true call memory_recall again with a larger topK or the next offset until you have covered `total` before listing.");
         }
 
         instructions.AppendLine();
@@ -536,6 +537,7 @@ public sealed class AgentToolCatalog
         async Task<string> RecallMemoryAsync(
             string query,
             int topK,
+            int offset,
             CancellationToken cancellationToken)
         {
             if (_memoryMcpClient is null)
@@ -558,6 +560,7 @@ public sealed class AgentToolCatalog
             }
 
             var normalizedTopK = Math.Clamp(topK <= 0 ? ConversationMemorySearchDefaultTopK : topK, 1, ConversationMemorySearchMaxTopK);
+            var normalizedOffset = Math.Max(0, offset);
             try
             {
                 var result = await _memoryMcpClient.CallToolAsync(
@@ -570,14 +573,45 @@ public sealed class AgentToolCatalog
                         ["domain"] = MemoryMcpSaveActionExecutor.MemoryDomain,
                         ["query"] = query,
                         ["limit"] = normalizedTopK,
+                        ["offset"] = normalizedOffset,
                     },
                     cancellationToken);
+
+                // Surface the notes_search envelope's total/hasMore so the model answers "how many"
+                // from `total` (not the count of visible snippets) and knows when to paginate.
+                int? total = null;
+                bool? hasMore = null;
+                if (!string.IsNullOrWhiteSpace(result.Text))
+                {
+                    try
+                    {
+                        using var envelope = JsonDocument.Parse(result.Text);
+                        var root = envelope.RootElement;
+                        if (root.TryGetProperty("total", out var totalElement) && totalElement.TryGetInt32(out var totalValue))
+                        {
+                            total = totalValue;
+                        }
+
+                        if (root.TryGetProperty("hasMore", out var hasMoreElement)
+                            && (hasMoreElement.ValueKind == JsonValueKind.True || hasMoreElement.ValueKind == JsonValueKind.False))
+                        {
+                            hasMore = hasMoreElement.GetBoolean();
+                        }
+                    }
+                    catch (JsonException)
+                    {
+                        // Best-effort: if the envelope is not parseable, omit total/hasMore.
+                    }
+                }
 
                 return JsonSerializer.Serialize(new
                 {
                     available = true,
                     query = NormalizeSingleLine(query, maxLength: 240),
                     topK = normalizedTopK,
+                    offset = normalizedOffset,
+                    total,
+                    hasMore,
                     isError = result.IsError,
                     hits = result.Text,
                 }, ToolJsonOptions);
@@ -594,9 +628,9 @@ public sealed class AgentToolCatalog
         }
 
         return AIFunctionFactory.Create(
-            (Func<string, int, CancellationToken, Task<string>>)RecallMemoryAsync,
+            (Func<string, int, int, CancellationToken, Task<string>>)RecallMemoryAsync,
             name: "memory_recall",
-            description: "Searches the user's durable long-term memory (Memory MCP, domain home: garden/seeds, pets, property, saved facts) by full-text relevance. Pass a natural-language query (e.g. 'pepper seed varieties'), not tag syntax. Returns matching notes or an empty result — if empty, say so; do not invent facts. Read-only.",
+            description: "Searches the user's durable long-term memory (Memory MCP, domain home: garden/seeds, pets, property, saved facts) by full-text relevance. Pass a natural-language query (e.g. 'pepper seed varieties'), not tag syntax. Args: query; topK (page size, default 4, up to 25); offset (skip N for pagination, default 0). The result includes `total` (the full match count — use it to answer 'how many', not the number of visible snippets) and `hasMore` (when true, call again with a larger offset to retrieve the rest). Returns matching notes or an empty result — if empty, say so; do not invent facts. Read-only.",
             serializerOptions: null);
     }
 

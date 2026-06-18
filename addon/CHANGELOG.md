@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.2
+
+- Add diagnostic logging for every Memory MCP tool call: the add-on log now records the exact tool, endpoint, token fingerprint (last 4 chars only), verbatim arguments (domain/query/limit), and the raw server response (length + preview incl. `total`/error). This lets an empty or unexpected `memory_recall` result be diagnosed from the add-on log directly, instead of relying on the assistant's own narration.
+- `memory_recall`: support pagination (`offset`) and a larger page size, and surface `total`/`hasMore` so the assistant answers "how many" from `total` (not the visible snippet count) and can page through to list everything (HPA-020).
+
+
 ## 0.6.1
 
 - Fix long-term memory recall returning nothing: both recall paths required a `ha-personal-agent` marker tag that the user's imported notes never carry, so `memory_recall` and the auto-injected context found almost nothing and the assistant confabulated answers. Recall now scopes by domain only and finds all of the user's durable notes.

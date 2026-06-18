@@ -114,6 +114,55 @@ public sealed class MemoryMcpClient : IMemoryMcpClient
             throw new InvalidOperationException("Memory MCP token is not configured.");
         }
 
-        return await _connector.CallToolAsync(endpoint, options.Token, toolName, arguments, cancellationToken);
+        // Diagnostic logging: surface the exact tool call (endpoint, token fingerprint, verbatim
+        // arguments) and the raw server response in the add-on log, so a recall that returns an
+        // empty/unexpected result can be diagnosed from logs instead of the agent's own narration.
+        var tokenFingerprint = options.Token.Length >= 4 ? options.Token[^4..] : "----";
+        _logger.LogInformation(
+            "Memory MCP call {Tool} -> {Endpoint} (token …{TokenTail}); args: {Args}",
+            toolName,
+            endpoint,
+            tokenFingerprint,
+            DescribeArguments(arguments));
+
+        var result = await _connector.CallToolAsync(endpoint, options.Token, toolName, arguments, cancellationToken);
+
+        _logger.LogInformation(
+            "Memory MCP call {Tool} result: isError={IsError}, text[{Length}]: {Preview}",
+            toolName,
+            result.IsError,
+            result.Text?.Length ?? 0,
+            Preview(result.Text, 240));
+
+        return result;
+    }
+
+    private static string DescribeArguments(IReadOnlyDictionary<string, object?>? arguments)
+    {
+        if (arguments is null || arguments.Count == 0)
+        {
+            return "(none)";
+        }
+
+        return string.Join(", ", arguments.Select(pair => $"{pair.Key}={DescribeValue(pair.Value)}"));
+    }
+
+    private static string DescribeValue(object? value) => value switch
+    {
+        null => "null",
+        string text => text,
+        IEnumerable<string> items => $"[{string.Join("|", items)}]",
+        _ => value.ToString() ?? "null",
+    };
+
+    private static string Preview(string? text, int maxLength)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return "(empty)";
+        }
+
+        var singleLine = text.ReplaceLineEndings(" ");
+        return singleLine.Length <= maxLength ? singleLine : singleLine[..maxLength] + "…";
     }
 }
