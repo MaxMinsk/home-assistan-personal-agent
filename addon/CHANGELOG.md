@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- Add a Memory MCP integration foundation: the add-on can now connect to a shared Memory MCP server over streamable HTTP. New optional add-on options `memory_mcp_endpoint`, `memory_mcp_token`, `memory_mcp_domain`, `memory_mcp_project` and `memory_store_type` (existing installations are unaffected).
+- Log a Memory MCP health check at startup (status, server version, tool count) without exposing the token.
+- Internal: introduce the `IConversationMemoryStore` seam over the SQLite conversation memory (no behavior change) as the precondition for durable memory on Memory MCP.
+- Internal: migrate the project backlog and docs into Memory MCP; `backlog.md` is now reference-only.
+
+
 ## 0.2.26
 
 - Enable enforced cost-aware routing by default: simple chat uses `moonshot-v1-8k` without tools/reasoning, while simple tool-heavy requests keep tools but disable expensive reasoning.
