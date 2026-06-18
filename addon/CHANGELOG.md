@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+
+- Add agent-facing long-term memory tools (active only when Memory MCP is configured): `memory_recall` to look up durable facts, and `propose_memory_save` to save a durable fact through the existing approval flow (`/approve`).
+- Mirror durable conversation summaries to Memory MCP when `memory_store_type` is `memory_mcp`: summaries are written as lossless `conversation_summary` notes in the `home` domain. The short-term window stays local and the hot path is never blocked on remote calls; if Memory MCP is unreachable the mirror is skipped without breaking the conversation.
+- Internal: dedicated Memory MCP note types for durable memory, a documented memory-model mapping, and best-effort resilient mirroring that never breaks a dialogue turn.
+
+
 ## 0.3.0
 
 - Add a Memory MCP integration foundation: the add-on can now connect to a shared Memory MCP server over streamable HTTP. New optional add-on options `memory_mcp_endpoint`, `memory_mcp_token`, `memory_mcp_domain`, `memory_mcp_project` and `memory_store_type` (existing installations are unaffected).
