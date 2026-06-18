@@ -15,6 +15,7 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<SqliteConnectionFactory>();
         services.AddSingleton<AgentStateRepository>();
+        services.AddSingleton<IConversationMemoryStore, SqliteConversationMemoryStore>();
 
         return services;
     }

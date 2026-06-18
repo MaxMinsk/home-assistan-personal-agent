@@ -25,13 +25,13 @@ public sealed class BoundedChatHistoryProvider
     private const int MemorySnippetMaxLength = 220;
 
     private readonly ILogger<BoundedChatHistoryProvider> _logger;
-    private readonly AgentStateRepository _stateRepository;
+    private readonly IConversationMemoryStore _memoryStore;
 
     public BoundedChatHistoryProvider(
-        AgentStateRepository stateRepository,
+        IConversationMemoryStore memoryStore,
         ILogger<BoundedChatHistoryProvider> logger)
     {
-        _stateRepository = stateRepository;
+        _memoryStore = memoryStore;
         _logger = logger;
     }
 
@@ -45,7 +45,7 @@ public sealed class BoundedChatHistoryProvider
         ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
         ArgumentException.ThrowIfNullOrWhiteSpace(userMessage);
 
-        var recentMessages = await _stateRepository.GetConversationMessagesAsync(
+        var recentMessages = await _memoryStore.GetConversationMessagesAsync(
             conversationKey,
             maxRecentMessages,
             cancellationToken);
@@ -95,7 +95,7 @@ public sealed class BoundedChatHistoryProvider
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(conversationKey);
 
-        var overflowMessages = await _stateRepository.GetOverflowConversationMessagesAsync(
+        var overflowMessages = await _memoryStore.GetOverflowConversationMessagesAsync(
             conversationKey,
             maxRecentMessages,
             cancellationToken);
@@ -127,10 +127,10 @@ public sealed class BoundedChatHistoryProvider
                 message.CreatedAtUtc));
         }
 
-        await _stateRepository.UpsertConversationVectorMemoryAsync(
+        await _memoryStore.UpsertConversationVectorMemoryAsync(
             vectorEntries,
             cancellationToken);
-        await _stateRepository.TrimConversationMessagesAsync(
+        await _memoryStore.TrimConversationMessagesAsync(
             conversationKey,
             maxRecentMessages,
             cancellationToken);
@@ -160,7 +160,7 @@ public sealed class BoundedChatHistoryProvider
             return Array.Empty<BoundedRetrievedMemoryHit>();
         }
 
-        var vectorRecords = await _stateRepository.GetConversationVectorMemoryAsync(
+        var vectorRecords = await _memoryStore.GetConversationVectorMemoryAsync(
             conversationKey,
             DefaultSearchLimit,
             cancellationToken);

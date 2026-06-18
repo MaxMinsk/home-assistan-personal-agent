@@ -39,6 +39,11 @@ public static class HomeAssistantAddOnOptionsMapper
             ["memory_retrieval_mode"] = $"{AgentOptions.SectionName}:MemoryRetrievalMode",
             ["capsule_extraction_mode"] = $"{AgentOptions.SectionName}:CapsuleExtractionMode",
             ["capsule_auto_batch_raw_event_threshold"] = $"{AgentOptions.SectionName}:CapsuleAutoBatchRawEventThreshold",
+            ["memory_mcp_endpoint"] = $"{MemoryMcpOptions.SectionName}:Endpoint",
+            ["memory_mcp_token"] = $"{MemoryMcpOptions.SectionName}:Token",
+            ["memory_mcp_domain"] = $"{MemoryMcpOptions.SectionName}:Domain",
+            ["memory_mcp_project"] = $"{MemoryMcpOptions.SectionName}:Project",
+            ["memory_store_type"] = $"{MemoryMcpOptions.SectionName}:StoreType",
         };
 
     public static IReadOnlyDictionary<string, string?> MapFileIfExists(string path)

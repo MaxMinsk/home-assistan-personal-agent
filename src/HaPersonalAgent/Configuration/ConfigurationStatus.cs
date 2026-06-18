@@ -31,18 +31,25 @@ public sealed record ConfigurationStatus(
     int WorkspaceMaxMb,
     string MemoryRetrievalMode,
     string CapsuleExtractionMode,
-    int CapsuleAutoBatchRawEventThreshold)
+    int CapsuleAutoBatchRawEventThreshold,
+    bool MemoryMcpEndpointConfigured,
+    bool MemoryMcpTokenConfigured,
+    string MemoryMcpDomain,
+    string MemoryMcpProject,
+    string MemoryStoreType)
 {
     public static ConfigurationStatus From(
         AgentOptions agentOptions,
         TelegramOptions telegramOptions,
         LlmOptions llmOptions,
-        HomeAssistantOptions homeAssistantOptions)
+        HomeAssistantOptions homeAssistantOptions,
+        MemoryMcpOptions memoryMcpOptions)
     {
         ArgumentNullException.ThrowIfNull(agentOptions);
         ArgumentNullException.ThrowIfNull(telegramOptions);
         ArgumentNullException.ThrowIfNull(llmOptions);
         ArgumentNullException.ThrowIfNull(homeAssistantOptions);
+        ArgumentNullException.ThrowIfNull(memoryMcpOptions);
 
         return new ConfigurationStatus(
             llmOptions.Provider,
@@ -76,6 +83,17 @@ public sealed record ConfigurationStatus(
             string.IsNullOrWhiteSpace(agentOptions.CapsuleExtractionMode)
                 ? AgentOptions.CapsuleExtractionModeManual
                 : agentOptions.CapsuleExtractionMode.Trim(),
-            Math.Max(agentOptions.CapsuleAutoBatchRawEventThreshold, 0));
+            Math.Max(agentOptions.CapsuleAutoBatchRawEventThreshold, 0),
+            !string.IsNullOrWhiteSpace(memoryMcpOptions.Endpoint),
+            !string.IsNullOrWhiteSpace(memoryMcpOptions.Token),
+            string.IsNullOrWhiteSpace(memoryMcpOptions.Domain)
+                ? MemoryMcpOptions.DefaultDomain
+                : memoryMcpOptions.Domain.Trim(),
+            string.IsNullOrWhiteSpace(memoryMcpOptions.Project)
+                ? MemoryMcpOptions.DefaultProject
+                : memoryMcpOptions.Project.Trim(),
+            string.IsNullOrWhiteSpace(memoryMcpOptions.StoreType)
+                ? MemoryMcpOptions.StoreTypeSqlite
+                : memoryMcpOptions.StoreType.Trim());
     }
 }

@@ -96,5 +96,6 @@ public class AgentToolCatalogTests
             Microsoft.Extensions.Options.Options.Create(new AgentOptions()),
             Microsoft.Extensions.Options.Options.Create(new TelegramOptions()),
             Microsoft.Extensions.Options.Options.Create(new LlmOptions { ApiKey = "configured" }),
-            Microsoft.Extensions.Options.Options.Create(new HomeAssistantOptions()));
+            Microsoft.Extensions.Options.Options.Create(new HomeAssistantOptions()),
+            Microsoft.Extensions.Options.Options.Create(new MemoryMcpOptions()));
 }

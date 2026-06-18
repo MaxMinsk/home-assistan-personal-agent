@@ -23,21 +23,21 @@ public sealed class DialogueService
     private readonly BoundedChatHistoryProvider _boundedChatHistoryProvider;
     private readonly ProjectCapsuleService _projectCapsuleService;
     private readonly ILogger<DialogueService> _logger;
-    private readonly AgentStateRepository _stateRepository;
+    private readonly IConversationMemoryStore _memoryStore;
 
     public DialogueService(
         IAgentRuntime agentRuntime,
         IOptions<AgentOptions> agentOptions,
         BoundedChatHistoryProvider boundedChatHistoryProvider,
         ProjectCapsuleService projectCapsuleService,
-        AgentStateRepository stateRepository,
+        IConversationMemoryStore memoryStore,
         ILogger<DialogueService> logger)
     {
         _agentRuntime = agentRuntime;
         _agentOptions = agentOptions;
         _boundedChatHistoryProvider = boundedChatHistoryProvider;
         _projectCapsuleService = projectCapsuleService;
-        _stateRepository = stateRepository;
+        _memoryStore = memoryStore;
         _logger = logger;
     }
 
@@ -49,10 +49,10 @@ public sealed class DialogueService
 
         var conversationKey = DialogueConversationKey.Create(request.Conversation);
         var maxMessages = GetMaxContextMessages();
-        var persistedSummary = await _stateRepository.GetConversationSummaryAsync(
+        var persistedSummary = await _memoryStore.GetConversationSummaryAsync(
             conversationKey,
             cancellationToken);
-        var latestMessageId = await _stateRepository.GetLatestConversationMessageIdAsync(
+        var latestMessageId = await _memoryStore.GetLatestConversationMessageIdAsync(
             conversationKey,
             cancellationToken);
         var messagesSincePersistedSummary = CountMessagesSinceSummary(
@@ -103,7 +103,7 @@ public sealed class DialogueService
             summaryRefreshDecision.Reason);
 
         var now = DateTimeOffset.UtcNow;
-        await _stateRepository.AppendRawEventsAsync(
+        await _memoryStore.AppendRawEventsAsync(
             new[]
             {
                 RawEventEntry.Create(
@@ -144,7 +144,7 @@ public sealed class DialogueService
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             const string fallbackText = "Не смог обработать сообщение из-за внутренней ошибки агента. Запрос не сохранен в историю диалога.";
-            await _stateRepository.AppendRawEventsAsync(
+            await _memoryStore.AppendRawEventsAsync(
                 new[]
                 {
                     RawEventEntry.Create(
@@ -172,7 +172,7 @@ public sealed class DialogueService
 
         if (!response.IsConfigured)
         {
-            await _stateRepository.AppendRawEventsAsync(
+            await _memoryStore.AppendRawEventsAsync(
                 new[]
                 {
                     RawEventEntry.Create(
@@ -193,7 +193,7 @@ public sealed class DialogueService
         }
 
         var assistantTextForPersistence = GetAssistantTextForPersistence(response.Text);
-        await _stateRepository.AppendConversationMessagesAsync(
+        await _memoryStore.AppendConversationMessagesAsync(
             conversationKey,
             new[]
             {
@@ -201,7 +201,7 @@ public sealed class DialogueService
                 new AgentConversationMessage(AgentConversationRole.Assistant, assistantTextForPersistence, DateTimeOffset.UtcNow),
             },
             cancellationToken);
-        await _stateRepository.AppendRawEventsAsync(
+        await _memoryStore.AppendRawEventsAsync(
             new[]
             {
                 RawEventEntry.Create(
@@ -245,22 +245,22 @@ public sealed class DialogueService
         ArgumentNullException.ThrowIfNull(conversation);
 
         var conversationKey = DialogueConversationKey.Create(conversation);
-        await _stateRepository.ClearConversationMessagesAsync(
+        await _memoryStore.ClearConversationMessagesAsync(
             conversationKey,
             cancellationToken);
-        await _stateRepository.ClearConversationSummaryAsync(
+        await _memoryStore.ClearConversationSummaryAsync(
             conversationKey,
             cancellationToken);
-        await _stateRepository.ClearConversationVectorMemoryAsync(
+        await _memoryStore.ClearConversationVectorMemoryAsync(
             conversationKey,
             cancellationToken);
-        await _stateRepository.ClearProjectCapsulesAsync(
+        await _memoryStore.ClearProjectCapsulesAsync(
             conversationKey,
             cancellationToken);
-        await _stateRepository.ClearProjectCapsuleExtractionStateAsync(
+        await _memoryStore.ClearProjectCapsuleExtractionStateAsync(
             conversationKey,
             cancellationToken);
-        await _stateRepository.AppendRawEventsAsync(
+        await _memoryStore.AppendRawEventsAsync(
             new[]
             {
                 RawEventEntry.Create(
@@ -284,7 +284,7 @@ public sealed class DialogueService
         ArgumentNullException.ThrowIfNull(conversation);
 
         var conversationKey = DialogueConversationKey.Create(conversation);
-        return await _stateRepository.GetConversationSummaryAsync(
+        return await _memoryStore.GetConversationSummaryAsync(
             conversationKey,
             cancellationToken);
     }
@@ -297,7 +297,7 @@ public sealed class DialogueService
         ArgumentNullException.ThrowIfNull(conversation);
 
         var conversationKey = DialogueConversationKey.Create(conversation);
-        return await _stateRepository.GetRawEventsAsync(
+        return await _memoryStore.GetRawEventsAsync(
             conversationKey,
             limit,
             cancellationToken);
@@ -311,7 +311,7 @@ public sealed class DialogueService
         ArgumentNullException.ThrowIfNull(conversation);
 
         var conversationKey = DialogueConversationKey.Create(conversation);
-        return await _stateRepository.GetConversationVectorMemoryAsync(
+        return await _memoryStore.GetConversationVectorMemoryAsync(
             conversationKey,
             limit,
             cancellationToken);
@@ -325,7 +325,7 @@ public sealed class DialogueService
         ArgumentNullException.ThrowIfNull(conversation);
 
         var conversationKey = DialogueConversationKey.Create(conversation);
-        return await _stateRepository.GetProjectCapsulesAsync(
+        return await _memoryStore.GetProjectCapsulesAsync(
             conversationKey,
             limit,
             cancellationToken);
@@ -356,16 +356,16 @@ public sealed class DialogueService
 
         var conversationKey = DialogueConversationKey.Create(conversation);
         var maxMessages = GetMaxContextMessages();
-        var persistedSummary = await _stateRepository.GetConversationSummaryAsync(
+        var persistedSummary = await _memoryStore.GetConversationSummaryAsync(
             conversationKey,
             cancellationToken);
-        var latestMessageId = await _stateRepository.GetLatestConversationMessageIdAsync(
+        var latestMessageId = await _memoryStore.GetLatestConversationMessageIdAsync(
             conversationKey,
             cancellationToken);
         var messagesSincePersistedSummary = CountMessagesSinceSummary(
             persistedSummary,
             latestMessageId);
-        var history = await _stateRepository.GetConversationMessagesAsync(
+        var history = await _memoryStore.GetConversationMessagesAsync(
             conversationKey,
             maxMessages,
             cancellationToken);
@@ -455,7 +455,7 @@ public sealed class DialogueService
             response.PersistedSummaryCandidate,
             persistedSummary,
             cancellationToken);
-        var refreshedSummary = await _stateRepository.GetConversationSummaryAsync(
+        var refreshedSummary = await _memoryStore.GetConversationSummaryAsync(
             conversationKey,
             cancellationToken);
         if (refreshedSummary is null)
@@ -492,34 +492,34 @@ public sealed class DialogueService
 
         var conversationKey = DialogueConversationKey.Create(conversation);
         var maxMessages = GetMaxContextMessages();
-        var storedMessageCount = await _stateRepository.GetConversationMessageCountAsync(
+        var storedMessageCount = await _memoryStore.GetConversationMessageCountAsync(
             conversationKey,
             cancellationToken);
-        var loadedHistoryMessages = await _stateRepository.GetConversationMessagesAsync(
+        var loadedHistoryMessages = await _memoryStore.GetConversationMessagesAsync(
             conversationKey,
             maxMessages,
             cancellationToken);
-        var rawEventCount = await _stateRepository.GetRawEventCountAsync(
+        var rawEventCount = await _memoryStore.GetRawEventCountAsync(
             conversationKey,
             cancellationToken);
-        var vectorMemoryCount = await _stateRepository.GetConversationVectorMemoryCountAsync(
+        var vectorMemoryCount = await _memoryStore.GetConversationVectorMemoryCountAsync(
             conversationKey,
             cancellationToken);
-        var projectCapsuleCount = await _stateRepository.GetProjectCapsuleCountAsync(
+        var projectCapsuleCount = await _memoryStore.GetProjectCapsuleCountAsync(
             conversationKey,
             cancellationToken);
-        var projectCapsuleLatestSourceEventId = await _stateRepository.GetProjectCapsuleLatestSourceEventIdAsync(
+        var projectCapsuleLatestSourceEventId = await _memoryStore.GetProjectCapsuleLatestSourceEventIdAsync(
             conversationKey,
             cancellationToken);
-        var projectCapsuleLastUpdatedAtUtc = await _stateRepository.GetProjectCapsuleLastUpdatedAtUtcAsync(
+        var projectCapsuleLastUpdatedAtUtc = await _memoryStore.GetProjectCapsuleLastUpdatedAtUtcAsync(
             conversationKey,
             cancellationToken);
-        var projectCapsuleExtractionState = await _stateRepository.GetProjectCapsuleExtractionStateAsync(
+        var projectCapsuleExtractionState = await _memoryStore.GetProjectCapsuleExtractionStateAsync(
             conversationKey,
             cancellationToken);
         var memoryRetrievalMode = AgentOptions.NormalizeMemoryRetrievalMode(_agentOptions.Value.MemoryRetrievalMode);
         var autoMemoryRetrievalEnabled = AgentOptions.IsBeforeInvokeRetrieval(memoryRetrievalMode);
-        var summary = await _stateRepository.GetConversationSummaryAsync(
+        var summary = await _memoryStore.GetConversationSummaryAsync(
             conversationKey,
             cancellationToken);
         var capsulePromptContext = await _projectCapsuleService.BuildPromptContextAsync(
@@ -529,7 +529,7 @@ public sealed class DialogueService
             loadedHistoryMessages,
             summary?.Summary,
             capsulePromptContext.PromptText);
-        var latestMessageId = await _stateRepository.GetLatestConversationMessageIdAsync(
+        var latestMessageId = await _memoryStore.GetLatestConversationMessageIdAsync(
             conversationKey,
             cancellationToken);
         var messagesSinceSummary = CountMessagesSinceSummary(summary, latestMessageId);
@@ -590,10 +590,10 @@ public sealed class DialogueService
 
         var conversationKey = DialogueConversationKey.Create(conversation);
         var maxMessages = GetMaxContextMessages();
-        var persistedSummary = await _stateRepository.GetConversationSummaryAsync(
+        var persistedSummary = await _memoryStore.GetConversationSummaryAsync(
             conversationKey,
             cancellationToken);
-        var latestMessageId = await _stateRepository.GetLatestConversationMessageIdAsync(
+        var latestMessageId = await _memoryStore.GetLatestConversationMessageIdAsync(
             conversationKey,
             cancellationToken);
         var messagesSincePersistedSummary = CountMessagesSinceSummary(
@@ -651,7 +651,7 @@ public sealed class DialogueService
             notification.Kind,
             conversationKey);
 
-        return _stateRepository.AppendRawEventsAsync(
+        return _memoryStore.AppendRawEventsAsync(
             new[]
             {
                 RawEventEntry.Create(
@@ -728,7 +728,7 @@ public sealed class DialogueService
             return;
         }
 
-        var latestMessageId = await _stateRepository.GetLatestConversationMessageIdAsync(
+        var latestMessageId = await _memoryStore.GetLatestConversationMessageIdAsync(
             conversationKey,
             cancellationToken);
         if (!latestMessageId.HasValue)
@@ -741,7 +741,7 @@ public sealed class DialogueService
         {
             if (latestMessageId.Value > currentSummary.SourceLastMessageId)
             {
-                await _stateRepository.UpsertConversationSummaryAsync(
+                await _memoryStore.UpsertConversationSummaryAsync(
                     currentSummary with
                     {
                         UpdatedAtUtc = DateTimeOffset.UtcNow,
@@ -759,7 +759,7 @@ public sealed class DialogueService
         }
 
         var nextVersion = (currentSummary?.SummaryVersion ?? 0) + 1;
-        await _stateRepository.UpsertConversationSummaryAsync(
+        await _memoryStore.UpsertConversationSummaryAsync(
             new ConversationSummaryMemory(
                 conversationKey,
                 normalizedSummary,

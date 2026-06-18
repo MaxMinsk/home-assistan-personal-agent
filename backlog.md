@@ -1,5 +1,11 @@
 # Backlog
 
+> **NOTE (2026-06-18): This backlog is now historical reference only.**
+> The live backlog moved to the shared Memory MCP — domain `development`, project `ha-personal-agent`.
+> Active items live there as `HAAG-NNN` `backlog_item` notes; the memory-integration epic as `HPA-NNN`.
+> Query and update the backlog via Memory MCP, not this file. The `Done` section below is kept as history.
+> Conventions: see the `ha-personal-agent` `backlog-management` and `sprint-release` skills in Memory MCP.
+
 ## Текущий фокус
 
 Цель проекта остается учебной: в первую очередь понять Microsoft Agent Framework на реальном C#/.NET приложении, во вторую - вырастить полезного домашнего ассистента для Home Assistant.

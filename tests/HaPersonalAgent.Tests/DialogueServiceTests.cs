@@ -751,8 +751,9 @@ public class DialogueServiceTests
         AgentOptions? agentOptions = null)
     {
         var loggerFactory = LoggerFactory.Create(_ => { });
+        var memoryStore = new SqliteConversationMemoryStore(repository);
         var boundedProvider = new BoundedChatHistoryProvider(
-            repository,
+            memoryStore,
             loggerFactory.CreateLogger<BoundedChatHistoryProvider>());
         var projectCapsuleService = new ProjectCapsuleService(
             runtime,
@@ -765,7 +766,7 @@ public class DialogueServiceTests
             Options.Create(agentOptions ?? new AgentOptions()),
             boundedProvider,
             projectCapsuleService,
-            repository,
+            memoryStore,
             loggerFactory.CreateLogger<DialogueService>());
     }
 

@@ -12,18 +12,21 @@ public sealed class ConfigurationStatusProvider
     private readonly IOptions<AgentOptions> _agentOptions;
     private readonly IOptions<HomeAssistantOptions> _homeAssistantOptions;
     private readonly IOptions<LlmOptions> _llmOptions;
+    private readonly IOptions<MemoryMcpOptions> _memoryMcpOptions;
     private readonly IOptions<TelegramOptions> _telegramOptions;
 
     public ConfigurationStatusProvider(
         IOptions<AgentOptions> agentOptions,
         IOptions<TelegramOptions> telegramOptions,
         IOptions<LlmOptions> llmOptions,
-        IOptions<HomeAssistantOptions> homeAssistantOptions)
+        IOptions<HomeAssistantOptions> homeAssistantOptions,
+        IOptions<MemoryMcpOptions> memoryMcpOptions)
     {
         _agentOptions = agentOptions;
         _telegramOptions = telegramOptions;
         _llmOptions = llmOptions;
         _homeAssistantOptions = homeAssistantOptions;
+        _memoryMcpOptions = memoryMcpOptions;
     }
 
     public ConfigurationStatus Create() =>
@@ -31,5 +34,6 @@ public sealed class ConfigurationStatusProvider
             _agentOptions.Value,
             _telegramOptions.Value,
             _llmOptions.Value,
-            _homeAssistantOptions.Value);
+            _homeAssistantOptions.Value,
+            _memoryMcpOptions.Value);
 }

@@ -4,6 +4,7 @@ using HaPersonalAgent.Configuration;
 using HaPersonalAgent.Confirmation;
 using HaPersonalAgent.Dialogue;
 using HaPersonalAgent.HomeAssistant;
+using HaPersonalAgent.Memory;
 using HaPersonalAgent.Storage;
 using HaPersonalAgent.Telegram;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,6 +25,7 @@ builder.Services.AddAgentStorage();
 builder.Services.AddConfirmationServices();
 builder.Services.AddDialogueServices();
 builder.Services.AddHomeAssistantMcp();
+builder.Services.AddMemoryMcp();
 builder.Services.AddTelegramGateway();
 builder.Services.AddHostedService<Worker>();
 

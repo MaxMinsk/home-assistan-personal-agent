@@ -29,6 +29,9 @@ public static class ServiceCollectionExtensions
         services.AddOptions<HomeAssistantOptions>()
             .Bind(configuration.GetSection(HomeAssistantOptions.SectionName));
 
+        services.AddOptions<MemoryMcpOptions>()
+            .Bind(configuration.GetSection(MemoryMcpOptions.SectionName));
+
         services.AddSingleton<ConfigurationStatusProvider>();
 
         return services;

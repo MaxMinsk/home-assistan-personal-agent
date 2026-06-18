@@ -199,7 +199,8 @@ public class ConfigurationTests
             new HomeAssistantOptions
             {
                 LongLivedAccessToken = "ha-secret",
-            });
+            },
+            new MemoryMcpOptions());
 
         var statusText = status.ToString();
 

@@ -1142,11 +1142,13 @@ public class TelegramUpdateHandlerTests
             Options.Create(new AgentOptions()),
             Options.Create(new TelegramOptions { AllowedUserIds = new long[] { 100 } }),
             Options.Create(llmOptionsValue),
-            Options.Create(new HomeAssistantOptions()));
+            Options.Create(new HomeAssistantOptions()),
+            Options.Create(new MemoryMcpOptions()));
         var llmOptions = Options.Create(llmOptionsValue);
         var loggerFactory = LoggerFactory.Create(_ => { });
+        var memoryStore = new SqliteConversationMemoryStore(repository);
         var boundedProvider = new BoundedChatHistoryProvider(
-            repository,
+            memoryStore,
             loggerFactory.CreateLogger<BoundedChatHistoryProvider>());
         var agentOptions = Options.Create(new AgentOptions());
         var projectCapsuleService = new ProjectCapsuleService(
@@ -1159,7 +1161,7 @@ public class TelegramUpdateHandlerTests
             agentOptions,
             boundedProvider,
             projectCapsuleService,
-            repository,
+            memoryStore,
             loggerFactory.CreateLogger<DialogueService>());
         var planner = new LlmExecutionPlanner(new LlmProviderCapabilitiesResolver());
         var executionResolver = new AgentExecutionResolver(

@@ -14,6 +14,7 @@ public static class EnvironmentOverridesMapper
             ["TELEGRAM_BOT_TOKEN"] = $"{TelegramOptions.SectionName}:BotToken",
             ["HOME_ASSISTANT_LONG_LIVED_ACCESS_TOKEN"] = $"{HomeAssistantOptions.SectionName}:LongLivedAccessToken",
             ["HA_LONG_LIVED_ACCESS_TOKEN"] = $"{HomeAssistantOptions.SectionName}:LongLivedAccessToken",
+            ["MEMORY_MCP_TOKEN"] = $"{MemoryMcpOptions.SectionName}:Token",
         };
 
     public static IReadOnlyDictionary<string, string?> Map(IReadOnlyDictionary<string, string?> environmentVariables)

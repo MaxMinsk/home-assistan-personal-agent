@@ -38,6 +38,11 @@ options:
   memory_retrieval_mode: "before_invoke"
   capsule_extraction_mode: "manual"
   capsule_auto_batch_raw_event_threshold: 20
+  memory_mcp_endpoint: ""
+  memory_mcp_token: ""
+  memory_mcp_domain: "development"
+  memory_mcp_project: "ha-personal-agent"
+  memory_store_type: "sqlite"
 schema:
   telegram_bot_token: password?
   allowed_telegram_user_ids: 'match(^\s*$|^\d+(\s*[,;\s]\s*\d+)*\s*$)'
@@ -65,3 +70,8 @@ schema:
   memory_retrieval_mode: list(before_invoke|on_demand_tool)
   capsule_extraction_mode: list(manual|auto-batched)
   capsule_auto_batch_raw_event_threshold: int(4,500)
+  memory_mcp_endpoint: str?
+  memory_mcp_token: password?
+  memory_mcp_domain: str?
+  memory_mcp_project: str?
+  memory_store_type: list(sqlite|memory_mcp)?

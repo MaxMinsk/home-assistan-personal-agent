@@ -641,7 +641,8 @@ public class AgentRuntimeTests
             Options.Create(agentOptions),
             Options.Create(telegramOptions),
             Options.Create(llmOptions),
-            Options.Create(homeAssistantOptions));
+            Options.Create(homeAssistantOptions),
+            Options.Create(new MemoryMcpOptions()));
 
     /// <summary>
     /// Что: минимальная заглушка IServiceProvider для unit-тестов runtime.
