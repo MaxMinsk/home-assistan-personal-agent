@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1
+
+- Route long-term-memory questions to a tools-enabled path. "поищи в памяти / вспомни / what do you remember"-style questions were classified as simple chat and sent to the cost-optimized profile, which strips every tool (including `memory_recall`/`memory_tags`), so the assistant said it had no memory access and confabulated. Memory-intent keywords now keep tools available for those turns.
+- `memory_recall`: when `tags` or `type` are provided, ignore the free-text query. Memory MCP ANDs query tokens with the filter, so a noisy natural-language query alongside an exact filter (e.g. query "количество сортов перцев" + `tags=crop:pepper`) AND-matched to nothing and returned 0. The structured filter now wins, and the instructions tell the assistant to leave the query empty when filtering by tag/type and to narrow with additional facet tags.
+
+
 ## 0.7.0
 
 - Structured memory search (Phase 1 of the memory redesign). `memory_recall` now accepts optional `tags` (comma-separated facets, e.g. `crop:pepper`) and `type` (e.g. `seed_variety`) combined with the query, so "how many / which / list X" questions are answered by exact, morphology-proof structure instead of brittle full-text matching. A new `memory_tags` tool lists facet tags (optionally by prefix) so the assistant can discover the right facet, and the instructions teach it to prefer structured queries and read `total` for counts. (HPA-022.)

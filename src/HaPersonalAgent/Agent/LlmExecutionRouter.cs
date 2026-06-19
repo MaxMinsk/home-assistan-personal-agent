@@ -58,6 +58,16 @@ public sealed class LlmExecutionRouter
         "/approve",
         "/reject",
         "hass",
+        // Long-term memory intent must keep tools: otherwise "поищи в памяти …" routes to the
+        // cost profile, which strips all tools (incl. memory_recall/memory_tags) and the agent
+        // can't search and confabulates. Substring markers cover RU morphology + EN.
+        "памят",
+        "помн",
+        "вспомн",
+        "запомн",
+        "recall",
+        "remember",
+        "memory",
     ];
 
     private readonly LlmRoutingContextProfileBuilder _contextProfileBuilder;

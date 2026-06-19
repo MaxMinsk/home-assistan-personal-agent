@@ -197,7 +197,7 @@ public sealed class AgentToolCatalog
         {
             instructions.AppendLine("Long-term memory tools are available: memory_recall (search durable facts by query/tags/type), memory_tags (discover facet tags), propose_memory_save (save a durable fact via approval), memory_mcp_status (check Memory MCP availability).");
             instructions.AppendLine("Grounding rule (no fabrication): answer from memory only when a tool actually returned matching results. If memory_recall or the auto-injected context returns no hits, say plainly that you found nothing and ask the user — never invent facts, lists, variety names, or counts to fill the gap. Never claim you saved or updated a note unless a save/upsert tool reported success; proposing a save still needs explicit user approval.");
-            instructions.AppendLine("Memory is structured: notes have a type (e.g. seed_variety, fact, equipment, recipe) and facet tags (e.g. crop:pepper, form:seeds, heat:none, use:container, have/want). The full-text index matches exact word forms with AND, so a raw question often misses — for 'how many / which / list X' questions prefer a STRUCTURED search: call memory_recall with tags (e.g. 'crop:pepper') and/or type (e.g. 'seed_variety') instead of (or in addition to) a free-text query. That is exact and morphology-proof. Use memory_tags (optionally with a prefix like 'crop') to discover the right facet first.");
+            instructions.AppendLine("Memory is structured: notes have a type (e.g. seed_variety, fact, equipment, recipe) and facet tags (e.g. crop:pepper, form:seeds, heat:none, use:container, have/want). The full-text index matches exact word forms with AND, so a raw question often misses — for 'how many / which / list X' questions prefer a STRUCTURED search: call memory_recall with tags (e.g. 'crop:pepper') and/or type (e.g. 'seed_variety') and LEAVE THE QUERY EMPTY (when tags/type are set the free-text query is ignored — adding it would AND-match to nothing). To narrow within a tag, add more facet tags (e.g. heat:very_hot, use:container), not free text. Use memory_tags (optionally with a prefix like 'crop') to discover the right facet first, and read `total` for the count.");
             instructions.AppendLine("Counting and listing: a recall result shows only a page of snippets but reports the full match count as `total`. Answer 'how many X' from `total`, not from the number of snippets shown. To enumerate every item, if `hasMore` is true call memory_recall again with a larger topK or the next offset until you have covered `total` before listing.");
         }
 
@@ -552,11 +552,19 @@ public sealed class AgentToolCatalog
                 }, ToolJsonOptions);
             }
 
-            var builtQuery = string.IsNullOrWhiteSpace(query) ? null : MemoryRecallQueryBuilder.Build(query);
             var tagFilter = ParseCommaSeparated(tags);
             var typeFilter = string.IsNullOrWhiteSpace(type) ? null : type.Trim();
+            var hasStructuredFilter = tagFilter is not null || typeFilter is not null;
 
-            if (builtQuery is null && tagFilter is null && typeFilter is null)
+            // When structured filters (tags/type) are given, ignore the free-text query. notes_search
+            // ANDs query tokens with the filter, so a noisy natural-language query ("количество сортов
+            // перцев") AND-matches to nothing and zeroes out an otherwise-exact tag/type match. The
+            // structured filter is precise and morphology-proof, so it wins.
+            var builtQuery = (hasStructuredFilter || string.IsNullOrWhiteSpace(query))
+                ? null
+                : MemoryRecallQueryBuilder.Build(query);
+
+            if (builtQuery is null && !hasStructuredFilter)
             {
                 return JsonSerializer.Serialize(new
                 {
@@ -657,7 +665,7 @@ public sealed class AgentToolCatalog
         return AIFunctionFactory.Create(
             (Func<string, string, string, int, int, CancellationToken, Task<string>>)RecallMemoryAsync,
             name: "memory_recall",
-            description: "Searches the user's durable long-term memory (Memory MCP, domain home: garden/seeds, pets, property, saved facts). Combine any of: query (natural language, e.g. 'dog feeding schedule'); tags (comma-separated facet tags, e.g. 'crop:pepper' or 'crop:pepper,form:seeds'); type (note type, e.g. 'seed_variety'). For 'how many / which / list X' questions prefer tags and/or type — they are exact and morphology-proof, unlike free text; call memory_tags first to discover the right facet. topK is the page size (default 4, up to 25); offset paginates. The result's `total` is the full match count (use it for 'how many', not the visible snippet count); `hasMore` means page again with a larger offset. If empty, say so; never invent facts. Read-only.",
+            description: "Searches the user's durable long-term memory (Memory MCP, domain home: garden/seeds, pets, property, saved facts). Combine any of: query (natural language, e.g. 'dog feeding schedule'); tags (comma-separated facet tags, e.g. 'crop:pepper' or 'crop:pepper,form:seeds'); type (note type, e.g. 'seed_variety'). For 'how many / which / list X' questions prefer tags and/or type — they are exact and morphology-proof, unlike free text; call memory_tags first to discover the right facet. When you pass tags or type, leave query empty: the query is ignored in favor of the structured filters (combining them AND-matches to nothing). topK is the page size (default 4, up to 25); offset paginates. The result's `total` is the full match count (use it for 'how many', not the visible snippet count); `hasMore` means page again with a larger offset. If empty, say so; never invent facts. Read-only.",
             serializerOptions: null);
     }
 
