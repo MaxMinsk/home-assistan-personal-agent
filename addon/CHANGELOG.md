@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.0
+
+- Structured memory search (Phase 1 of the memory redesign). `memory_recall` now accepts optional `tags` (comma-separated facets, e.g. `crop:pepper`) and `type` (e.g. `seed_variety`) combined with the query, so "how many / which / list X" questions are answered by exact, morphology-proof structure instead of brittle full-text matching. A new `memory_tags` tool lists facet tags (optionally by prefix) so the assistant can discover the right facet, and the instructions teach it to prefer structured queries and read `total` for counts. (HPA-022.)
+
+
 ## 0.6.3
 
 - Fix memory recall returning nothing for natural-language questions. Memory MCP's search matches query tokens with AND, so passing the raw user message ("сколько у меня перцев?") required function words that never appear in notes and returned 0 hits. The recall query is now reduced to content tokens with prefix matching (drop stop-words/punctuation, append `*`), so real questions surface the relevant notes. Applied to both auto-recall and the `memory_recall` tool (`MemoryRecallQueryBuilder`).

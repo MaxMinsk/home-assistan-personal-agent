@@ -127,6 +127,7 @@ public sealed class AgentToolCatalog
         if (_memoryMcpClient is not null && _memoryMcpOptions?.Value.IsConfigured == true)
         {
             tools.Add(CreateMemoryRecallTool(context));
+            tools.Add(CreateMemoryTagsTool());
             if (_confirmationService is not null)
             {
                 tools.Add(CreateMemorySaveProposalTool(context));
@@ -194,9 +195,9 @@ public sealed class AgentToolCatalog
 
         if (_memoryMcpClient is not null && _memoryMcpOptions?.Value.IsConfigured == true)
         {
-            instructions.AppendLine("Long-term memory tools are available: memory_recall (read durable facts), propose_memory_save (save a durable fact via approval), memory_mcp_status (check Memory MCP availability).");
+            instructions.AppendLine("Long-term memory tools are available: memory_recall (search durable facts by query/tags/type), memory_tags (discover facet tags), propose_memory_save (save a durable fact via approval), memory_mcp_status (check Memory MCP availability).");
             instructions.AppendLine("Grounding rule (no fabrication): answer from memory only when a tool actually returned matching results. If memory_recall or the auto-injected context returns no hits, say plainly that you found nothing and ask the user — never invent facts, lists, variety names, or counts to fill the gap. Never claim you saved or updated a note unless a save/upsert tool reported success; proposing a save still needs explicit user approval.");
-            instructions.AppendLine("memory_recall does full-text relevance search inside the user's home domain — pass a short natural-language query (e.g. 'pepper seed varieties', 'dog feeding schedule'), not tag syntax like 'crop:pepper'.");
+            instructions.AppendLine("Memory is structured: notes have a type (e.g. seed_variety, fact, equipment, recipe) and facet tags (e.g. crop:pepper, form:seeds, heat:none, use:container, have/want). The full-text index matches exact word forms with AND, so a raw question often misses — for 'how many / which / list X' questions prefer a STRUCTURED search: call memory_recall with tags (e.g. 'crop:pepper') and/or type (e.g. 'seed_variety') instead of (or in addition to) a free-text query. That is exact and morphology-proof. Use memory_tags (optionally with a prefix like 'crop') to discover the right facet first.");
             instructions.AppendLine("Counting and listing: a recall result shows only a page of snippets but reports the full match count as `total`. Answer 'how many X' from `total`, not from the number of snippets shown. To enumerate every item, if `hasMore` is true call memory_recall again with a larger topK or the next offset until you have covered `total` before listing.");
         }
 
@@ -536,6 +537,8 @@ public sealed class AgentToolCatalog
     {
         async Task<string> RecallMemoryAsync(
             string query,
+            string tags,
+            string type,
             int topK,
             int offset,
             CancellationToken cancellationToken)
@@ -549,13 +552,17 @@ public sealed class AgentToolCatalog
                 }, ToolJsonOptions);
             }
 
-            if (string.IsNullOrWhiteSpace(query))
+            var builtQuery = string.IsNullOrWhiteSpace(query) ? null : MemoryRecallQueryBuilder.Build(query);
+            var tagFilter = ParseCommaSeparated(tags);
+            var typeFilter = string.IsNullOrWhiteSpace(type) ? null : type.Trim();
+
+            if (builtQuery is null && tagFilter is null && typeFilter is null)
             {
                 return JsonSerializer.Serialize(new
                 {
                     available = true,
                     count = 0,
-                    reason = "query must be non-empty.",
+                    reason = "Provide at least one of: query (natural language), tags (e.g. crop:pepper), or type (e.g. seed_variety).",
                 }, ToolJsonOptions);
             }
 
@@ -563,20 +570,36 @@ public sealed class AgentToolCatalog
             var normalizedOffset = Math.Max(0, offset);
             try
             {
+                // Structured search beats lexical for entity/inventory questions: tags (crop:pepper) and
+                // type (seed_variety) are exact and morphology-proof, while the AND-only full-text index
+                // misses on word forms. notes_search ANDs query tokens, so a free-text query is reduced
+                // to content tokens with prefix matching (MemoryRecallQueryBuilder). query/tags/type are
+                // all optional and combined when present.
+                var searchArguments = new Dictionary<string, object?>
+                {
+                    ["domain"] = MemoryMcpSaveActionExecutor.MemoryDomain,
+                    ["limit"] = normalizedTopK,
+                    ["offset"] = normalizedOffset,
+                };
+
+                if (builtQuery is not null)
+                {
+                    searchArguments["query"] = builtQuery;
+                }
+
+                if (tagFilter is not null)
+                {
+                    searchArguments["tags"] = tagFilter;
+                }
+
+                if (typeFilter is not null)
+                {
+                    searchArguments["type"] = typeFilter;
+                }
+
                 var result = await _memoryMcpClient.CallToolAsync(
                     "notes_search",
-                    new Dictionary<string, object?>
-                    {
-                        // Scope by domain only — see BoundedChatHistoryProvider.RecallFromMemoryMcpAsync:
-                        // a marker-tag filter ANDs against every note and hides the user's imported
-                        // notes (seed lists etc.), so recall returned nothing for real questions.
-                        ["domain"] = MemoryMcpSaveActionExecutor.MemoryDomain,
-                        // notes_search ANDs query tokens — reduce a natural-language query to content
-                        // tokens with prefix matching so questions don't AND-match to nothing.
-                        ["query"] = MemoryRecallQueryBuilder.Build(query),
-                        ["limit"] = normalizedTopK,
-                        ["offset"] = normalizedOffset,
-                    },
+                    searchArguments,
                     cancellationToken);
 
                 // Surface the notes_search envelope's total/hasMore so the model answers "how many"
@@ -610,6 +633,8 @@ public sealed class AgentToolCatalog
                 {
                     available = true,
                     query = NormalizeSingleLine(query, maxLength: 240),
+                    tags = tagFilter,
+                    type = typeFilter,
                     topK = normalizedTopK,
                     offset = normalizedOffset,
                     total,
@@ -630,10 +655,103 @@ public sealed class AgentToolCatalog
         }
 
         return AIFunctionFactory.Create(
-            (Func<string, int, int, CancellationToken, Task<string>>)RecallMemoryAsync,
+            (Func<string, string, string, int, int, CancellationToken, Task<string>>)RecallMemoryAsync,
             name: "memory_recall",
-            description: "Searches the user's durable long-term memory (Memory MCP, domain home: garden/seeds, pets, property, saved facts) by full-text relevance. Pass a natural-language query (e.g. 'pepper seed varieties'), not tag syntax. Args: query; topK (page size, default 4, up to 25); offset (skip N for pagination, default 0). The result includes `total` (the full match count — use it to answer 'how many', not the number of visible snippets) and `hasMore` (when true, call again with a larger offset to retrieve the rest). Returns matching notes or an empty result — if empty, say so; do not invent facts. Read-only.",
+            description: "Searches the user's durable long-term memory (Memory MCP, domain home: garden/seeds, pets, property, saved facts). Combine any of: query (natural language, e.g. 'dog feeding schedule'); tags (comma-separated facet tags, e.g. 'crop:pepper' or 'crop:pepper,form:seeds'); type (note type, e.g. 'seed_variety'). For 'how many / which / list X' questions prefer tags and/or type — they are exact and morphology-proof, unlike free text; call memory_tags first to discover the right facet. topK is the page size (default 4, up to 25); offset paginates. The result's `total` is the full match count (use it for 'how many', not the visible snippet count); `hasMore` means page again with a larger offset. If empty, say so; never invent facts. Read-only.",
             serializerOptions: null);
+    }
+
+    private AIFunction CreateMemoryTagsTool()
+    {
+        async Task<string> ListMemoryTagsAsync(string prefix, CancellationToken cancellationToken)
+        {
+            if (_memoryMcpClient is null)
+            {
+                return JsonSerializer.Serialize(new { available = false, reason = "Memory MCP is not configured." }, ToolJsonOptions);
+            }
+
+            try
+            {
+                var result = await _memoryMcpClient.CallToolAsync("tags_list", arguments: null, cancellationToken);
+                var normalizedPrefix = string.IsNullOrWhiteSpace(prefix) ? null : prefix.Trim();
+                return JsonSerializer.Serialize(new
+                {
+                    available = true,
+                    prefix = normalizedPrefix,
+                    isError = result.IsError,
+                    tags = SelectFacetTags(result.Text, normalizedPrefix, limit: 50),
+                }, ToolJsonOptions);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                _logger.LogWarning(exception, "Memory MCP tag listing failed.");
+                return JsonSerializer.Serialize(new { available = true, error = $"Tag listing failed: {exception.GetType().Name}" }, ToolJsonOptions);
+            }
+        }
+
+        return AIFunctionFactory.Create(
+            (Func<string, CancellationToken, Task<string>>)ListMemoryTagsAsync,
+            name: "memory_tags",
+            description: "Lists the facet tags available in long-term memory (e.g. crop:pepper, form:seeds, heat:none, use:container) with their counts, so you can search precisely by tag. Pass an optional prefix to filter (e.g. 'crop' → all crop:* tags); omit it to list the common facets. Use this to find the right tag, then call memory_recall with that tag for an exact, countable answer. Read-only.",
+            serializerOptions: null);
+    }
+
+    private static string[]? ParseCommaSeparated(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var items = value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return items.Length == 0 ? null : items;
+    }
+
+    private static IReadOnlyList<object> SelectFacetTags(string? tagsJson, string? prefix, int limit)
+    {
+        if (string.IsNullOrWhiteSpace(tagsJson))
+        {
+            return Array.Empty<object>();
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(tagsJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return Array.Empty<object>();
+            }
+
+            var hasPrefix = !string.IsNullOrWhiteSpace(prefix);
+            var selected = new List<object>();
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                // tags_list is already sorted by count desc, so the first matches are the most-used.
+                // With no prefix, surface only facet tags (those with a "value:" form) to skip noise.
+                var include = hasPrefix
+                    ? property.Name.StartsWith(prefix!, StringComparison.OrdinalIgnoreCase)
+                    : property.Name.Contains(':');
+                if (!include)
+                {
+                    continue;
+                }
+
+                var count = property.Value.ValueKind == JsonValueKind.Number && property.Value.TryGetInt32(out var value)
+                    ? value
+                    : 0;
+                selected.Add(new { tag = property.Name, count });
+                if (selected.Count >= limit)
+                {
+                    break;
+                }
+            }
+
+            return selected;
+        }
+        catch (JsonException)
+        {
+            return Array.Empty<object>();
+        }
     }
 
     private AIFunction CreateMemorySaveProposalTool(AgentContext context)
