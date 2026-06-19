@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.3
+
+- Fix memory recall returning nothing for natural-language questions. Memory MCP's search matches query tokens with AND, so passing the raw user message ("сколько у меня перцев?") required function words that never appear in notes and returned 0 hits. The recall query is now reduced to content tokens with prefix matching (drop stop-words/punctuation, append `*`), so real questions surface the relevant notes. Applied to both auto-recall and the `memory_recall` tool (`MemoryRecallQueryBuilder`).
+
+
 ## 0.6.2
 
 - Add diagnostic logging for every Memory MCP tool call: the add-on log now records the exact tool, endpoint, token fingerprint (last 4 chars only), verbatim arguments (domain/query/limit), and the raw server response (length + preview incl. `total`/error). This lets an empty or unexpected `memory_recall` result be diagnosed from the add-on log directly, instead of relying on the assistant's own narration.

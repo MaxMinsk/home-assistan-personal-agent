@@ -108,7 +108,10 @@ public sealed class BoundedChatHistoryProvider
                     // never the agent tag, so a tag filter (notes_search ANDs every tag) hides
                     // almost the entire store and recall silently returns nothing.
                     ["domain"] = "home",
-                    ["query"] = query,
+                    // notes_search ANDs query tokens, so the raw message ("сколько у меня перцев?")
+                    // requires function words that never appear in notes and returns nothing. Reduce
+                    // it to content tokens with prefix matching (see MemoryRecallQueryBuilder).
+                    ["query"] = MemoryRecallQueryBuilder.Build(query),
                     ["limit"] = DefaultRecallTopK,
                 },
                 timeout.Token);

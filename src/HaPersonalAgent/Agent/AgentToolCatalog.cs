@@ -571,7 +571,9 @@ public sealed class AgentToolCatalog
                         // a marker-tag filter ANDs against every note and hides the user's imported
                         // notes (seed lists etc.), so recall returned nothing for real questions.
                         ["domain"] = MemoryMcpSaveActionExecutor.MemoryDomain,
-                        ["query"] = query,
+                        // notes_search ANDs query tokens — reduce a natural-language query to content
+                        // tokens with prefix matching so questions don't AND-match to nothing.
+                        ["query"] = MemoryRecallQueryBuilder.Build(query),
                         ["limit"] = normalizedTopK,
                         ["offset"] = normalizedOffset,
                     },
