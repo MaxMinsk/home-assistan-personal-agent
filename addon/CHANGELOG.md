@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.2
+
+- Add a `/clearlocalcapsules` Telegram command that deletes the local project capsules for the current chat (and resets the capsule-extraction watermark so they are not re-derived from old raw events). Long-term Memory MCP notes are untouched. Use `/resetContext` for a full reset (history + summary + capsules).
+
+
 ## 0.7.1
 
 - Route long-term-memory questions to a tools-enabled path. "поищи в памяти / вспомни / what do you remember"-style questions were classified as simple chat and sent to the cost-optimized profile, which strips every tool (including `memory_recall`/`memory_tags`), so the assistant said it had no memory access and confabulated. Memory-intent keywords now keep tools available for those turns.

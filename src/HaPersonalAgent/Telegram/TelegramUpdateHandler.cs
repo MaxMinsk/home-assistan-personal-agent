@@ -124,7 +124,7 @@ public sealed class TelegramUpdateHandler
                 update.Id);
             await client.SendMessageAsync(
                 chatId,
-                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /routerProbe <текст> покажет как роутер классифицирует запрос, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary, /showRawEvents [N] покажет последние сырые события памяти, /showCapsules [N] покажет project capsules, /refreshCapsules обновит project capsules из raw events. Для действий с подтверждением можно нажать кнопки Подтвердить/Отклонить, а также доступны команды /approve <id> и /reject <id>.",
+                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /routerProbe <текст> покажет как роутер классифицирует запрос, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary, /showRawEvents [N] покажет последние сырые события памяти, /showCapsules [N] покажет project capsules, /refreshCapsules обновит project capsules из raw events, /clearlocalcapsules удалит локальные project capsules этого чата. Для действий с подтверждением можно нажать кнопки Подтвердить/Отклонить, а также доступны команды /approve <id> и /reject <id>.",
                 cancellationToken);
             return;
         }
@@ -238,6 +238,20 @@ public sealed class TelegramUpdateHandler
             await HandleRefreshProjectCapsulesCommandAsync(
                 client,
                 update.Id,
+                chatId,
+                conversation,
+                cancellationToken);
+            return;
+        }
+
+        if (IsCommand(text, "/clearlocalcapsules"))
+        {
+            _logger.LogInformation(
+                "Telegram update {TelegramUpdateId} routed to /clearlocalcapsules command for conversation {ConversationKey}.",
+                update.Id,
+                DialogueConversationKey.Create(conversation));
+            await HandleClearLocalCapsulesCommandAsync(
+                client,
                 chatId,
                 conversation,
                 cancellationToken);
@@ -657,6 +671,19 @@ public sealed class TelegramUpdateHandler
                     result.Message,
                     $"Capsules total: {result.CapsuleCount}",
                     $"Last processed raw event id: {result.LastProcessedRawEventId}")),
+            cancellationToken);
+    }
+
+    private async Task HandleClearLocalCapsulesCommandAsync(
+        ITelegramBotClientAdapter client,
+        long chatId,
+        DialogueConversation conversation,
+        CancellationToken cancellationToken)
+    {
+        var cleared = await _dialogueService.ClearProjectCapsulesAsync(conversation, cancellationToken);
+        await client.SendMessageAsync(
+            chatId,
+            $"Локальные project capsules этого чата очищены: удалено {cleared}. Долговременная память (Memory MCP) не затронута. Чтобы очистить также историю и summary — /resetContext.",
             cancellationToken);
     }
 

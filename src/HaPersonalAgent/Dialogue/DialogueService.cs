@@ -274,6 +274,28 @@ public sealed class DialogueService
             conversationKey);
     }
 
+    public async Task<int> ClearProjectCapsulesAsync(
+        DialogueConversation conversation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+
+        var conversationKey = DialogueConversationKey.Create(conversation);
+        var existing = await _memoryStore.GetProjectCapsulesAsync(
+            conversationKey,
+            limit: 1000,
+            cancellationToken);
+        await _memoryStore.ClearProjectCapsulesAsync(conversationKey, cancellationToken);
+        // Also reset the extraction watermark so the cleared capsules are not silently
+        // re-derived from the existing raw events on the next auto-refresh.
+        await _memoryStore.ClearProjectCapsuleExtractionStateAsync(conversationKey, cancellationToken);
+        _logger.LogInformation(
+            "Cleared {Count} local project capsules for {ConversationKey}.",
+            existing.Count,
+            conversationKey);
+        return existing.Count;
+    }
+
     public async Task<ConversationSummaryMemory?> GetPersistedSummaryAsync(
         DialogueConversation conversation,
         CancellationToken cancellationToken)

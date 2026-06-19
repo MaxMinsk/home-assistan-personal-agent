@@ -30,6 +30,7 @@ public sealed class TelegramBotGateway : BackgroundService
         ("routerprobe", "Показать routing decision без вызова LLM"),
         ("showcapsules", "Показать project capsules"),
         ("refreshcapsules", "Обновить project capsules"),
+        ("clearlocalcapsules", "Удалить локальные project capsules этого чата"),
         ("think", "Deep reasoning без tools"),
         ("approve", "Подтвердить действие по id"),
         ("reject", "Отклонить действие по id"),
