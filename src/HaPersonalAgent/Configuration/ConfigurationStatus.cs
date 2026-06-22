@@ -30,8 +30,6 @@ public sealed record ConfigurationStatus(
     string WorkspacePath,
     int WorkspaceMaxMb,
     string MemoryRetrievalMode,
-    string CapsuleExtractionMode,
-    int CapsuleAutoBatchRawEventThreshold,
     bool MemoryMcpEndpointConfigured,
     bool MemoryMcpTokenConfigured,
     string MemoryMcpDomain,
@@ -80,10 +78,6 @@ public sealed record ConfigurationStatus(
             agentOptions.WorkspacePath,
             agentOptions.WorkspaceMaxMb,
             AgentOptions.NormalizeMemoryRetrievalMode(agentOptions.MemoryRetrievalMode),
-            string.IsNullOrWhiteSpace(agentOptions.CapsuleExtractionMode)
-                ? AgentOptions.CapsuleExtractionModeManual
-                : agentOptions.CapsuleExtractionMode.Trim(),
-            Math.Max(agentOptions.CapsuleAutoBatchRawEventThreshold, 0),
             !string.IsNullOrWhiteSpace(memoryMcpOptions.Endpoint),
             !string.IsNullOrWhiteSpace(memoryMcpOptions.Token),
             string.IsNullOrWhiteSpace(memoryMcpOptions.Domain)

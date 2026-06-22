@@ -16,7 +16,6 @@ namespace HaPersonalAgent.Tests;
 public class ConfirmationServiceTests
 {
     private const string FakeActionKind = "fake_action";
-    private const string ProjectCapsuleUpsertActionKind = "project_capsule_upsert";
 
     [Fact]
     public async Task Propose_then_approve_executes_action_once_and_marks_completed()
@@ -193,60 +192,6 @@ public class ConfirmationServiceTests
             Assert.DoesNotContain("secret-token", approved.Message, StringComparison.Ordinal);
             Assert.DoesNotContain("embedded-secret", approved.Message, StringComparison.Ordinal);
             Assert.True(approved.Message.Length < 1800);
-        }
-        finally
-        {
-            DeleteTemporaryDatabaseDirectory(databasePath);
-        }
-    }
-
-    [Fact]
-    public async Task Approve_project_capsule_upsert_returns_human_readable_preview()
-    {
-        var databasePath = CreateTemporaryDatabasePath();
-
-        try
-        {
-            var repository = CreateRepository(databasePath);
-            var resultJson =
-                """
-                {
-                  "action": "project_capsule_upsert",
-                  "changed": true,
-                  "capsuleKey": "thai_ridgeback_ofelia",
-                  "title": "Офелия — Тайский Риджбек",
-                  "scope": "dog_profile",
-                  "confidence": 0.85,
-                  "sourceEventId": 10,
-                  "version": 2,
-                  "updatedAtUtc": "2026-04-15T13:16:25.1387364+00:00"
-                }
-                """;
-            var executor = new FakeActionExecutor(
-                ConfirmationActionExecutionResult.Success(resultJson),
-                ProjectCapsuleUpsertActionKind);
-            var service = CreateService(repository, executor);
-            var conversation = DialogueConversation.Create("telegram", "200", "100");
-            var proposal = await service.ProposeAsync(
-                CreateRequest(
-                    conversation,
-                    payloadJson: "{}",
-                    actionKind: ProjectCapsuleUpsertActionKind,
-                    operationName: "upsert_project_capsule:thai_ridgeback_ofelia",
-                    summary: "Обновлен профиль Офелии"),
-                CancellationToken.None);
-
-            var approved = await service.ApproveAsync(
-                conversation,
-                proposal.ConfirmationId!,
-                CancellationToken.None);
-
-            Assert.True(approved.IsSuccess);
-            Assert.Contains("Капсула памяти обновлена.", approved.Message, StringComparison.Ordinal);
-            Assert.Contains("Название: Офелия — Тайский Риджбек", approved.Message, StringComparison.Ordinal);
-            Assert.Contains("Ключ: thai_ridgeback_ofelia", approved.Message, StringComparison.Ordinal);
-            Assert.DoesNotContain("```json", approved.Message, StringComparison.Ordinal);
-            Assert.DoesNotContain("\\u041e", approved.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

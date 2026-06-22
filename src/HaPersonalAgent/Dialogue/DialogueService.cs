@@ -21,7 +21,6 @@ public sealed class DialogueService
     private readonly IAgentRuntime _agentRuntime;
     private readonly IOptions<AgentOptions> _agentOptions;
     private readonly BoundedChatHistoryProvider _boundedChatHistoryProvider;
-    private readonly ProjectCapsuleService _projectCapsuleService;
     private readonly ILogger<DialogueService> _logger;
     private readonly IConversationMemoryStore _memoryStore;
 
@@ -29,14 +28,12 @@ public sealed class DialogueService
         IAgentRuntime agentRuntime,
         IOptions<AgentOptions> agentOptions,
         BoundedChatHistoryProvider boundedChatHistoryProvider,
-        ProjectCapsuleService projectCapsuleService,
         IConversationMemoryStore memoryStore,
         ILogger<DialogueService> logger)
     {
         _agentRuntime = agentRuntime;
         _agentOptions = agentOptions;
         _boundedChatHistoryProvider = boundedChatHistoryProvider;
-        _projectCapsuleService = projectCapsuleService;
         _memoryStore = memoryStore;
         _logger = logger;
     }
@@ -72,17 +69,11 @@ public sealed class DialogueService
             PersistedSummaryRefreshMessageThreshold,
             request.Text,
             boundedHistory.RecentMessages);
-        var capsulePromptContext = await _projectCapsuleService.BuildPromptContextAsync(
-            conversationKey,
-            cancellationToken);
-        var vectorRetrievedMemoryCount = boundedHistory.RetrievedMemoryCount;
-        var combinedMemoryContext = CombineContextBlocks(
-            capsulePromptContext.PromptText,
-            boundedHistory.RetrievedMemoryContext);
-        var combinedMemoryCount = capsulePromptContext.CapsuleCount + vectorRetrievedMemoryCount;
+        var combinedMemoryContext = boundedHistory.RetrievedMemoryContext;
+        var combinedMemoryCount = boundedHistory.RetrievedMemoryCount;
         var history = boundedHistory.RecentMessages;
         _logger.LogInformation(
-            "Dialogue request {CorrelationId} started for {ConversationKey} ({Transport}/{ConversationId}, participant {ParticipantId}) with profile {ExecutionProfile}, text length {TextLength}, history messages {HistoryMessageCount}, memory retrieval mode {MemoryRetrievalMode}, auto retrieval {AutoMemoryRetrievalEnabled}, vector retrieved memories {VectorRetrievedMemoryCount}, project capsules in prompt {ProjectCapsuleCount}, combined retrieved memories {RetrievedMemoryCount}, persisted summary present {PersistedSummaryPresent}, persisted summary version {PersistedSummaryVersion}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}, persisted summary refresh reason {PersistedSummaryRefreshReason}.",
+            "Dialogue request {CorrelationId} started for {ConversationKey} ({Transport}/{ConversationId}, participant {ParticipantId}) with profile {ExecutionProfile}, text length {TextLength}, history messages {HistoryMessageCount}, memory retrieval mode {MemoryRetrievalMode}, auto retrieval {AutoMemoryRetrievalEnabled}, retrieved memories {RetrievedMemoryCount}, persisted summary present {PersistedSummaryPresent}, persisted summary version {PersistedSummaryVersion}, messages since persisted summary {MessagesSincePersistedSummary}, persisted summary refresh requested {ShouldRefreshPersistedSummary}, persisted summary refresh reason {PersistedSummaryRefreshReason}.",
             request.CorrelationId,
             conversationKey,
             request.Conversation.Transport,
@@ -93,8 +84,6 @@ public sealed class DialogueService
             history.Count,
             memoryRetrievalMode,
             autoMemoryRetrievalEnabled,
-            vectorRetrievedMemoryCount,
-            capsulePromptContext.CapsuleCount,
             combinedMemoryCount,
             persistedSummary is not null,
             persistedSummary?.SummaryVersion ?? 0,
@@ -224,11 +213,6 @@ public sealed class DialogueService
             response.PersistedSummaryCandidate,
             persistedSummary,
             cancellationToken);
-        await TryAutoRefreshProjectCapsulesAsync(
-            request.Conversation,
-            conversationKey,
-            request.CorrelationId,
-            cancellationToken);
         _logger.LogInformation(
             "Dialogue request {CorrelationId} completed and persisted user/assistant turns for {ConversationKey}; response length {ResponseLength}.",
             request.CorrelationId,
@@ -251,12 +235,6 @@ public sealed class DialogueService
         await _memoryStore.ClearConversationSummaryAsync(
             conversationKey,
             cancellationToken);
-        await _memoryStore.ClearProjectCapsulesAsync(
-            conversationKey,
-            cancellationToken);
-        await _memoryStore.ClearProjectCapsuleExtractionStateAsync(
-            conversationKey,
-            cancellationToken);
         await _memoryStore.AppendRawEventsAsync(
             new[]
             {
@@ -272,28 +250,6 @@ public sealed class DialogueService
         _logger.LogInformation(
             "Dialogue context reset for {ConversationKey}.",
             conversationKey);
-    }
-
-    public async Task<int> ClearProjectCapsulesAsync(
-        DialogueConversation conversation,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(conversation);
-
-        var conversationKey = DialogueConversationKey.Create(conversation);
-        var existing = await _memoryStore.GetProjectCapsulesAsync(
-            conversationKey,
-            limit: 1000,
-            cancellationToken);
-        await _memoryStore.ClearProjectCapsulesAsync(conversationKey, cancellationToken);
-        // Also reset the extraction watermark so the cleared capsules are not silently
-        // re-derived from the existing raw events on the next auto-refresh.
-        await _memoryStore.ClearProjectCapsuleExtractionStateAsync(conversationKey, cancellationToken);
-        _logger.LogInformation(
-            "Cleared {Count} local project capsules for {ConversationKey}.",
-            existing.Count,
-            conversationKey);
-        return existing.Count;
     }
 
     public async Task<ConversationSummaryMemory?> GetPersistedSummaryAsync(
@@ -319,36 +275,6 @@ public sealed class DialogueService
         return await _memoryStore.GetRawEventsAsync(
             conversationKey,
             limit,
-            cancellationToken);
-    }
-
-    public async Task<IReadOnlyList<ProjectCapsuleMemory>> GetProjectCapsulesAsync(
-        DialogueConversation conversation,
-        int limit,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(conversation);
-
-        var conversationKey = DialogueConversationKey.Create(conversation);
-        return await _memoryStore.GetProjectCapsulesAsync(
-            conversationKey,
-            limit,
-            cancellationToken);
-    }
-
-    public Task<ProjectCapsuleRefreshResult> RefreshProjectCapsulesAsync(
-        DialogueConversation conversation,
-        string correlationId,
-        bool force,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(conversation);
-        ArgumentException.ThrowIfNullOrWhiteSpace(correlationId);
-
-        return _projectCapsuleService.RefreshAsync(
-            conversation,
-            correlationId,
-            force,
             cancellationToken);
     }
 
@@ -507,30 +433,14 @@ public sealed class DialogueService
         var rawEventCount = await _memoryStore.GetRawEventCountAsync(
             conversationKey,
             cancellationToken);
-        var projectCapsuleCount = await _memoryStore.GetProjectCapsuleCountAsync(
-            conversationKey,
-            cancellationToken);
-        var projectCapsuleLatestSourceEventId = await _memoryStore.GetProjectCapsuleLatestSourceEventIdAsync(
-            conversationKey,
-            cancellationToken);
-        var projectCapsuleLastUpdatedAtUtc = await _memoryStore.GetProjectCapsuleLastUpdatedAtUtcAsync(
-            conversationKey,
-            cancellationToken);
-        var projectCapsuleExtractionState = await _memoryStore.GetProjectCapsuleExtractionStateAsync(
-            conversationKey,
-            cancellationToken);
         var memoryRetrievalMode = AgentOptions.NormalizeMemoryRetrievalMode(_agentOptions.Value.MemoryRetrievalMode);
         var autoMemoryRetrievalEnabled = AgentOptions.IsBeforeInvokeRetrieval(memoryRetrievalMode);
         var summary = await _memoryStore.GetConversationSummaryAsync(
             conversationKey,
             cancellationToken);
-        var capsulePromptContext = await _projectCapsuleService.BuildPromptContextAsync(
-            conversationKey,
-            cancellationToken);
         var contextTokenEstimate = EstimateContextTokenUsage(
             loadedHistoryMessages,
-            summary?.Summary,
-            capsulePromptContext.PromptText);
+            summary?.Summary);
         var latestMessageId = await _memoryStore.GetLatestConversationMessageIdAsync(
             conversationKey,
             cancellationToken);
@@ -550,12 +460,6 @@ public sealed class DialogueService
             conversationKey,
             StoredMessageCount: storedMessageCount,
             RawEventCount: rawEventCount,
-            ProjectCapsuleCount: projectCapsuleCount,
-            ProjectCapsuleLatestSourceEventId: projectCapsuleLatestSourceEventId ?? 0,
-            ProjectCapsuleLastUpdatedAtUtc: projectCapsuleLastUpdatedAtUtc,
-            ProjectCapsuleLastProcessedRawEventId: projectCapsuleExtractionState?.LastRawEventId ?? 0,
-            ProjectCapsuleLastExtractionAtUtc: projectCapsuleExtractionState?.UpdatedAtUtc,
-            ProjectCapsuleExtractionRunsCount: projectCapsuleExtractionState?.RunsCount ?? 0,
             MemoryRetrievalMode: memoryRetrievalMode,
             MemoryRetrievalBeforeInvokeEnabled: autoMemoryRetrievalEnabled,
             MemoryRetrievalOnDemandToolEnabled: !autoMemoryRetrievalEnabled,
@@ -576,7 +480,6 @@ public sealed class DialogueService
             EstimatedContextTokenCount: contextTokenEstimate.TotalTokens,
             EstimatedHistoryTokenCount: contextTokenEstimate.HistoryTokens,
             EstimatedPersistedSummaryTokenCount: contextTokenEstimate.SummaryTokens,
-            EstimatedProjectCapsuleTokenCount: contextTokenEstimate.ProjectCapsuleTokens,
             EstimatedMessageScaffoldingTokenCount: contextTokenEstimate.ScaffoldingTokens);
     }
 
@@ -614,13 +517,8 @@ public sealed class DialogueService
             PersistedSummaryRefreshMessageThreshold,
             userMessage,
             boundedHistory.RecentMessages);
-        var capsulePromptContext = await _projectCapsuleService.BuildPromptContextAsync(
-            conversationKey,
-            cancellationToken);
-        var combinedMemoryContext = CombineContextBlocks(
-            capsulePromptContext.PromptText,
-            boundedHistory.RetrievedMemoryContext);
-        var combinedMemoryCount = capsulePromptContext.CapsuleCount + boundedHistory.RetrievedMemoryCount;
+        var combinedMemoryContext = boundedHistory.RetrievedMemoryContext;
+        var combinedMemoryCount = boundedHistory.RetrievedMemoryCount;
 
         return AgentContext.Create(
             correlationId: $"router-probe-{Guid.NewGuid():N}",
@@ -672,44 +570,6 @@ public sealed class DialogueService
     {
         var maxTurns = Math.Clamp(_agentOptions.Value.ConversationContextMaxTurns, 0, 50);
         return maxTurns * 2;
-    }
-
-    private async Task TryAutoRefreshProjectCapsulesAsync(
-        DialogueConversation conversation,
-        string conversationKey,
-        string parentCorrelationId,
-        CancellationToken cancellationToken)
-    {
-        if (!await _projectCapsuleService.ShouldAutoRefreshAsync(conversationKey, cancellationToken))
-        {
-            return;
-        }
-
-        var autoCorrelationId = $"{parentCorrelationId}-capsules";
-        try
-        {
-            var result = await _projectCapsuleService.RefreshAsync(
-                conversation,
-                autoCorrelationId,
-                force: false,
-                cancellationToken);
-            _logger.LogInformation(
-                "Auto-batched project capsules refresh {CorrelationId} completed for {ConversationKey}; configured {IsConfigured}, updated {IsUpdated}, capsule count {CapsuleCount}, last raw event id {LastProcessedRawEventId}.",
-                autoCorrelationId,
-                conversationKey,
-                result.IsConfigured,
-                result.IsUpdated,
-                result.CapsuleCount,
-                result.LastProcessedRawEventId);
-        }
-        catch (Exception exception) when (exception is not OperationCanceledException)
-        {
-            _logger.LogWarning(
-                exception,
-                "Auto-batched project capsules refresh {CorrelationId} failed for {ConversationKey}.",
-                autoCorrelationId,
-                conversationKey);
-        }
     }
 
     private async Task PersistSummaryCandidateIfNeededAsync(
@@ -794,26 +654,6 @@ public sealed class DialogueService
             ? "[empty]"
             : payload;
 
-    private static string? CombineContextBlocks(string? first, string? second)
-    {
-        if (string.IsNullOrWhiteSpace(first))
-        {
-            return string.IsNullOrWhiteSpace(second)
-                ? null
-                : second.Trim();
-        }
-
-        if (string.IsNullOrWhiteSpace(second))
-        {
-            return first.Trim();
-        }
-
-        return string.Join(
-            Environment.NewLine + Environment.NewLine,
-            first.Trim(),
-            second.Trim());
-    }
-
     private static string LimitSummaryLength(string summary) =>
         summary.Length <= MaxPersistedSummaryLength
             ? summary
@@ -870,8 +710,7 @@ public sealed class DialogueService
 
     private static ContextTokenEstimate EstimateContextTokenUsage(
         IReadOnlyList<AgentConversationMessage> loadedHistoryMessages,
-        string? persistedSummary,
-        string? projectCapsuleContext)
+        string? persistedSummary)
     {
         var historyTokens = 0;
         var scaffoldingBlocks = 0;
@@ -893,19 +732,11 @@ public sealed class DialogueService
             scaffoldingBlocks++;
         }
 
-        var projectCapsuleTokens = 0;
-        if (!string.IsNullOrWhiteSpace(projectCapsuleContext))
-        {
-            projectCapsuleTokens = EstimateTextTokens(projectCapsuleContext);
-            scaffoldingBlocks++;
-        }
-
         var scaffoldingTokens = scaffoldingBlocks * ApproximateMessageScaffoldingTokens;
         return new ContextTokenEstimate(
-            historyTokens + summaryTokens + projectCapsuleTokens + scaffoldingTokens,
+            historyTokens + summaryTokens + scaffoldingTokens,
             historyTokens,
             summaryTokens,
-            projectCapsuleTokens,
             scaffoldingTokens);
     }
 
@@ -924,6 +755,5 @@ public sealed class DialogueService
         int TotalTokens,
         int HistoryTokens,
         int SummaryTokens,
-        int ProjectCapsuleTokens,
         int ScaffoldingTokens);
 }

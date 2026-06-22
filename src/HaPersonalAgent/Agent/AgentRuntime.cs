@@ -3,7 +3,6 @@ using HaPersonalAgent.Confirmation;
 using HaPersonalAgent.Dialogue;
 using HaPersonalAgent.HomeAssistant;
 using HaPersonalAgent.Memory;
-using HaPersonalAgent.Storage;
 using Microsoft.Agents.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -35,7 +34,6 @@ public sealed class AgentRuntime : IAgentRuntime
         ILoggerFactory loggerFactory,
         IServiceProvider serviceProvider,
         BoundedChatHistoryProvider? boundedChatHistoryProvider = null,
-        AgentStateRepository? stateRepository = null,
         IHomeAssistantMcpAgentToolProvider? homeAssistantMcpToolProvider = null,
         IConfirmationService? confirmationService = null,
         HomeAssistantMcpStatusTool? homeAssistantMcpStatusTool = null,
@@ -74,7 +72,6 @@ public sealed class AgentRuntime : IAgentRuntime
             statusTool,
             loggerFactory.CreateLogger<AgentToolCatalog>(),
             homeAssistantMcpStatusTool,
-            stateRepository,
             confirmationService,
             serviceProvider.GetService<IMemoryMcpClient>(),
             serviceProvider.GetService<IOptions<MemoryMcpOptions>>());

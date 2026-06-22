@@ -97,7 +97,7 @@ public sealed class MemoryMcpBackfillServiceTests
     }
 
     [Fact]
-    public async Task RunBackfillAsync_upserts_each_local_summary_and_capsule_and_sets_flag()
+    public async Task RunBackfillAsync_upserts_each_local_summary_and_sets_flag()
     {
         var databasePath = CreateTemporaryDatabasePath();
         try
@@ -109,13 +109,11 @@ public sealed class MemoryMcpBackfillServiceTests
 
             await service.RunBackfillAsync(CancellationToken.None);
 
-            // Two summaries + two capsules seeded => four notes_upsert calls.
-            Assert.Equal(4, client.CallCount);
+            // Two summaries seeded => two notes_upsert calls.
+            Assert.Equal(2, client.CallCount);
             Assert.All(client.ToolNames, toolName => Assert.Equal("notes_upsert", toolName));
             Assert.Contains("hpa-summary-telegram:1:2", client.DedupKeys);
             Assert.Contains("hpa-summary-telegram:3:4", client.DedupKeys);
-            Assert.Contains("hpa-capsule-telegram:1:2-dog", client.DedupKeys);
-            Assert.Contains("hpa-capsule-telegram:3:4-house", client.DedupKeys);
             Assert.Equal(
                 MemoryMcpBackfillService.BackfillFlagDoneValue,
                 await repository.GetAgentStateValueAsync(MemoryMcpBackfillService.BackfillFlagKey, CancellationToken.None));
@@ -171,13 +169,6 @@ public sealed class MemoryMcpBackfillServiceTests
             CancellationToken.None);
         await repository.UpsertConversationSummaryAsync(
             new ConversationSummaryMemory("telegram:3:4", "summary-b", now, SourceLastMessageId: 9, SummaryVersion: 2),
-            CancellationToken.None);
-        await repository.UpsertProjectCapsulesAsync(
-            new[]
-            {
-                new ProjectCapsuleMemory("telegram:1:2", "dog", "Щенок", "## Факты", "conversation", 0.8d, 5L, now, 1),
-                new ProjectCapsuleMemory("telegram:3:4", "house", "Стройка", "## Status", "conversation", 0.9d, 7L, now, 2),
-            },
             CancellationToken.None);
     }
 

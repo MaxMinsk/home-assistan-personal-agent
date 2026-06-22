@@ -32,8 +32,6 @@ public class ConfigurationTests
         Assert.Equal("/data/state.sqlite", agentOptions.StateDatabasePath);
         Assert.Equal("/data/workspace", agentOptions.WorkspacePath);
         Assert.Equal(AgentOptions.MemoryRetrievalModeBeforeInvoke, agentOptions.MemoryRetrievalMode);
-        Assert.Equal(AgentOptions.CapsuleExtractionModeManual, agentOptions.CapsuleExtractionMode);
-        Assert.Equal(20, agentOptions.CapsuleAutoBatchRawEventThreshold);
         Assert.False(telegramOptions.ReasoningPreviewEnabled);
         Assert.Equal(7, telegramOptions.ReasoningPreviewDelaySeconds);
         Assert.Equal("http://supervisor/core", homeAssistantOptions.Url);
@@ -89,9 +87,7 @@ public class ConfigurationTests
                   "state_database_path": "/tmp/state.sqlite",
                   "workspace_path": "/tmp/workspace",
                   "workspace_max_mb": 128,
-                  "memory_retrieval_mode": "on_demand_tool",
-                  "capsule_extraction_mode": "auto-batched",
-                  "capsule_auto_batch_raw_event_threshold": 30
+                  "memory_retrieval_mode": "on_demand_tool"
                 }
                 """);
 
@@ -125,8 +121,6 @@ public class ConfigurationTests
             Assert.Equal("/tmp/workspace", agentOptions.WorkspacePath);
             Assert.Equal(128, agentOptions.WorkspaceMaxMb);
             Assert.Equal(AgentOptions.MemoryRetrievalModeOnDemandTool, agentOptions.MemoryRetrievalMode);
-            Assert.Equal("auto-batched", agentOptions.CapsuleExtractionMode);
-            Assert.Equal(30, agentOptions.CapsuleAutoBatchRawEventThreshold);
         }
         finally
         {

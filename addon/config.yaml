@@ -1,5 +1,5 @@
 name: Home Assistant Personal Agent
-version: "0.7.2"
+version: "0.8.0"
 slug: ha_personal_agent
 description: Learning-first Microsoft Agent Framework assistant for Home Assistant.
 url: https://github.com/MaxMinsk/home-assistan-personal-agent/tree/main/addon
@@ -36,8 +36,6 @@ options:
   workspace_path: "/data/workspace"
   workspace_max_mb: 512
   memory_retrieval_mode: "before_invoke"
-  capsule_extraction_mode: "manual"
-  capsule_auto_batch_raw_event_threshold: 20
   memory_mcp_endpoint: ""
   memory_mcp_token: ""
   memory_mcp_domain: "development"
@@ -68,8 +66,6 @@ schema:
   workspace_path: str
   workspace_max_mb: int(64,4096)
   memory_retrieval_mode: list(before_invoke|on_demand_tool)
-  capsule_extraction_mode: list(manual|auto-batched)
-  capsule_auto_batch_raw_event_threshold: int(4,500)
   memory_mcp_endpoint: str?
   memory_mcp_token: password?
   memory_mcp_domain: str?

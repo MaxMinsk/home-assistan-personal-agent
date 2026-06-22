@@ -1,13 +1,10 @@
 using HaPersonalAgent.Configuration;
 using HaPersonalAgent.Confirmation;
-using HaPersonalAgent.Dialogue;
 using HaPersonalAgent.HomeAssistant;
 using HaPersonalAgent.Memory;
-using HaPersonalAgent.Storage;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using System.Globalization;
 using System.Text;
 using System.Text.Json;
 
@@ -20,8 +17,6 @@ namespace HaPersonalAgent.Agent;
 /// </summary>
 public sealed class AgentToolCatalog
 {
-    private const int ProjectCapsuleToolListLimit = 8;
-    private const int ProjectCapsuleListPreviewLength = 320;
     private const int ConversationMemorySearchDefaultTopK = 4;
     private const int ConversationMemorySearchMaxTopK = 25;
     private static readonly JsonSerializerOptions ToolJsonOptions = new(JsonSerializerDefaults.Web);
@@ -34,8 +29,6 @@ public sealed class AgentToolCatalog
         Use the home_assistant_mcp_status tool when the user asks whether MCP is available, why Home Assistant access fails, or which Home Assistant MCP tools are visible.
         Use Home Assistant MCP tools only for read-only questions about current home state, history, or diagnostics.
         For Home Assistant requests that change state, call propose_home_assistant_mcp_action when it is available.
-        Use project_capsules_list and project_capsule_get to inspect durable memory capsules for this conversation.
-        To create or update durable memory capsules, call propose_project_capsule_upsert and wait for explicit user approval before claiming the update is applied.
         When the memory tools are available, use memory_recall to look up durable long-term facts about the user before answering, and call propose_memory_save to persist an important durable fact (it requires explicit user approval, like other write actions).
         Never claim a Home Assistant control action was executed until the app reports completion after user approval.
         Never reveal secrets or raw tokens.
@@ -43,7 +36,6 @@ public sealed class AgentToolCatalog
 
     private readonly AgentStatusTool _statusTool;
     private readonly HomeAssistantMcpStatusTool? _homeAssistantMcpStatusTool;
-    private readonly AgentStateRepository? _stateRepository;
     private readonly IConfirmationService? _confirmationService;
     private readonly IMemoryMcpClient? _memoryMcpClient;
     private readonly IOptions<MemoryMcpOptions>? _memoryMcpOptions;
@@ -53,7 +45,6 @@ public sealed class AgentToolCatalog
         AgentStatusTool statusTool,
         ILogger<AgentToolCatalog> logger,
         HomeAssistantMcpStatusTool? homeAssistantMcpStatusTool = null,
-        AgentStateRepository? stateRepository = null,
         IConfirmationService? confirmationService = null,
         IMemoryMcpClient? memoryMcpClient = null,
         IOptions<MemoryMcpOptions>? memoryMcpOptions = null)
@@ -61,7 +52,6 @@ public sealed class AgentToolCatalog
         _statusTool = statusTool ?? throw new ArgumentNullException(nameof(statusTool));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _homeAssistantMcpStatusTool = homeAssistantMcpStatusTool;
-        _stateRepository = stateRepository;
         _confirmationService = confirmationService;
         _memoryMcpClient = memoryMcpClient;
         _memoryMcpOptions = memoryMcpOptions;
@@ -106,17 +96,6 @@ public sealed class AgentToolCatalog
             tools.Add(CreateHomeAssistantActionProposalTool(
                 context,
                 homeAssistantMcpTools.ConfirmationRequiredTools));
-        }
-
-        if (_stateRepository is not null)
-        {
-            tools.Add(CreateProjectCapsulesListTool(context));
-            tools.Add(CreateProjectCapsuleGetTool(context));
-
-            if (_confirmationService is not null)
-            {
-                tools.Add(CreateProjectCapsuleUpsertProposalTool(context));
-            }
         }
 
         if (_memoryMcpClient is not null)
@@ -201,219 +180,7 @@ public sealed class AgentToolCatalog
             instructions.AppendLine("Counting and listing: a recall result shows only a page of snippets but reports the full match count as `total`. Answer 'how many X' from `total`, not from the number of snippets shown. To enumerate every item, if `hasMore` is true call memory_recall again with a larger topK or the next offset until you have covered `total` before listing.");
         }
 
-        instructions.AppendLine();
-        instructions.AppendLine("Use project_capsules_list/project_capsule_get when you need long-term project facts from capsule memory.");
-        instructions.AppendLine("Memory model: project capsules (project_capsules_list/get, propose_project_capsule_upsert) are structured, conversation-scoped cards about ongoing topics/projects; memory_recall / propose_memory_save handle ad-hoc durable facts and preferences in long-term memory. Use capsules for structured project state, memory_save for standalone facts.");
-
-        if (_stateRepository is null)
-        {
-            instructions.AppendLine("Project capsule storage is unavailable in this runtime; explain that capsule tools are disabled.");
-        }
-        else if (_confirmationService is null)
-        {
-            instructions.AppendLine("Project capsule write workflow is unavailable because confirmation service is not registered.");
-        }
-        else
-        {
-            instructions.AppendLine("For capsule writes, use propose_project_capsule_upsert and wait for user approval before confirming any memory update.");
-        }
-
         return instructions.ToString();
-    }
-
-    private AIFunction CreateProjectCapsulesListTool(AgentContext context)
-    {
-        async Task<string> ListProjectCapsulesAsync(CancellationToken cancellationToken)
-        {
-            if (_stateRepository is null)
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    available = false,
-                    reason = "Project capsule storage is not registered.",
-                }, ToolJsonOptions);
-            }
-
-            if (string.IsNullOrWhiteSpace(context.ConversationKey))
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    available = false,
-                    reason = "Conversation scope is missing for this run.",
-                }, ToolJsonOptions);
-            }
-
-            var capsules = await _stateRepository.GetProjectCapsulesAsync(
-                context.ConversationKey,
-                ProjectCapsuleToolListLimit,
-                cancellationToken);
-            var payload = new
-            {
-                available = true,
-                count = capsules.Count,
-                capsules = capsules.Select(capsule => new
-                {
-                    key = capsule.CapsuleKey,
-                    title = capsule.Title,
-                    scope = capsule.Scope,
-                    confidence = Math.Round(capsule.Confidence, 3),
-                    sourceEventId = capsule.SourceEventId,
-                    version = capsule.Version,
-                    updatedAtUtc = capsule.UpdatedAtUtc.ToString("O", CultureInfo.InvariantCulture),
-                    contentPreview = NormalizeSingleLine(
-                        capsule.ContentMarkdown,
-                        ProjectCapsuleListPreviewLength),
-                }),
-            };
-
-            return JsonSerializer.Serialize(payload, ToolJsonOptions);
-        }
-
-        return AIFunctionFactory.Create(
-            (Func<CancellationToken, Task<string>>)ListProjectCapsulesAsync,
-            name: "project_capsules_list",
-            description: $"Returns metadata and short previews for up to {ProjectCapsuleToolListLimit} latest project capsules. Use project_capsule_get for full content.",
-            serializerOptions: null);
-    }
-
-    private AIFunction CreateProjectCapsuleGetTool(AgentContext context)
-    {
-        async Task<string> GetProjectCapsuleAsync(string capsuleKey, CancellationToken cancellationToken)
-        {
-            if (_stateRepository is null)
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    available = false,
-                    reason = "Project capsule storage is not registered.",
-                }, ToolJsonOptions);
-            }
-
-            if (string.IsNullOrWhiteSpace(context.ConversationKey))
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    available = false,
-                    reason = "Conversation scope is missing for this run.",
-                }, ToolJsonOptions);
-            }
-
-            var normalizedCapsuleKey = NormalizeCapsuleKey(capsuleKey);
-            if (string.IsNullOrWhiteSpace(normalizedCapsuleKey))
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    available = true,
-                    found = false,
-                    reason = "capsuleKey must be non-empty.",
-                }, ToolJsonOptions);
-            }
-
-            var capsule = await _stateRepository.GetProjectCapsuleByKeyAsync(
-                context.ConversationKey,
-                normalizedCapsuleKey,
-                cancellationToken);
-            if (capsule is null)
-            {
-                return JsonSerializer.Serialize(new
-                {
-                    available = true,
-                    found = false,
-                    key = normalizedCapsuleKey,
-                }, ToolJsonOptions);
-            }
-
-            return JsonSerializer.Serialize(new
-            {
-                available = true,
-                found = true,
-                capsule = new
-                {
-                    key = capsule.CapsuleKey,
-                    title = capsule.Title,
-                    scope = capsule.Scope,
-                    confidence = Math.Round(capsule.Confidence, 3),
-                    sourceEventId = capsule.SourceEventId,
-                    version = capsule.Version,
-                    updatedAtUtc = capsule.UpdatedAtUtc.ToString("O", CultureInfo.InvariantCulture),
-                    contentMarkdown = capsule.ContentMarkdown,
-                },
-            }, ToolJsonOptions);
-        }
-
-        return AIFunctionFactory.Create(
-            (Func<string, CancellationToken, Task<string>>)GetProjectCapsuleAsync,
-            name: "project_capsule_get",
-            description: "Returns one project capsule by capsuleKey (ASCII snake_case preferred) as JSON for this conversation.",
-            serializerOptions: null);
-    }
-
-    private AIFunction CreateProjectCapsuleUpsertProposalTool(AgentContext context)
-    {
-        Task<ConfirmationProposalResult> ProposeProjectCapsuleUpsertAsync(
-            string capsuleKey,
-            string title,
-            string contentMarkdown,
-            string scope,
-            double confidence,
-            string summary,
-            string risk,
-            CancellationToken cancellationToken)
-        {
-            if (_confirmationService is null)
-            {
-                return Task.FromResult(ConfirmationProposalResult.Rejected("Confirmation service сейчас недоступен."));
-            }
-
-            var normalizedCapsuleKey = NormalizeCapsuleKey(capsuleKey);
-            if (string.IsNullOrWhiteSpace(normalizedCapsuleKey))
-            {
-                return Task.FromResult(ConfirmationProposalResult.Rejected("capsuleKey должен быть непустым и в формате ASCII snake_case."));
-            }
-
-            var normalizedTitle = NormalizeSingleLine(title, maxLength: 120);
-            if (string.IsNullOrWhiteSpace(normalizedTitle))
-            {
-                return Task.FromResult(ConfirmationProposalResult.Rejected("title не может быть пустым."));
-            }
-
-            var normalizedContentMarkdown = NormalizeMarkdown(contentMarkdown, maxLength: 2_000);
-            if (string.IsNullOrWhiteSpace(normalizedContentMarkdown))
-            {
-                return Task.FromResult(ConfirmationProposalResult.Rejected("contentMarkdown не может быть пустым."));
-            }
-
-            var normalizedScope = NormalizeSingleLine(scope, maxLength: 80);
-            if (string.IsNullOrWhiteSpace(normalizedScope))
-            {
-                normalizedScope = "conversation";
-            }
-
-            var payloadJson = JsonSerializer.Serialize(new
-            {
-                capsuleKey = normalizedCapsuleKey,
-                title = normalizedTitle,
-                contentMarkdown = normalizedContentMarkdown,
-                scope = normalizedScope,
-                confidence = Math.Clamp(confidence, 0d, 1d),
-            }, ToolJsonOptions);
-
-            return _confirmationService.ProposeAsync(
-                new ConfirmationProposalRequest(
-                    context,
-                    ProjectCapsuleUpsertActionExecutor.ProjectCapsuleUpsertActionKind,
-                    OperationName: $"upsert_project_capsule:{normalizedCapsuleKey}",
-                    payloadJson,
-                    summary,
-                    risk),
-                cancellationToken);
-        }
-
-        return AIFunctionFactory.Create(
-            (Func<string, string, string, string, double, string, string, CancellationToken, Task<ConfirmationProposalResult>>)ProposeProjectCapsuleUpsertAsync,
-            name: "propose_project_capsule_upsert",
-            description: "Creates pending confirmation to create/update one project capsule. Arguments: capsuleKey, title, contentMarkdown, scope, confidence(0..1), summary, risk.",
-            serializerOptions: null);
     }
 
     private AIFunction CreateHomeAssistantActionProposalTool(
@@ -473,41 +240,6 @@ public sealed class AgentToolCatalog
             : string.Empty;
 
         return string.Join("; ", formattedTools) + suffix;
-    }
-
-    private static string NormalizeCapsuleKey(string? key)
-    {
-        if (string.IsNullOrWhiteSpace(key))
-        {
-            return string.Empty;
-        }
-
-        var normalized = new StringBuilder(capacity: key.Length);
-        var previousIsUnderscore = false;
-        foreach (var character in key.Trim().ToLowerInvariant())
-        {
-            var nextCharacter = char.IsLetterOrDigit(character)
-                ? character
-                : '_';
-            if (nextCharacter == '_')
-            {
-                if (previousIsUnderscore)
-                {
-                    continue;
-                }
-
-                previousIsUnderscore = true;
-                normalized.Append(nextCharacter);
-                continue;
-            }
-
-            previousIsUnderscore = false;
-            normalized.Append(nextCharacter);
-        }
-
-        return normalized
-            .ToString()
-            .Trim('_');
     }
 
     private AIFunction CreateMemoryMcpStatusTool()
@@ -818,24 +550,6 @@ public sealed class AgentToolCatalog
             .Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace('\n', ' ')
             .Trim();
-        if (normalized.Length <= maxLength)
-        {
-            return normalized;
-        }
-
-        return normalized[..maxLength];
-    }
-
-    private static string NormalizeMarkdown(string? value, int maxLength)
-    {
-        var normalized = (value ?? string.Empty)
-            .Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Trim();
-        while (normalized.Contains("\n\n\n", StringComparison.Ordinal))
-        {
-            normalized = normalized.Replace("\n\n\n", "\n\n", StringComparison.Ordinal);
-        }
-
         if (normalized.Length <= maxLength)
         {
             return normalized;

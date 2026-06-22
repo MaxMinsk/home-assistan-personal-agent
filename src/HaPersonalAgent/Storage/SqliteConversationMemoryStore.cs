@@ -83,40 +83,4 @@ public sealed class SqliteConversationMemoryStore : IConversationMemoryStore
         string conversationKey,
         CancellationToken cancellationToken) =>
         _repository.GetRawEventCountAsync(conversationKey, cancellationToken);
-
-    public Task<IReadOnlyList<ProjectCapsuleMemory>> GetProjectCapsulesAsync(
-        string conversationKey,
-        int limit,
-        CancellationToken cancellationToken) =>
-        _repository.GetProjectCapsulesAsync(conversationKey, limit, cancellationToken);
-
-    public Task<int> GetProjectCapsuleCountAsync(
-        string conversationKey,
-        CancellationToken cancellationToken) =>
-        _repository.GetProjectCapsuleCountAsync(conversationKey, cancellationToken);
-
-    public Task<long?> GetProjectCapsuleLatestSourceEventIdAsync(
-        string conversationKey,
-        CancellationToken cancellationToken) =>
-        _repository.GetProjectCapsuleLatestSourceEventIdAsync(conversationKey, cancellationToken);
-
-    public Task<DateTimeOffset?> GetProjectCapsuleLastUpdatedAtUtcAsync(
-        string conversationKey,
-        CancellationToken cancellationToken) =>
-        _repository.GetProjectCapsuleLastUpdatedAtUtcAsync(conversationKey, cancellationToken);
-
-    public Task<ProjectCapsuleExtractionState?> GetProjectCapsuleExtractionStateAsync(
-        string conversationKey,
-        CancellationToken cancellationToken) =>
-        _repository.GetProjectCapsuleExtractionStateAsync(conversationKey, cancellationToken);
-
-    public Task ClearProjectCapsulesAsync(
-        string conversationKey,
-        CancellationToken cancellationToken) =>
-        _repository.ClearProjectCapsulesAsync(conversationKey, cancellationToken);
-
-    public Task ClearProjectCapsuleExtractionStateAsync(
-        string conversationKey,
-        CancellationToken cancellationToken) =>
-        _repository.ClearProjectCapsuleExtractionStateAsync(conversationKey, cancellationToken);
 }

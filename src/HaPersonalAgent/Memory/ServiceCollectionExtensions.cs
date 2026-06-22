@@ -20,7 +20,6 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMemoryMcpConnector>(
             provider => provider.GetRequiredService<ModelContextProtocolMemoryMcpConnector>());
         services.AddSingleton<IMemoryMcpClient, MemoryMcpClient>();
-        services.AddSingleton<MemoryMcpCapsuleMirror>();
         services.AddSingleton<IConfirmationActionExecutor, MemoryMcpSaveActionExecutor>();
 
         return services;

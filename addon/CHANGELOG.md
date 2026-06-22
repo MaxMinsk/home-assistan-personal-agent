@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0
+
+- Retire the local project-capsule subsystem (memory redesign, Phase A). Structured long-term memory now lives only in Memory MCP — read via `memory_recall`/`memory_tags`, written via `propose_memory_save` — removing the divergent local copy that caused stale and confabulated answers (the agent wrote capsules to local SQLite, mirrored them to MCP, but always read from local, so MCP fixes were invisible). Removed: capsule auto-extraction from raw events, the local `project_capsules`/extraction-state tables, the `project_capsules_list`/`project_capsule_get`/`propose_project_capsule_upsert` tools, the capsule→MCP mirror, the `/showCapsules`, `/refreshCapsules` and `/clearlocalcapsules` commands, and the `capsule_extraction_mode`/`capsule_auto_batch_raw_event_threshold` options.
+- Conversation history and the rolling summary stay local for hot-path resilience for now; a later phase will make Memory MCP their store of record with a local cache so an MCP outage never breaks a turn.
+
+
 ## 0.7.2
 
 - Add a `/clearlocalcapsules` Telegram command that deletes the local project capsules for the current chat (and resets the capsule-extraction watermark so they are not re-derived from old raw events). Long-term Memory MCP notes are untouched. Use `/resetContext` for a full reset (history + summary + capsules).

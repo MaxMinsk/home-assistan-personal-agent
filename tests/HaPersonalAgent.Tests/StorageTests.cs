@@ -29,8 +29,6 @@ public class StorageTests
             Assert.Equal(1L, await CountTablesAsync(databasePath, "agent_state"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "conversation_messages"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "conversation_summary"));
-            Assert.Equal(1L, await CountTablesAsync(databasePath, "project_capsules"));
-            Assert.Equal(1L, await CountTablesAsync(databasePath, "project_capsule_extraction_state"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "raw_events"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "pending_confirmations"));
             Assert.Equal(1L, await CountTablesAsync(databasePath, "confirmation_audit"));
@@ -333,78 +331,6 @@ public class StorageTests
     }
 
     [Fact]
-    public async Task Project_capsules_and_extraction_state_roundtrip()
-    {
-        var databasePath = CreateTemporaryDatabasePath();
-
-        try
-        {
-            var repository = CreateRepository(databasePath);
-            var now = DateTimeOffset.UtcNow;
-            await repository.UpsertProjectCapsulesAsync(
-                new[]
-                {
-                    new ProjectCapsuleMemory(
-                        "telegram:1:2",
-                        "dog",
-                        "Щенок",
-                        "## Факты\n- Адаптировался к дому.",
-                        "conversation",
-                        0.82d,
-                        SourceEventId: 5,
-                        now,
-                        Version: 1),
-                },
-                CancellationToken.None);
-            await repository.UpsertProjectCapsuleExtractionStateAsync(
-                new ProjectCapsuleExtractionState(
-                    "telegram:1:2",
-                    LastRawEventId: 10,
-                    now,
-                    RunsCount: 3),
-                CancellationToken.None);
-
-            var capsules = await repository.GetProjectCapsulesAsync(
-                "telegram:1:2",
-                limit: 10,
-                CancellationToken.None);
-            var capsuleByKey = await repository.GetProjectCapsuleByKeyAsync(
-                "telegram:1:2",
-                "dog",
-                CancellationToken.None);
-            var capsuleCount = await repository.GetProjectCapsuleCountAsync(
-                "telegram:1:2",
-                CancellationToken.None);
-            var latestSourceEventId = await repository.GetProjectCapsuleLatestSourceEventIdAsync(
-                "telegram:1:2",
-                CancellationToken.None);
-            var state = await repository.GetProjectCapsuleExtractionStateAsync(
-                "telegram:1:2",
-                CancellationToken.None);
-
-            Assert.Single(capsules);
-            Assert.NotNull(capsuleByKey);
-            Assert.Equal(1, capsuleCount);
-            Assert.Equal("dog", capsules[0].CapsuleKey);
-            Assert.Equal("Щенок", capsuleByKey!.Title);
-            Assert.Equal(5, latestSourceEventId);
-            Assert.NotNull(state);
-            Assert.Equal(10, state!.LastRawEventId);
-            Assert.Equal(3, state.RunsCount);
-
-            await repository.ClearProjectCapsulesAsync("telegram:1:2", CancellationToken.None);
-            await repository.ClearProjectCapsuleExtractionStateAsync("telegram:1:2", CancellationToken.None);
-            Assert.Equal(0, await repository.GetProjectCapsuleCountAsync("telegram:1:2", CancellationToken.None));
-            Assert.Null(await repository.GetProjectCapsuleByKeyAsync("telegram:1:2", "dog", CancellationToken.None));
-            Assert.Null(await repository.GetProjectCapsuleExtractionStateAsync("telegram:1:2", CancellationToken.None));
-        }
-        finally
-        {
-            DeleteTemporaryDatabaseDirectory(databasePath);
-        }
-    }
-
-    [Fact]
     public async Task Pending_confirmation_persists_and_status_updates_once()
     {
         var databasePath = CreateTemporaryDatabasePath();
@@ -528,35 +454,6 @@ public class StorageTests
             Assert.Equal(2, summaries.Count);
             Assert.Equal(new[] { "telegram:1:2", "telegram:3:4" }, summaries.Select(summary => summary.ConversationKey));
             Assert.Equal(new[] { "summary-a", "summary-b" }, summaries.Select(summary => summary.Summary));
-        }
-        finally
-        {
-            DeleteTemporaryDatabaseDirectory(databasePath);
-        }
-    }
-
-    [Fact]
-    public async Task Get_all_project_capsules_returns_rows_across_conversation_keys()
-    {
-        var databasePath = CreateTemporaryDatabasePath();
-
-        try
-        {
-            var repository = CreateRepository(databasePath);
-            var now = DateTimeOffset.UtcNow;
-            await repository.UpsertProjectCapsulesAsync(
-                new[]
-                {
-                    new ProjectCapsuleMemory("telegram:1:2", "dog", "Щенок", "## Факты", "conversation", 0.8d, 5L, now, 1),
-                    new ProjectCapsuleMemory("telegram:3:4", "house", "Стройка", "## Status", "conversation", 0.9d, 7L, now, 2),
-                },
-                CancellationToken.None);
-
-            var capsules = await repository.GetAllProjectCapsulesAsync(CancellationToken.None);
-
-            Assert.Equal(2, capsules.Count);
-            Assert.Equal(new[] { "telegram:1:2", "telegram:3:4" }, capsules.Select(capsule => capsule.ConversationKey));
-            Assert.Equal(new[] { "dog", "house" }, capsules.Select(capsule => capsule.CapsuleKey));
         }
         finally
         {

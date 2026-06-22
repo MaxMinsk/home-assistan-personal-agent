@@ -7,8 +7,8 @@ using Microsoft.Extensions.Options;
 namespace HaPersonalAgent.Memory;
 
 /// <summary>
-/// What: one-time, idempotent backfill of existing local durable memory (conversation summaries + project
-/// capsules) into Memory MCP (HPA-010).
+/// What: one-time, idempotent backfill of existing local durable memory (conversation summaries) into
+/// Memory MCP (HPA-010).
 /// Why: when memory_store_type=memory_mcp, durable memory written before the live mirrors existed (or while
 /// the store selector was sqlite) is invisible in Memory MCP; this seeds it once so prior memory is durable
 /// and recallable there.
@@ -71,10 +71,8 @@ public sealed class MemoryMcpBackfillService : BackgroundService
             }
 
             var summaries = await _stateRepository.GetAllConversationSummariesAsync(cancellationToken);
-            var capsules = await _stateRepository.GetAllProjectCapsulesAsync(cancellationToken);
 
             var summariesBackfilled = 0;
-            var capsulesBackfilled = 0;
             var failures = 0;
 
             foreach (var summary in summaries)
@@ -90,32 +88,18 @@ public sealed class MemoryMcpBackfillService : BackgroundService
                 }
             }
 
-            foreach (var capsule in capsules)
-            {
-                var arguments = MemoryMcpCapsuleMapping.BuildUpsertArguments(capsule, ApplicationInfo.Name);
-                if (await TryUpsertAsync(arguments, cancellationToken))
-                {
-                    capsulesBackfilled++;
-                }
-                else
-                {
-                    failures++;
-                }
-            }
-
-            var totalItems = summaries.Count + capsules.Count;
+            var totalItems = summaries.Count;
             // If there was at least one item to copy and every one failed (e.g. Memory MCP is down), leave the
             // flag unset so the next boot retries. An empty local store is treated as a successful no-op backfill.
-            var allFailed = totalItems > 0 && summariesBackfilled == 0 && capsulesBackfilled == 0;
+            var allFailed = totalItems > 0 && summariesBackfilled == 0;
             if (!allFailed)
             {
                 await _stateRepository.SetAgentStateValueAsync(BackfillFlagKey, BackfillFlagDoneValue, cancellationToken);
             }
 
             _logger.LogInformation(
-                "Memory MCP backfill completed: {SummariesBackfilled} summaries, {CapsulesBackfilled} capsules, {Failures} failures. Flag set: {FlagSet}.",
+                "Memory MCP backfill completed: {SummariesBackfilled} summaries, {Failures} failures. Flag set: {FlagSet}.",
                 summariesBackfilled,
-                capsulesBackfilled,
                 failures,
                 !allFailed);
         }

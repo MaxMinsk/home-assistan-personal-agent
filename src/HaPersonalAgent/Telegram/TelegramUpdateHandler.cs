@@ -22,8 +22,6 @@ public sealed class TelegramUpdateHandler
     private const int MaxRawEventPayloadPreviewLength = 180;
     private const int DefaultRawEventLimit = 10;
     private const int MaxRawEventLimit = 25;
-    private const int DefaultProjectCapsuleLimit = 6;
-    private const int MaxProjectCapsuleLimit = 12;
     private const int MaxReasoningPreviewLength = 1_500;
     private const string ConfirmationCallbackApprovePrefix = "confirm:approve:";
     private const string ConfirmationCallbackRejectPrefix = "confirm:reject:";
@@ -124,7 +122,7 @@ public sealed class TelegramUpdateHandler
                 update.Id);
             await client.SendMessageAsync(
                 chatId,
-                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /routerProbe <текст> покажет как роутер классифицирует запрос, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary, /showRawEvents [N] покажет последние сырые события памяти, /showCapsules [N] покажет project capsules, /refreshCapsules обновит project capsules из raw events, /clearlocalcapsules удалит локальные project capsules этого чата. Для действий с подтверждением можно нажать кнопки Подтвердить/Отклонить, а также доступны команды /approve <id> и /reject <id>.",
+                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /routerProbe <текст> покажет как роутер классифицирует запрос, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary, /showRawEvents [N] покажет последние сырые события памяти. Для действий с подтверждением можно нажать кнопки Подтвердить/Отклонить, а также доступны команды /approve <id> и /reject <id>.",
                 cancellationToken);
             return;
         }
@@ -208,50 +206,6 @@ public sealed class TelegramUpdateHandler
             await HandleRefreshSummaryCommandAsync(
                 client,
                 update.Id,
-                chatId,
-                conversation,
-                cancellationToken);
-            return;
-        }
-
-        if (TryReadCommandArgument(text, "/showCapsules", out var projectCapsuleLimitArgument))
-        {
-            _logger.LogInformation(
-                "Telegram update {TelegramUpdateId} routed to /showCapsules command for conversation {ConversationKey}.",
-                update.Id,
-                DialogueConversationKey.Create(conversation));
-            await HandleShowProjectCapsulesCommandAsync(
-                client,
-                chatId,
-                conversation,
-                projectCapsuleLimitArgument,
-                cancellationToken);
-            return;
-        }
-
-        if (IsCommand(text, "/refreshCapsules"))
-        {
-            _logger.LogInformation(
-                "Telegram update {TelegramUpdateId} routed to /refreshCapsules command for conversation {ConversationKey}.",
-                update.Id,
-                DialogueConversationKey.Create(conversation));
-            await HandleRefreshProjectCapsulesCommandAsync(
-                client,
-                update.Id,
-                chatId,
-                conversation,
-                cancellationToken);
-            return;
-        }
-
-        if (IsCommand(text, "/clearlocalcapsules"))
-        {
-            _logger.LogInformation(
-                "Telegram update {TelegramUpdateId} routed to /clearlocalcapsules command for conversation {ConversationKey}.",
-                update.Id,
-                DialogueConversationKey.Create(conversation));
-            await HandleClearLocalCapsulesCommandAsync(
-                client,
                 chatId,
                 conversation,
                 cancellationToken);
@@ -608,85 +562,6 @@ public sealed class TelegramUpdateHandler
             cancellationToken);
     }
 
-    private async Task HandleShowProjectCapsulesCommandAsync(
-        ITelegramBotClientAdapter client,
-        long chatId,
-        DialogueConversation conversation,
-        string? limitArgument,
-        CancellationToken cancellationToken)
-    {
-        var limit = ParseProjectCapsuleLimit(limitArgument);
-        var capsules = await _dialogueService.GetProjectCapsulesAsync(
-            conversation,
-            limit,
-            cancellationToken);
-        if (capsules.Count == 0)
-        {
-            await client.SendMessageAsync(
-                chatId,
-                "Project capsules для этого чата пока отсутствуют.",
-                cancellationToken);
-            return;
-        }
-
-        var lines = new List<string>
-        {
-            $"Project capsules: {capsules.Count} (из запрошенных {limit})",
-        };
-
-        foreach (var capsule in capsules)
-        {
-            lines.Add(
-                $"[{capsule.CapsuleKey}] {capsule.Title} | scope={capsule.Scope} | confidence={capsule.Confidence:0.00} | sourceEventId={capsule.SourceEventId} | version={capsule.Version}");
-            lines.Add(capsule.ContentMarkdown);
-        }
-
-        await client.SendMessageAsync(
-            chatId,
-            NormalizeTelegramText(string.Join(Environment.NewLine + Environment.NewLine, lines)),
-            cancellationToken);
-    }
-
-    private async Task HandleRefreshProjectCapsulesCommandAsync(
-        ITelegramBotClientAdapter client,
-        int updateId,
-        long chatId,
-        DialogueConversation conversation,
-        CancellationToken cancellationToken)
-    {
-        var result = await ExecuteWithTypingIndicatorAsync(
-            client,
-            chatId,
-            ct => _dialogueService.RefreshProjectCapsulesAsync(
-                conversation,
-                correlationId: $"telegram-{updateId}-refresh-capsules",
-                force: false,
-                ct),
-            cancellationToken);
-        await client.SendMessageAsync(
-            chatId,
-            NormalizeTelegramText(
-                string.Join(
-                    Environment.NewLine,
-                    result.Message,
-                    $"Capsules total: {result.CapsuleCount}",
-                    $"Last processed raw event id: {result.LastProcessedRawEventId}")),
-            cancellationToken);
-    }
-
-    private async Task HandleClearLocalCapsulesCommandAsync(
-        ITelegramBotClientAdapter client,
-        long chatId,
-        DialogueConversation conversation,
-        CancellationToken cancellationToken)
-    {
-        var cleared = await _dialogueService.ClearProjectCapsulesAsync(conversation, cancellationToken);
-        await client.SendMessageAsync(
-            chatId,
-            $"Локальные project capsules этого чата очищены: удалено {cleared}. Долговременная память (Memory MCP) не затронута. Чтобы очистить также историю и summary — /resetContext.",
-            cancellationToken);
-    }
-
     private async Task HandleAgentMessageAsync(
         ITelegramBotClientAdapter client,
         int updateId,
@@ -857,12 +732,8 @@ public sealed class TelegramUpdateHandler
             $"Context(stored): {contextSnapshot.StoredMessageCount} messages",
             $"RawEvents(stored): {contextSnapshot.RawEventCount} events",
             $"MemoryRetrieval: mode {contextSnapshot.MemoryRetrievalMode}, before-invoke {contextSnapshot.MemoryRetrievalBeforeInvokeEnabled}, on-demand-tool {contextSnapshot.MemoryRetrievalOnDemandToolEnabled}",
-            $"ProjectCapsules(stored): {contextSnapshot.ProjectCapsuleCount} entries",
-            $"ProjectCapsules(lastSourceEventId): {contextSnapshot.ProjectCapsuleLatestSourceEventId}",
-            $"ProjectCapsules(lastUpdatedUtc): {FormatUtc(contextSnapshot.ProjectCapsuleLastUpdatedAtUtc)}",
-            $"ProjectCapsules(extraction): lastRawEventId {contextSnapshot.ProjectCapsuleLastProcessedRawEventId}, lastExtractionUtc {FormatUtc(contextSnapshot.ProjectCapsuleLastExtractionAtUtc)}, runs {contextSnapshot.ProjectCapsuleExtractionRunsCount}",
             $"Context(loaded): {contextSnapshot.LoadedHistoryMessageCount} / {contextSnapshot.MaxContextMessages} messages",
-            $"Context(tokens~): {contextSnapshot.EstimatedContextTokenCount} (history {contextSnapshot.EstimatedHistoryTokenCount}, summary {contextSnapshot.EstimatedPersistedSummaryTokenCount}, capsules {contextSnapshot.EstimatedProjectCapsuleTokenCount}, scaffolding {contextSnapshot.EstimatedMessageScaffoldingTokenCount}; heuristic UTF8 bytes/4)",
+            $"Context(tokens~): {contextSnapshot.EstimatedContextTokenCount} (history {contextSnapshot.EstimatedHistoryTokenCount}, summary {contextSnapshot.EstimatedPersistedSummaryTokenCount}, scaffolding {contextSnapshot.EstimatedMessageScaffoldingTokenCount}; heuristic UTF8 bytes/4)",
             $"PersistedSummary: present {contextSnapshot.PersistedSummaryPresent}, version {contextSnapshot.PersistedSummaryVersion}, length {contextSnapshot.PersistedSummaryLength}, sourceLastMessageId {contextSnapshot.PersistedSummarySourceLastMessageId}, messagesSinceSummary {contextSnapshot.MessagesSincePersistedSummary}",
             $"PersistedSummary(refresh): suggested {contextSnapshot.PersistedSummaryRefreshSuggested}, reason {contextSnapshot.PersistedSummaryRefreshReason}, threshold {contextSnapshot.PersistedSummaryRefreshThreshold} messages",
             $"PersistedSummary(quality): structured {contextSnapshot.PersistedSummaryStructuredContract}, facts {contextSnapshot.PersistedSummaryFactsCount}, conflicts {contextSnapshot.PersistedSummaryConflictsCount}, history/summary compression {contextSnapshot.PersistedSummaryHistoryToSummaryCompressionRatio:0.##}x",
@@ -1056,18 +927,6 @@ public sealed class TelegramUpdateHandler
             : DefaultRawEventLimit;
     }
 
-    private static int ParseProjectCapsuleLimit(string? argument)
-    {
-        if (string.IsNullOrWhiteSpace(argument))
-        {
-            return DefaultProjectCapsuleLimit;
-        }
-
-        return int.TryParse(argument, out var parsedLimit)
-            ? Math.Clamp(parsedLimit, 1, MaxProjectCapsuleLimit)
-            : DefaultProjectCapsuleLimit;
-    }
-
     private static string FormatRawEventPayload(string payload)
     {
         var normalizedPayload = payload
@@ -1103,9 +962,6 @@ public sealed class TelegramUpdateHandler
 
     private static bool IsReasoningActive(LlmExecutionPlan plan) =>
         plan.EffectiveThinkingMode != LlmEffectiveThinkingMode.Disabled;
-
-    private static string FormatUtc(DateTimeOffset? value) =>
-        value?.ToString("O") ?? "n/a";
 
     private static bool ShouldUseReasoningSafetyFallback(LlmExecutionPlan plan) =>
         string.Equals(plan.RequestedThinkingMode, LlmThinkingModes.Auto, StringComparison.Ordinal)

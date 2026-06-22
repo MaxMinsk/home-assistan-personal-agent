@@ -1,4 +1,3 @@
-using HaPersonalAgent.Confirmation;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace HaPersonalAgent.Dialogue;
@@ -15,8 +14,6 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.AddSingleton<BoundedChatHistoryProvider>();
-        services.AddSingleton<ProjectCapsuleService>();
-        services.AddSingleton<IConfirmationActionExecutor, ProjectCapsuleUpsertActionExecutor>();
         services.AddSingleton<DialogueService>();
 
         return services;

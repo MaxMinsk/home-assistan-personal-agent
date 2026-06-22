@@ -14,7 +14,6 @@ namespace HaPersonalAgent.Memory;
 /// window stays local and the hot path is never blocked on remote calls.
 /// How: wraps the SQLite store (the local source of truth for reads/latency); on summary upsert it also
 /// best-effort mirrors to Memory MCP (short timeout, never throws). All other operations delegate to inner.
-/// Capsule forward-writes (HPA-011) and backfill (HPA-010) are tracked separately.
 /// </summary>
 public sealed class MemoryMcpConversationMemoryStore : IConversationMemoryStore
 {
@@ -82,7 +81,7 @@ public sealed class MemoryMcpConversationMemoryStore : IConversationMemoryStore
         }
     }
 
-    // --- Short-term window, raw events, capsule reads, extraction state: stay local ---
+    // --- Short-term window and raw events: stay local ---
 
     public Task<IReadOnlyList<AgentConversationMessage>> GetConversationMessagesAsync(string conversationKey, int limit, CancellationToken cancellationToken) =>
         _inner.GetConversationMessagesAsync(conversationKey, limit, cancellationToken);
@@ -110,25 +109,4 @@ public sealed class MemoryMcpConversationMemoryStore : IConversationMemoryStore
 
     public Task<int> GetRawEventCountAsync(string conversationKey, CancellationToken cancellationToken) =>
         _inner.GetRawEventCountAsync(conversationKey, cancellationToken);
-
-    public Task<IReadOnlyList<ProjectCapsuleMemory>> GetProjectCapsulesAsync(string conversationKey, int limit, CancellationToken cancellationToken) =>
-        _inner.GetProjectCapsulesAsync(conversationKey, limit, cancellationToken);
-
-    public Task<int> GetProjectCapsuleCountAsync(string conversationKey, CancellationToken cancellationToken) =>
-        _inner.GetProjectCapsuleCountAsync(conversationKey, cancellationToken);
-
-    public Task<long?> GetProjectCapsuleLatestSourceEventIdAsync(string conversationKey, CancellationToken cancellationToken) =>
-        _inner.GetProjectCapsuleLatestSourceEventIdAsync(conversationKey, cancellationToken);
-
-    public Task<DateTimeOffset?> GetProjectCapsuleLastUpdatedAtUtcAsync(string conversationKey, CancellationToken cancellationToken) =>
-        _inner.GetProjectCapsuleLastUpdatedAtUtcAsync(conversationKey, cancellationToken);
-
-    public Task<ProjectCapsuleExtractionState?> GetProjectCapsuleExtractionStateAsync(string conversationKey, CancellationToken cancellationToken) =>
-        _inner.GetProjectCapsuleExtractionStateAsync(conversationKey, cancellationToken);
-
-    public Task ClearProjectCapsulesAsync(string conversationKey, CancellationToken cancellationToken) =>
-        _inner.ClearProjectCapsulesAsync(conversationKey, cancellationToken);
-
-    public Task ClearProjectCapsuleExtractionStateAsync(string conversationKey, CancellationToken cancellationToken) =>
-        _inner.ClearProjectCapsuleExtractionStateAsync(conversationKey, cancellationToken);
 }

@@ -37,8 +37,6 @@ public static class HomeAssistantAddOnOptionsMapper
             ["workspace_path"] = $"{AgentOptions.SectionName}:WorkspacePath",
             ["workspace_max_mb"] = $"{AgentOptions.SectionName}:WorkspaceMaxMb",
             ["memory_retrieval_mode"] = $"{AgentOptions.SectionName}:MemoryRetrievalMode",
-            ["capsule_extraction_mode"] = $"{AgentOptions.SectionName}:CapsuleExtractionMode",
-            ["capsule_auto_batch_raw_event_threshold"] = $"{AgentOptions.SectionName}:CapsuleAutoBatchRawEventThreshold",
             ["memory_mcp_endpoint"] = $"{MemoryMcpOptions.SectionName}:Endpoint",
             ["memory_mcp_token"] = $"{MemoryMcpOptions.SectionName}:Token",
             ["memory_mcp_domain"] = $"{MemoryMcpOptions.SectionName}:Domain",

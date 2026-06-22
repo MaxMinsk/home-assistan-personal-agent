@@ -51,8 +51,6 @@ public sealed class LlmExecutionRouter
         "frigate",
         "todo",
         "список",
-        "капсул",
-        "project capsule",
         "approve",
         "reject",
         "/approve",

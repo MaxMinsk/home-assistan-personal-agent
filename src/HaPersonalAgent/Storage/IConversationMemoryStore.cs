@@ -5,12 +5,12 @@ namespace HaPersonalAgent.Storage;
 /// <summary>
 /// What: the conversation-scoped persistence surface used by the dialogue layer
 /// (<see cref="DialogueService"/> and <see cref="BoundedChatHistoryProvider"/>) — recent messages,
-/// the rolling summary, raw events and project-capsule reads.
+/// the rolling summary and raw events.
 /// Why: HPA-002 introduces this seam so the conversation-memory backend can be swapped (SQLite today,
 /// Memory MCP later per HPA-004) without touching the dialogue layer. Pure seam: no behavior change.
 /// How: <see cref="SqliteConversationMemoryStore"/> delegates 1:1 to <see cref="AgentStateRepository"/>;
 /// consumers depend on this interface instead of the repository directly. Orthogonal concerns
-/// (Telegram offset, confirmations, capsule extraction pipeline) stay on the repository.
+/// (Telegram offset, confirmations) stay on the repository.
 /// </summary>
 public interface IConversationMemoryStore
 {
@@ -66,36 +66,6 @@ public interface IConversationMemoryStore
         CancellationToken cancellationToken);
 
     Task<int> GetRawEventCountAsync(
-        string conversationKey,
-        CancellationToken cancellationToken);
-
-    // Project capsules (conversation-scoped durable memory cards read by the dialogue layer).
-    Task<IReadOnlyList<ProjectCapsuleMemory>> GetProjectCapsulesAsync(
-        string conversationKey,
-        int limit,
-        CancellationToken cancellationToken);
-
-    Task<int> GetProjectCapsuleCountAsync(
-        string conversationKey,
-        CancellationToken cancellationToken);
-
-    Task<long?> GetProjectCapsuleLatestSourceEventIdAsync(
-        string conversationKey,
-        CancellationToken cancellationToken);
-
-    Task<DateTimeOffset?> GetProjectCapsuleLastUpdatedAtUtcAsync(
-        string conversationKey,
-        CancellationToken cancellationToken);
-
-    Task<ProjectCapsuleExtractionState?> GetProjectCapsuleExtractionStateAsync(
-        string conversationKey,
-        CancellationToken cancellationToken);
-
-    Task ClearProjectCapsulesAsync(
-        string conversationKey,
-        CancellationToken cancellationToken);
-
-    Task ClearProjectCapsuleExtractionStateAsync(
         string conversationKey,
         CancellationToken cancellationToken);
 }
