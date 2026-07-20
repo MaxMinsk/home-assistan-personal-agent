@@ -24,6 +24,7 @@ public static class WebDialogueEndpoints
         endpoints.MapPost("/api/dialogue/turn", HandleTurnAsync);
         endpoints.MapPost("/api/dialogue/stream", HandleStreamAsync);
         endpoints.MapGet("/api/dialogue/context", HandleContextAsync);
+        endpoints.MapGet("/api/dialogue/summary", HandleSummaryAsync);
         endpoints.MapPost("/api/dialogue/reset", HandleResetAsync);
 
         return endpoints;
@@ -128,6 +129,32 @@ public static class WebDialogueEndpoints
         var snapshot = await dialogue.GetContextSnapshotAsync(conversation, cancellationToken);
 
         return Results.Json(snapshot, JsonOptions);
+    }
+
+    private static async Task<IResult> HandleSummaryAsync(
+        string? conversationId,
+        string? participantId,
+        DialogueService dialogue,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(conversationId))
+        {
+            return Results.BadRequest(new { error = "conversationId is required." });
+        }
+
+        var conversation = WebDialogueTransport.CreateConversation(conversationId, participantId);
+        var summary = await dialogue.GetPersistedSummaryAsync(conversation, cancellationToken);
+
+        var response = summary is null
+            ? new DialogueSummaryResponse(false, null, 0, null, 0)
+            : new DialogueSummaryResponse(
+                true,
+                summary.Summary,
+                summary.SummaryVersion,
+                summary.UpdatedAtUtc.ToString("O"),
+                summary.SourceLastMessageId);
+
+        return Results.Json(response, JsonOptions);
     }
 
     private static async Task<IResult> HandleResetAsync(

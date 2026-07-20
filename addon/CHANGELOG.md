@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.10.0
+
+- The "Personal Agent" sidebar panel is now a real interface instead of a placeholder. It opens as a two-pane console: a left roster with the interactive Conversation agent (pinned on top, with a live status indicator) and a section where background agents will appear once they exist, plus a detail pane with three tabs. (HPA-027.)
+- **Chat** — talk to the agent directly from Home Assistant. Reasoning streams in live while the agent thinks, a `tools`/`deep` switch picks the run profile, and "Очистить контекст" clears the conversation. The web chat runs through the same agent runtime and long-term memory as Telegram while keeping its own chat history, so the two channels never mix threads.
+- **Context** — live counters for the dialogue window: stored messages, loaded messages vs. the window size, raw events, estimated token usage, the memory-retrieval mode and persisted-summary state.
+- **Memory** — shows the chat's rolling persisted summary with its version and last update, backed by a new `GET /api/dialogue/summary` endpoint.
+- The panel follows your light/dark system preference and has a manual theme toggle. It is fully self-contained (no external CDNs or fonts), which HA Ingress requires.
+- Internal: the SPA is TypeScript + Preact built with Vite (`src/HaPersonalAgent/ClientApp` → `wwwroot`). The built bundle is committed, so the .NET build, CI and the add-on image need no Node toolchain — after changing the UI, run `npm run build` in `ClientApp` and commit the regenerated `wwwroot`. Completes sprint HPA-S3 (HPA-025, HPA-026, HPA-027) of the autonomous-agents epic (HPA-024).
+
+
 ## 0.9.0
 
 - Add an embedded Web UI host behind Home Assistant Ingress. The add-on now serves a web panel (sidebar entry "Personal Agent") on ingress port 8099 in the same process as the worker and the Telegram bot. This release lays the foundation — a health endpoint and a placeholder page; the full management interface (conversation chat + autonomous agents) follows. New options: `web_ui_enabled` (default on) and an optional `web_api_token` that protects direct (non-ingress) access — requests that arrive through HA Ingress are trusted, so the panel needs no token. (HPA-025.)

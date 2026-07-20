@@ -36,3 +36,15 @@ public sealed record DialogueResetRequest(
 /// Как: простой флаг ok=true при успешном ResetAsync.
 /// </summary>
 public sealed record DialogueResetResponse(bool Ok);
+
+/// <summary>
+/// Что: persisted summary диалога для вкладки "Память" в Web UI.
+/// Зачем: UI показывает свёрнутую долговременную память чата (текст + версию), не раскрывая внутренние типы хранилища.
+/// Как: проекция ConversationSummaryMemory; при отсутствии summary present=false, остальные поля пустые.
+/// </summary>
+public sealed record DialogueSummaryResponse(
+    bool Present,
+    string? Summary,
+    int Version,
+    string? UpdatedUtc,
+    long SourceLastMessageId);

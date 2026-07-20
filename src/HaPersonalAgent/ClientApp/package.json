@@ -1,0 +1,20 @@
+{
+  "name": "ha-personal-agent-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Web UI (SPA) for the Home Assistant Personal Agent add-on. Built to ../wwwroot and served by the embedded ASP.NET Core host (HPA-025) via the dialogue API (HPA-026).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "preact": "^10.25.4"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.9.4",
+    "typescript": "^5.7.3",
+    "vite": "^6.0.7"
+  }
+}
