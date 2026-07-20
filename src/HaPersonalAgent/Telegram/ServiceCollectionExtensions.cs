@@ -15,6 +15,8 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<ITelegramBotClientAdapterFactory, TelegramBotClientAdapterFactory>();
         services.AddSingleton<TelegramUpdateHandler>();
+        // Telegram — адаптер порта доставки брифов автономных агентов (HPA-032).
+        services.AddSingleton<Autonomous.IAutonomousAgentNotifier, TelegramAutonomousAgentNotifier>();
         services.AddHostedService<TelegramBotGateway>();
 
         return services;

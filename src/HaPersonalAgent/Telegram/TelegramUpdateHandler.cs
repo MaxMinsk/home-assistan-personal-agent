@@ -38,6 +38,8 @@ public sealed class TelegramUpdateHandler
     private readonly DialogueService _dialogueService;
     private readonly IHomeAssistantMcpClient _homeAssistantMcpClient;
     private readonly IConfirmationService? _confirmationService;
+    private readonly Autonomous.AutonomousAgentService? _autonomousAgentService;
+    private readonly Autonomous.IAutonomousAgentRepository? _autonomousAgentRepository;
     private readonly AgentStatusTool _statusTool;
     private readonly IAgentRuntime _agentRuntime;
     private readonly AgentExecutionResolver _executionResolver;
@@ -54,8 +56,12 @@ public sealed class TelegramUpdateHandler
         LlmExecutionPlanner executionPlanner,
         IOptions<LlmOptions> llmOptions,
         ILogger<TelegramUpdateHandler> logger,
-        IConfirmationService? confirmationService = null)
+        IConfirmationService? confirmationService = null,
+        Autonomous.AutonomousAgentService? autonomousAgentService = null,
+        Autonomous.IAutonomousAgentRepository? autonomousAgentRepository = null)
     {
+        _autonomousAgentService = autonomousAgentService;
+        _autonomousAgentRepository = autonomousAgentRepository;
         _dialogueService = dialogueService;
         _homeAssistantMcpClient = homeAssistantMcpClient;
         _statusTool = statusTool;
@@ -115,6 +121,27 @@ public sealed class TelegramUpdateHandler
 
         var conversation = CreateConversation(chatId, userId);
 
+        // HPA-032: reply на бриф автономного агента — это ответ АГЕНТУ, а не реплика в общий диалог.
+        // Он кладётся в очередь агента и осознанно НЕ запускает его: попадёт в контекст следующего планового запуска.
+        if (!text.StartsWith('/')
+            && message.ReplyToMessage is { } repliedTo
+            && await TryHandleAutonomousAgentReplyAsync(client, chatId, repliedTo.Id, text, cancellationToken))
+        {
+            return;
+        }
+
+        if (IsCommand(text, "/agents"))
+        {
+            await HandleListAgentsCommandAsync(client, chatId, cancellationToken);
+            return;
+        }
+
+        if (TryReadCommandArgument(text, "/runAgent", out var runAgentId))
+        {
+            await HandleRunAgentCommandAsync(client, chatId, runAgentId, cancellationToken);
+            return;
+        }
+
         if (IsCommand(text, "/start"))
         {
             _logger.LogInformation(
@@ -122,7 +149,7 @@ public sealed class TelegramUpdateHandler
                 update.Id);
             await client.SendMessageAsync(
                 chatId,
-                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> запускает deep reasoning без tools. /status покажет статус, /routerProbe <текст> покажет как роутер классифицирует запрос, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary, /showRawEvents [N] покажет последние сырые события памяти. Для действий с подтверждением можно нажать кнопки Подтвердить/Отклонить, а также доступны команды /approve <id> и /reject <id>.",
+                "Привет. Пиши обычным текстом, я отвечу через агента. /think <вопрос> включает глубокое рассуждение (инструменты при этом доступны). /status покажет статус, /routerProbe <текст> покажет как роутер классифицирует запрос, /resetContext очистит контекст этого чата, /showSummary покажет persisted summary, /refreshSummary принудительно пересоберет persisted summary, /showRawEvents [N] покажет последние сырые события памяти. Для действий с подтверждением можно нажать кнопки Подтвердить/Отклонить, а также доступны команды /approve <id> и /reject <id>.",
                 cancellationToken);
             return;
         }
@@ -253,7 +280,7 @@ public sealed class TelegramUpdateHandler
                     update.Id);
                 await client.SendMessageAsync(
                     chatId,
-                    "Укажи вопрос: /think <вопрос>. В этом режиме tools отключены.",
+                    "Укажи вопрос: /think <вопрос>. Это режим глубокого рассуждения; инструменты (память, Home Assistant) в нём доступны.",
                     cancellationToken);
                 return;
             }
@@ -369,6 +396,145 @@ public sealed class TelegramUpdateHandler
             conversation,
             actionId,
             approve,
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// Пытается интерпретировать сообщение как ответ на бриф автономного агента.
+    /// Возвращает true, если ответ распознан и поставлен в очередь агента (в общий диалог он тогда не попадает).
+    /// </summary>
+    private async Task<bool> TryHandleAutonomousAgentReplyAsync(
+        ITelegramBotClientAdapter client,
+        long chatId,
+        int repliedToMessageId,
+        string text,
+        CancellationToken cancellationToken)
+    {
+        if (_autonomousAgentRepository is null || _autonomousAgentService is null)
+        {
+            return false;
+        }
+
+        Autonomous.AutonomousAgentRun? run;
+        try
+        {
+            run = await _autonomousAgentRepository.FindRunByDeliveredMessageAsync(
+                repliedToMessageId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogDebug(
+                exception,
+                "Failed to resolve an autonomous agent brief for replied message {RepliedMessageId}.",
+                repliedToMessageId);
+            return false;
+        }
+
+        if (run is null)
+        {
+            // Реплай на обычное сообщение — пусть его обработает обычный диалог.
+            return false;
+        }
+
+        var entry = await _autonomousAgentService.RecordReplyAsync(
+            run.AgentId,
+            text,
+            Autonomous.AutonomousAgentReplySource.Telegram,
+            run.Id,
+            cancellationToken);
+        if (entry is null)
+        {
+            await client.SendMessageAsync(
+                chatId,
+                "Этот агент уже удалён, ответ сохранять некуда.",
+                cancellationToken);
+            return true;
+        }
+
+        var agent = await _autonomousAgentService.GetAsync(run.AgentId, cancellationToken);
+        var nextRunText = agent?.NextRunUtc is { } nextRun
+            ? $" Учту при следующем запуске ({nextRun:yyyy-MM-dd HH:mm} UTC)."
+            : " Учту при следующем запуске.";
+
+        await client.SendMessageAsync(
+            chatId,
+            $"Принял ответ для агента «{agent?.Name ?? run.AgentId}».{nextRunText}",
+            cancellationToken);
+
+        _logger.LogInformation(
+            "Queued a Telegram reply for autonomous agent {AgentId} from run {RunId}; the agent was NOT started immediately by design.",
+            run.AgentId,
+            run.Id);
+
+        return true;
+    }
+
+    private async Task HandleListAgentsCommandAsync(
+        ITelegramBotClientAdapter client,
+        long chatId,
+        CancellationToken cancellationToken)
+    {
+        if (_autonomousAgentService is null)
+        {
+            await client.SendMessageAsync(chatId, "Подсистема автономных агентов недоступна.", cancellationToken);
+            return;
+        }
+
+        var agents = await _autonomousAgentService.ListAsync(cancellationToken);
+        if (agents.Count == 0)
+        {
+            await client.SendMessageAsync(
+                chatId,
+                "Автономных агентов пока нет. Создай их в панели Personal Agent.",
+                cancellationToken);
+            return;
+        }
+
+        var lines = new List<string> { $"Автономные агенты ({agents.Count}):", string.Empty };
+        foreach (var agent in agents)
+        {
+            var status = agent.Status == Autonomous.AutonomousAgentStatus.Active ? "активен" : "на паузе";
+            var nextRun = agent.NextRunUtc is { } next
+                ? next.ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) + " UTC"
+                : "—";
+            lines.Add($"• {agent.Name} — {status}, расписание {agent.ScheduleKind}, следующий запуск {nextRun}");
+            lines.Add($"  id: {agent.Id}");
+        }
+
+        lines.Add(string.Empty);
+        lines.Add("Запустить сейчас: /runAgent <id>");
+
+        await client.SendMessageAsync(
+            chatId,
+            NormalizeTelegramText(string.Join(Environment.NewLine, lines)),
+            cancellationToken);
+    }
+
+    private async Task HandleRunAgentCommandAsync(
+        ITelegramBotClientAdapter client,
+        long chatId,
+        string? agentId,
+        CancellationToken cancellationToken)
+    {
+        if (_autonomousAgentService is null)
+        {
+            await client.SendMessageAsync(chatId, "Подсистема автономных агентов недоступна.", cancellationToken);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(agentId))
+        {
+            await client.SendMessageAsync(chatId, "Укажи id агента: /runAgent <id>. Список — /agents.", cancellationToken);
+            return;
+        }
+
+        var requested = await _autonomousAgentService.RequestRunNowAsync(agentId, cancellationToken);
+        await client.SendMessageAsync(
+            chatId,
+            requested
+                ? "Принято: агент проснётся в ближайшую минуту, сводка придёт сюда."
+                : $"Агент с id {agentId} не найден. Список — /agents.",
             cancellationToken);
     }
 

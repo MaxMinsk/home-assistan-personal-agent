@@ -68,6 +68,9 @@ public static class WebApplicationExtensions
         // JSON dialogue API поверх того же хоста (HPA-026): доступно и без SPA-бандла, всегда под auth-gate.
         app.MapAgentDialogueEndpoints();
 
+        // Управление автономными агентами для панели (HPA-033).
+        app.MapAgentManagementEndpoints();
+
         if (options.Enabled)
         {
             // Любой не-API путь отдаёт index.html — это точка входа SPA (клиентский роутинг подключим в HPA-027).

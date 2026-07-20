@@ -1,5 +1,5 @@
 name: Home Assistant Personal Agent
-version: "0.10.0"
+version: "0.11.0"
 slug: ha_personal_agent
 description: Learning-first Microsoft Agent Framework assistant for Home Assistant.
 url: https://github.com/MaxMinsk/home-assistan-personal-agent/tree/main/addon
@@ -18,6 +18,10 @@ image: ghcr.io/maxminsk/home-assistan-personal-agent
 options:
   web_ui_enabled: true
   web_api_token: ""
+  autonomous_agents_enabled: true
+  autonomous_agent_run_timeout_minutes: 10
+  autonomous_agent_max_concurrent_runs: 1
+  autonomous_agent_catch_up_policy: "run_once"
   telegram_bot_token: ""
   allowed_telegram_user_ids: ""
   reasoning_preview_enabled: false
@@ -50,6 +54,10 @@ options:
 schema:
   web_ui_enabled: bool
   web_api_token: password?
+  autonomous_agents_enabled: bool
+  autonomous_agent_run_timeout_minutes: int(1,120)
+  autonomous_agent_max_concurrent_runs: int(1,8)
+  autonomous_agent_catch_up_policy: list(run_once|skip)
   telegram_bot_token: password?
   allowed_telegram_user_ids: 'match(^\s*$|^\d+(\s*[,;\s]\s*\d+)*\s*$)'
   reasoning_preview_enabled: bool

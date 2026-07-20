@@ -5,6 +5,7 @@
 
   <ItemGroup>
     <PackageVersion Include="coverlet.collector" Version="8.0.1" />
+    <PackageVersion Include="Cronos" Version="0.8.4" />
     <PackageVersion Include="Microsoft.Agents.AI" Version="1.1.0" />
     <PackageVersion Include="Microsoft.Agents.AI.OpenAI" Version="1.1.0" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="8.0.25" />

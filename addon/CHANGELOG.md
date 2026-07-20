@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.0
+
+- **Autonomous agents.** You can now create background agents from the panel: give one a mission ("research what business to start in Minsk after I quit"), a cadence, and what it may use — and it wakes up on its own, researches, and sends you a short brief. It never interrupts you between runs. (Sprint HPA-S4 of the autonomous-agents epic.)
+- **The reply loop.** A brief arrives in Telegram with up to three clarifying questions. Reply to that message and your answer is queued — it is folded into the context of the *next* scheduled run rather than starting one immediately. You can answer from the panel instead; both go to the same queue. Each agent carries its focus and still-open questions across runs, so it continues rather than restarting.
+- **Managing agents in the panel.** The left roster now lists your agents with a live status (running, waiting for your answer, paused) and the next run time. Each agent has tabs: Обзор (run now, pause, delete), Запуски (feed of past briefs), Вопросы (answer box), Настройки (mission, schedule, Telegram target, permissions), Память (what it is focused on and its memory note).
+- **Memory stays clean.** Each agent keeps exactly ONE note in long-term memory — a research capsule rewritten on every run, so notes never pile up. Beyond that it may save at most a few durable facts per run (hard cap of 5), and everything else — run history, briefs, your answers — stays local to the add-on.
+- **Safe by default.** A background run is read-only: it can read Home Assistant and long-term memory, but cannot control devices, because you are not there to approve anything. Runs have a timeout, never overlap for the same agent, survive restarts, and a slot missed while the add-on was off is either run once or skipped (configurable).
+- **Thinking mode now has tools.** Previously the deepest reasoning mode was the only one that could not consult memory or Home Assistant, which pushed it toward guessing. Deep reasoning now has the same tool access as a normal reply; the Web UI switch was relabelled `быстрый | глубокий` to stop implying you must choose between tools and thinking. (HPA-037.)
+- New options: `autonomous_agents_enabled`, `autonomous_agent_run_timeout_minutes`, `autonomous_agent_max_concurrent_runs`, `autonomous_agent_catch_up_policy`.
+- **Known gap:** web search is not implemented yet, so research currently draws on Home Assistant state, your long-term memory and the model's own knowledge. Web-dependent missions (market/legal/listings research) will be noticeably stronger once it lands (HPA-034).
+- Internal: new `Autonomous` subsystem (domain + local SQLite + scheduler + runner + capsule writer), a neutral `AgentToolPolicy` on `AgentContext` that lets a run withhold risky tools, `Cronos` for 5-field cron, and `/api/agents` endpoints behind the same ingress/token gate. Tickets HPA-028…HPA-033 + HPA-037.
+
+
 ## 0.10.0
 
 - The "Personal Agent" sidebar panel is now a real interface instead of a placeholder. It opens as a two-pane console: a left roster with the interactive Conversation agent (pinned on top, with a live status indicator) and a section where background agents will appear once they exist, plus a detail pane with three tabs. (HPA-027.)

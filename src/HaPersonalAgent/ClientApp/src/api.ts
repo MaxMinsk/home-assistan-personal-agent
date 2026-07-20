@@ -93,6 +93,114 @@ export function sendTurn(
   }).then(readJson<TurnResponse>);
 }
 
+// ---------- Автономные агенты (HPA-033) ----------
+
+export interface AgentToolScope {
+  allowHomeAssistantRead: boolean;
+  allowWebSearch: boolean;
+  allowMemoryRead: boolean;
+  allowMemoryWrite: boolean;
+  maxDurableFactsPerRun: number;
+}
+
+export interface AgentSummary {
+  id: string;
+  name: string;
+  status: string;
+  scheduleKind: string;
+  nextRunUtc: string | null;
+  lastRunUtc: string | null;
+  hasRunningRun: boolean;
+  pendingReplyCount: number;
+  openQuestionCount: number;
+}
+
+export interface AgentDetail {
+  id: string;
+  name: string;
+  mission: string;
+  status: string;
+  scheduleKind: string;
+  scheduleExpression: string | null;
+  deliveryTelegramChatId: number | null;
+  toolScope: AgentToolScope;
+  nextRunUtc: string | null;
+  lastRunUtc: string | null;
+  createdUtc: string;
+  updatedUtc: string;
+  hasRunningRun: boolean;
+  pendingReplyCount: number;
+  focus: string | null;
+  openQuestions: string | null;
+  capsuleNoteKey: string | null;
+  capsuleUpdatedUtc: string | null;
+}
+
+export interface AgentRun {
+  id: string;
+  status: string;
+  startedUtc: string;
+  finishedUtc: string | null;
+  summary: string | null;
+  questions: string[];
+  error: string | null;
+}
+
+export interface AgentUpsert {
+  name: string;
+  mission: string;
+  scheduleKind: string;
+  scheduleExpression?: string | null;
+  deliveryTelegramChatId?: number | null;
+  toolScope?: AgentToolScope;
+}
+
+function jsonRequest<T>(path: string, method: string, body?: unknown): Promise<T> {
+  return fetch(path, {
+    method,
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  }).then(readJson<T>);
+}
+
+export function listAgents(): Promise<AgentSummary[]> {
+  return fetch('api/agents', { headers: { Accept: 'application/json' } }).then(readJson<AgentSummary[]>);
+}
+
+export function getAgent(agentId: string): Promise<AgentDetail> {
+  return fetch(`api/agents/${encodeURIComponent(agentId)}`, { headers: { Accept: 'application/json' } })
+    .then(readJson<AgentDetail>);
+}
+
+export function createAgent(request: AgentUpsert): Promise<AgentDetail> {
+  return jsonRequest<AgentDetail>('api/agents', 'POST', request);
+}
+
+export function updateAgent(agentId: string, request: AgentUpsert): Promise<AgentDetail> {
+  return jsonRequest<AgentDetail>(`api/agents/${encodeURIComponent(agentId)}`, 'PUT', request);
+}
+
+export function deleteAgent(agentId: string): Promise<{ ok: boolean }> {
+  return jsonRequest<{ ok: boolean }>(`api/agents/${encodeURIComponent(agentId)}`, 'DELETE');
+}
+
+export function setAgentStatus(agentId: string, status: 'Active' | 'Paused'): Promise<{ ok: boolean }> {
+  return jsonRequest<{ ok: boolean }>(`api/agents/${encodeURIComponent(agentId)}/status`, 'POST', { status });
+}
+
+export function runAgentNow(agentId: string): Promise<{ ok: boolean }> {
+  return jsonRequest<{ ok: boolean }>(`api/agents/${encodeURIComponent(agentId)}/run`, 'POST');
+}
+
+export function listAgentRuns(agentId: string): Promise<AgentRun[]> {
+  return fetch(`api/agents/${encodeURIComponent(agentId)}/runs`, { headers: { Accept: 'application/json' } })
+    .then(readJson<AgentRun[]>);
+}
+
+export function replyToAgent(agentId: string, text: string): Promise<{ ok: boolean }> {
+  return jsonRequest<{ ok: boolean }>(`api/agents/${encodeURIComponent(agentId)}/reply`, 'POST', { text });
+}
+
 export interface StreamHandlers {
   onReasoning: (delta: string) => void;
   onMessage: (message: TurnResponse) => void;

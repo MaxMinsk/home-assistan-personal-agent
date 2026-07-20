@@ -35,6 +35,9 @@ public static class ServiceCollectionExtensions
         services.AddOptions<WebHostOptions>()
             .Bind(configuration.GetSection(WebHostOptions.SectionName));
 
+        services.AddOptions<AutonomousAgentOptions>()
+            .Bind(configuration.GetSection(AutonomousAgentOptions.SectionName));
+
         services.AddSingleton<ConfigurationStatusProvider>();
 
         return services;

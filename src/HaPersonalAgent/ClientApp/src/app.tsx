@@ -3,13 +3,16 @@ import {
   getContext,
   getHealth,
   getSummary,
+  listAgents,
   resetContext,
   streamTurn,
+  type AgentSummary,
   type ContextSnapshot,
   type ExecutionProfile,
   type HealthResponse,
   type SummaryResponse,
 } from './api';
+import { AgentCreateView, AgentDetailView, formatDateTime, scheduleLabel } from './agents';
 
 // Что: корневой компонент Web UI — «пульт оператора» для персонального агента.
 // Зачем: показать основного conversation-агента (сейчас) и будущих фоновых агентов (HPA-033) в одном месте.
@@ -17,6 +20,12 @@ import {
 
 type Tab = 'chat' | 'context' | 'memory';
 type DotKind = 'ok' | 'run' | 'wait' | 'idle';
+
+/// Что выбрано в левом ростере: интерактивный диалог, конкретный фоновый агент или форма создания.
+type Selection =
+  | { kind: 'conversation' }
+  | { kind: 'agent'; id: string }
+  | { kind: 'new' };
 
 interface ChatMessage {
   id: string;
@@ -63,6 +72,8 @@ export function App() {
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [busy, setBusy] = useState(false);
+  const [selection, setSelection] = useState<Selection>({ kind: 'conversation' });
+  const [agents, setAgents] = useState<AgentSummary[]>([]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -73,7 +84,23 @@ export function App() {
     getHealth().then(setHealth).catch(() => setHealth(null));
   }, []);
 
+  const refreshAgents = useCallback(() => {
+    listAgents()
+      .then(setAgents)
+      .catch(() => setAgents([]));
+  }, []);
+
+  useEffect(() => {
+    refreshAgents();
+    // Лёгкий поллинг: статус «идёт запуск» и время следующего запуска меняются сами по себе.
+    const timer = window.setInterval(refreshAgents, 15_000);
+    return () => window.clearInterval(timer);
+  }, [refreshAgents]);
+
   const conversationDot: DotKind = busy ? 'run' : health ? 'ok' : 'idle';
+  const selectedAgent = selection.kind === 'agent'
+    ? agents.find((agent) => agent.id === selection.id)
+    : undefined;
 
   return (
     <div class="app">
@@ -81,48 +108,136 @@ export function App() {
         health={health}
         conversationDot={conversationDot}
         theme={theme}
+        agents={agents}
+        selection={selection}
+        onSelect={setSelection}
         onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
       />
       <section class="detail">
-        <header class="detail__head">
-          <div class="detail__title-row">
-            <span class="detail__title">Conversation</span>
-            <span class="chip">
-              <StatusDot kind={conversationDot} />
-              {busy ? 'думает' : 'готов'}
-            </span>
-          </div>
-          <p class="detail__sub">Основной диалоговый агент — общий рантайм и память с Telegram.</p>
-          <nav class="tabs">
-            <TabButton id="chat" active={tab} label="Чат" onSelect={setTab} />
-            <TabButton id="context" active={tab} label="Контекст" onSelect={setTab} />
-            <TabButton id="memory" active={tab} label="Память" onSelect={setTab} />
-          </nav>
-        </header>
-        <div class="detail__body">
-          {tab === 'chat' && (
-            <ChatTab
-              conversationId={conversationId}
-              messages={messages}
-              setMessages={setMessages}
-              busy={busy}
-              setBusy={setBusy}
-            />
-          )}
-          {tab === 'context' && <ContextTab conversationId={conversationId} />}
-          {tab === 'memory' && <MemoryTab conversationId={conversationId} />}
-        </div>
+        {selection.kind === 'conversation' && (
+          <>
+            <header class="detail__head">
+              <div class="detail__title-row">
+                <span class="detail__title">Conversation</span>
+                <span class="chip">
+                  <StatusDot kind={conversationDot} />
+                  {busy ? 'думает' : 'готов'}
+                </span>
+              </div>
+              <p class="detail__sub">Основной диалоговый агент — общий рантайм и память с Telegram.</p>
+              <nav class="tabs">
+                <TabButton id="chat" active={tab} label="Чат" onSelect={setTab} />
+                <TabButton id="context" active={tab} label="Контекст" onSelect={setTab} />
+                <TabButton id="memory" active={tab} label="Память" onSelect={setTab} />
+              </nav>
+            </header>
+            <div class="detail__body">
+              {tab === 'chat' && (
+                <ChatTab
+                  conversationId={conversationId}
+                  messages={messages}
+                  setMessages={setMessages}
+                  busy={busy}
+                  setBusy={setBusy}
+                />
+              )}
+              {tab === 'context' && <ContextTab conversationId={conversationId} />}
+              {tab === 'memory' && <MemoryTab conversationId={conversationId} />}
+            </div>
+          </>
+        )}
+
+        {selection.kind === 'agent' && (
+          <>
+            <header class="detail__head">
+              <div class="detail__title-row">
+                <span class="detail__title">{selectedAgent?.name ?? 'Агент'}</span>
+                <span class="chip">
+                  <StatusDot kind={agentDot(selectedAgent)} />
+                  {agentStateLabel(selectedAgent)}
+                </span>
+              </div>
+              <p class="detail__sub">
+                Фоновый исследователь · {selectedAgent ? scheduleLabel(selectedAgent.scheduleKind) : '—'} ·
+                следующий запуск {formatDateTime(selectedAgent?.nextRunUtc)}
+              </p>
+            </header>
+            <div class="detail__body">
+              <AgentDetailView
+                agentId={selection.id}
+                onChanged={refreshAgents}
+                onDeleted={() => {
+                  setSelection({ kind: 'conversation' });
+                  refreshAgents();
+                }}
+              />
+            </div>
+          </>
+        )}
+
+        {selection.kind === 'new' && (
+          <>
+            <header class="detail__head">
+              <div class="detail__title-row">
+                <span class="detail__title">Новый агент</span>
+              </div>
+              <p class="detail__sub">
+                Опиши миссию и каденцию — агент будет просыпаться сам и присылать сводку.
+              </p>
+            </header>
+            <div class="detail__body">
+              <AgentCreateView
+                onCreated={(agentId) => {
+                  refreshAgents();
+                  setSelection({ kind: 'agent', id: agentId });
+                }}
+                onCancel={() => setSelection({ kind: 'conversation' })}
+              />
+            </div>
+          </>
+        )}
       </section>
     </div>
   );
+}
+
+function agentDot(agent: AgentSummary | undefined): DotKind {
+  if (!agent) {
+    return 'idle';
+  }
+  if (agent.hasRunningRun) {
+    return 'run';
+  }
+  if (agent.status === 'Paused') {
+    return 'idle';
+  }
+  return agent.openQuestionCount > 0 ? 'wait' : 'ok';
+}
+
+function agentStateLabel(agent: AgentSummary | undefined): string {
+  if (!agent) {
+    return '—';
+  }
+  if (agent.hasRunningRun) {
+    return 'работает';
+  }
+  if (agent.status === 'Paused') {
+    return 'на паузе';
+  }
+  return agent.openQuestionCount > 0 ? 'ждёт ответа' : 'активен';
 }
 
 function Sidebar(props: {
   health: HealthResponse | null;
   conversationDot: DotKind;
   theme: 'light' | 'dark';
+  agents: AgentSummary[];
+  selection: Selection;
+  onSelect: (selection: Selection) => void;
   onToggleTheme: () => void;
 }) {
+  const { selection } = props;
+
   return (
     <aside class="sidebar">
       <div class="brand">
@@ -134,7 +249,11 @@ function Sidebar(props: {
       </div>
       <div class="rail">
         <div class="rail__label">Диалог</div>
-        <button class="agent is-active" type="button">
+        <button
+          class={selection.kind === 'conversation' ? 'agent is-active' : 'agent'}
+          type="button"
+          onClick={() => props.onSelect({ kind: 'conversation' })}
+        >
           <StatusDot kind={props.conversationDot} />
           <span class="agent__body">
             <span class="agent__name">Conversation</span>
@@ -143,10 +262,34 @@ function Sidebar(props: {
         </button>
 
         <div class="rail__label">Агенты</div>
-        <div class="empty-agents">
-          Фоновых агентов пока нет. Планировщик и автономные исследования появятся в следующих релизах.
-        </div>
-        <button class="btn-new" type="button" disabled title="Появится в HPA-028">
+        {props.agents.length === 0 ? (
+          <div class="empty-agents">
+            Фоновых агентов пока нет. Создай первого — он будет просыпаться по расписанию и присылать сводку.
+          </div>
+        ) : (
+          props.agents.map((agent) => (
+            <button
+              key={agent.id}
+              class={selection.kind === 'agent' && selection.id === agent.id ? 'agent is-active' : 'agent'}
+              type="button"
+              onClick={() => props.onSelect({ kind: 'agent', id: agent.id })}
+            >
+              <StatusDot kind={agentDot(agent)} />
+              <span class="agent__body">
+                <span class="agent__name">{agent.name}</span>
+                <span class="agent__meta">
+                  {agent.status === 'Paused' ? 'пауза' : formatDateTime(agent.nextRunUtc)}
+                  {agent.openQuestionCount > 0 ? ` · ${agent.openQuestionCount} ?` : ''}
+                </span>
+              </span>
+            </button>
+          ))
+        )}
+        <button
+          class={selection.kind === 'new' ? 'btn-new is-active' : 'btn-new'}
+          type="button"
+          onClick={() => props.onSelect({ kind: 'new' })}
+        >
           + Новый агент
         </button>
       </div>
@@ -283,20 +426,22 @@ function ChatTab(props: {
           </button>
         </div>
         <div class="composer__meta">
-          <div class="seg">
+          <div class="seg" role="group" aria-label="Режим ответа">
             <button
               type="button"
               class={profile === 'tool' ? 'is-active' : ''}
+              title="Обычный ответ. Инструменты доступны: память, Home Assistant."
               onClick={() => setProfile('tool')}
             >
-              tools
+              быстрый
             </button>
             <button
               type="button"
               class={profile === 'deep' ? 'is-active' : ''}
+              title="Глубокое рассуждение. Инструменты тоже доступны — агент может свериться с памятью и состоянием дома."
               onClick={() => setProfile('deep')}
             >
-              deep
+              глубокий
             </button>
           </div>
           <button class="link-btn" type="button" onClick={() => void reset()}>

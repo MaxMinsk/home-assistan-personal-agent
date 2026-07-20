@@ -44,6 +44,10 @@ public static class HomeAssistantAddOnOptionsMapper
             ["memory_store_type"] = $"{MemoryMcpOptions.SectionName}:StoreType",
             ["web_ui_enabled"] = $"{WebHostOptions.SectionName}:Enabled",
             ["web_api_token"] = $"{WebHostOptions.SectionName}:ApiToken",
+            ["autonomous_agents_enabled"] = $"{AutonomousAgentOptions.SectionName}:Enabled",
+            ["autonomous_agent_run_timeout_minutes"] = $"{AutonomousAgentOptions.SectionName}:RunTimeoutMinutes",
+            ["autonomous_agent_max_concurrent_runs"] = $"{AutonomousAgentOptions.SectionName}:MaxConcurrentRuns",
+            ["autonomous_agent_catch_up_policy"] = $"{AutonomousAgentOptions.SectionName}:CatchUpPolicy",
         };
 
     public static IReadOnlyDictionary<string, string?> MapFileIfExists(string path)

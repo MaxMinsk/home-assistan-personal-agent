@@ -90,8 +90,13 @@ public sealed class AgentToolCatalog
 
         tools.AddRange(homeAssistantMcpTools.Tools);
 
+        // Политика run'а решает, доступны ли рискованные инструменты: фоновый research-запуск
+        // идёт без пользователя, поэтому управление устройствами и предложения записи ему не выдаются.
+        var toolPolicy = context.EffectiveToolPolicy;
+
         if (_confirmationService is not null
-            && homeAssistantMcpTools.ConfirmationRequiredTools.Count > 0)
+            && homeAssistantMcpTools.ConfirmationRequiredTools.Count > 0
+            && toolPolicy.AllowControlActions)
         {
             tools.Add(CreateHomeAssistantActionProposalTool(
                 context,
@@ -107,7 +112,7 @@ public sealed class AgentToolCatalog
         {
             tools.Add(CreateMemoryRecallTool(context));
             tools.Add(CreateMemoryTagsTool());
-            if (_confirmationService is not null)
+            if (_confirmationService is not null && toolPolicy.AllowMemoryWrite)
             {
                 tools.Add(CreateMemorySaveProposalTool(context));
             }
@@ -146,7 +151,8 @@ public sealed class AgentToolCatalog
         instructions.AppendLine("Active execution profile: " + context.ExecutionProfile + ".");
 
         if (_confirmationService is not null
-            && homeAssistantMcpTools.ConfirmationRequiredTools.Count > 0)
+            && homeAssistantMcpTools.ConfirmationRequiredTools.Count > 0
+            && context.EffectiveToolPolicy.AllowControlActions)
         {
             instructions.AppendLine();
             instructions.AppendLine(

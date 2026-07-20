@@ -613,6 +613,29 @@ public class AgentRuntimeTests
         Assert.False(retry);
     }
 
+    // HPA-037: глубина рассуждений и доступ к инструментам — независимые оси.
+    // Раньше tools были только у ToolEnabled, из-за чего думающий режим не мог заглянуть ни в память, ни в дом.
+    [Theory]
+    [InlineData(LlmExecutionProfile.ToolEnabled, true)]
+    [InlineData(LlmExecutionProfile.DeepReasoning, true)]
+    [InlineData(LlmExecutionProfile.PureChat, false)]
+    [InlineData(LlmExecutionProfile.Summarization, false)]
+    public void Deep_reasoning_keeps_tools_while_cost_and_internal_profiles_stay_tool_free(
+        LlmExecutionProfile profile,
+        bool expectedUsesTools)
+    {
+        var plan = CreatePlanner().CreatePlan(
+            new LlmOptions
+            {
+                Provider = "moonshot",
+                BaseUrl = "https://api.moonshot.ai/v1",
+                ThinkingMode = LlmThinkingModes.Auto,
+            },
+            profile);
+
+        Assert.Equal(expectedUsesTools, plan.UsesTools);
+    }
+
     private static AgentRuntime CreateRuntime(LlmOptions llmOptions)
     {
         var statusProvider = CreateConfigurationStatusProvider(

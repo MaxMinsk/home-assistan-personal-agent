@@ -14,7 +14,12 @@ public sealed record LlmExecutionPlan(
     LlmEffectiveThinkingMode EffectiveThinkingMode,
     string Reason)
 {
-    public bool UsesTools => Profile == LlmExecutionProfile.ToolEnabled;
+    // HPA-037: глубина рассуждений и доступ к инструментам — независимые оси.
+    // Раньше tools были только у ToolEnabled, из-за чего САМЫЙ думающий режим оставался единственным,
+    // который не мог ни вспомнить память, ни посмотреть состояние дома — и потому склонял модель к выдумыванию.
+    // PureChat и Summarization остаются без инструментов сознательно: это дешёвый маршрут и внутренняя суммаризация.
+    public bool UsesTools =>
+        Profile is LlmExecutionProfile.ToolEnabled or LlmExecutionProfile.DeepReasoning;
 
     public bool ShouldPatchChatCompletionRequest =>
         Capabilities.ThinkingControlStyle != LlmThinkingControlStyle.None

@@ -714,6 +714,169 @@ button {
   color: var(--text);
 }
 
+/* ---------- Agent detail (HPA-033) ---------- */
+.tabs--inset {
+  padding: 12px 22px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.metrics--tight {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  margin-top: 16px;
+}
+
+.metric__v--sm {
+  font-size: 14px;
+  font-family: var(--sans);
+}
+
+.sub-head {
+  font-size: 13px;
+  font-weight: 620;
+  margin: 22px 0 8px;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin: 0 0 10px;
+}
+
+.danger-row {
+  margin-top: 26px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.run {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  padding: 13px 15px;
+  margin-bottom: 12px;
+}
+
+.run__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.run__body {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.run__questions,
+.questions {
+  margin: 10px 0 0;
+  padding-left: 20px;
+  color: var(--muted);
+}
+
+.questions {
+  color: var(--text);
+}
+
+.chip--completed {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+}
+
+.chip--failed {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+.chip--running {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* ---------- Forms ---------- */
+.form-row {
+  display: block;
+  margin-bottom: 14px;
+}
+
+.form-row--narrow {
+  max-width: 260px;
+}
+
+.form-label {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-bottom: 5px;
+}
+
+.form-input {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 9px 11px;
+  font-family: inherit;
+  font-size: 14px;
+}
+
+.form-input--area {
+  min-height: 96px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0 14px;
+}
+
+.checks {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.check.is-disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.btn-new.is-active {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+
 /* ---------- Responsive ---------- */
 @media (max-width: 760px) {
   .app {

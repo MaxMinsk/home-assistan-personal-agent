@@ -1,5 +1,6 @@
 using HaPersonalAgent;
 using HaPersonalAgent.Agent;
+using HaPersonalAgent.Autonomous;
 using HaPersonalAgent.Configuration;
 using HaPersonalAgent.Confirmation;
 using HaPersonalAgent.Dialogue;
@@ -28,6 +29,7 @@ builder.Configuration
 builder.Services.AddAgentConfiguration(builder.Configuration);
 builder.Services.AddAgentRuntime();
 builder.Services.AddAgentStorage();
+builder.Services.AddAutonomousAgents();
 builder.Services.AddConfirmationServices();
 builder.Services.AddDialogueServices();
 builder.Services.AddHomeAssistantMcp();
