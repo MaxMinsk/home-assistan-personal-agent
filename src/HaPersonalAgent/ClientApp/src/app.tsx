@@ -4,6 +4,7 @@ import {
   getHealth,
   getSummary,
   listAgents,
+  pauseAllAgents,
   resetContext,
   streamTurn,
   type AgentSummary,
@@ -111,6 +112,7 @@ export function App() {
         agents={agents}
         selection={selection}
         onSelect={setSelection}
+        onAgentsChanged={refreshAgents}
         onToggleTheme={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
       />
       <section class="detail">
@@ -234,6 +236,7 @@ function Sidebar(props: {
   agents: AgentSummary[];
   selection: Selection;
   onSelect: (selection: Selection) => void;
+  onAgentsChanged: () => void;
   onToggleTheme: () => void;
 }) {
   const { selection } = props;
@@ -261,7 +264,23 @@ function Sidebar(props: {
           </span>
         </button>
 
-        <div class="rail__label">Агенты</div>
+        <div class="rail__label rail__label--row">
+          <span>Агенты</span>
+          {props.agents.some((agent) => agent.status !== 'Paused') && (
+            <button
+              class="rail__action"
+              type="button"
+              title="Поставить на паузу всех агентов. Идущий сейчас запуск доработает, но следующего не будет."
+              onClick={() => {
+                if (confirm('Поставить на паузу всех агентов?')) {
+                  void pauseAllAgents().then(props.onAgentsChanged).catch(() => undefined);
+                }
+              }}
+            >
+              стоп-кран
+            </button>
+          )}
+        </div>
         {props.agents.length === 0 ? (
           <div class="empty-agents">
             Фоновых агентов пока нет. Создай первого — он будет просыпаться по расписанию и присылать сводку.

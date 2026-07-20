@@ -184,7 +184,10 @@ export function AgentDetailView(props: {
             <article class="run" key={run.id}>
               <header class="run__head">
                 <span class={`chip chip--${run.status.toLowerCase()}`}>{runStatusLabel(run.status)}</span>
-                <span class="version">{formatDateTime(run.startedUtc)}</span>
+                <span class="version">
+                  {formatDateTime(run.startedUtc)}
+                  {run.toolCallCount > 0 ? ` · ${run.toolCallCount} вызовов инструментов` : ''}
+                </span>
               </header>
               {run.summary && <div class="run__body">{run.summary}</div>}
               {run.error && <div class="state state--error">{run.error}</div>}

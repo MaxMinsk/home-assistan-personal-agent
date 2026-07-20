@@ -48,6 +48,11 @@ public static class HomeAssistantAddOnOptionsMapper
             ["autonomous_agent_run_timeout_minutes"] = $"{AutonomousAgentOptions.SectionName}:RunTimeoutMinutes",
             ["autonomous_agent_max_concurrent_runs"] = $"{AutonomousAgentOptions.SectionName}:MaxConcurrentRuns",
             ["autonomous_agent_catch_up_policy"] = $"{AutonomousAgentOptions.SectionName}:CatchUpPolicy",
+            ["autonomous_agent_max_tool_calls"] = $"{AutonomousAgentOptions.SectionName}:MaxToolCallsPerRun",
+            ["web_search_provider"] = $"{WebSearchOptions.SectionName}:Provider",
+            ["web_search_api_key"] = $"{WebSearchOptions.SectionName}:ApiKey",
+            ["web_search_max_results"] = $"{WebSearchOptions.SectionName}:MaxResults",
+            ["web_search_country"] = $"{WebSearchOptions.SectionName}:Country",
         };
 
     public static IReadOnlyDictionary<string, string?> MapFileIfExists(string path)

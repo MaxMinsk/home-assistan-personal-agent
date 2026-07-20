@@ -38,6 +38,9 @@ public static class ServiceCollectionExtensions
         services.AddOptions<AutonomousAgentOptions>()
             .Bind(configuration.GetSection(AutonomousAgentOptions.SectionName));
 
+        services.AddOptions<WebSearchOptions>()
+            .Bind(configuration.GetSection(WebSearchOptions.SectionName));
+
         services.AddSingleton<ConfigurationStatusProvider>();
 
         return services;

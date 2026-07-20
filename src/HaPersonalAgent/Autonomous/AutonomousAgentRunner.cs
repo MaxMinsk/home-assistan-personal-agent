@@ -2,6 +2,7 @@ using System.Text.Json;
 using HaPersonalAgent.Agent;
 using HaPersonalAgent.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace HaPersonalAgent.Autonomous;
 
@@ -23,19 +24,22 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
     private readonly AutonomousAgentCapsuleWriter _capsuleWriter;
     private readonly ILogger<AutonomousAgentRunner> _logger;
     private readonly IAutonomousAgentNotifier? _notifier;
+    private readonly IOptions<AutonomousAgentOptions>? _options;
 
     public AutonomousAgentRunner(
         IAutonomousAgentRepository repository,
         IAgentRuntime agentRuntime,
         AutonomousAgentCapsuleWriter capsuleWriter,
         ILogger<AutonomousAgentRunner> logger,
-        IAutonomousAgentNotifier? notifier = null)
+        IAutonomousAgentNotifier? notifier = null,
+        IOptions<AutonomousAgentOptions>? options = null)
     {
         _repository = repository;
         _agentRuntime = agentRuntime;
         _capsuleWriter = capsuleWriter;
         _logger = logger;
         _notifier = notifier;
+        _options = options;
     }
 
     public async Task RunAsync(AutonomousAgentDefinition definition, CancellationToken cancellationToken)
@@ -64,9 +68,12 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
                 pendingReplies.Count,
                 previousSummary is not null);
 
+            // Бюджет вызовов инструментов на этот запуск: и потолок, и честный счётчик для журнала.
+            var runBudget = new AgentRunBudget(_options?.Value.MaxToolCallsPerRun ?? 20);
+
             var response = await _agentRuntime.SendAsync(
                 input,
-                BuildContext(definition, run),
+                BuildContext(definition, run, runBudget),
                 onReasoningUpdate: null,
                 cancellationToken);
 
@@ -92,9 +99,11 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
                         provider = response.Health.Provider,
                         consumedReplies = pendingReplies.Count,
                         durableFactCandidates = output.DurableFacts.Count,
+                        toolBudget = runBudget.MaxToolCalls,
+                        toolBudgetExhausted = runBudget.IsExhausted,
                     },
                     JsonOptions),
-                toolCallCount: 0);
+                toolCallCount: Math.Min(runBudget.UsedToolCalls, runBudget.MaxToolCalls));
             await _repository.UpdateRunAsync(completed, cancellationToken);
 
             // HPA-032: доставляем бриф и запоминаем id сообщения — это якорь, по которому reply
@@ -151,7 +160,10 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
         }
     }
 
-    private AgentContext BuildContext(AutonomousAgentDefinition definition, AutonomousAgentRun run) =>
+    private AgentContext BuildContext(
+        AutonomousAgentDefinition definition,
+        AutonomousAgentRun run,
+        AgentRunBudget runBudget) =>
         AgentContext.Create(
             correlationId: run.CorrelationId,
             conversationKey: $"{TransportName}:{definition.Id}",
@@ -163,7 +175,12 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
             memoryRetrievalMode: AgentOptions.MemoryRetrievalModeOnDemandTool,
             // Фоновый запуск не ведёт диалоговую историю, поэтому rolling summary ему не пересобирают.
             shouldRefreshPersistedSummary: false,
-            toolPolicy: AgentToolPolicy.ReadOnlyResearch);
+            // Границы берём из настроек конкретного агента — галочки в UI должны реально что-то значить.
+            toolPolicy: AgentToolPolicy.ReadOnlyResearch(
+                allowWebSearch: definition.ToolScope.AllowWebSearch,
+                allowHomeAssistantRead: definition.ToolScope.AllowHomeAssistantRead,
+                allowMemoryRead: definition.ToolScope.AllowMemoryRead),
+            runBudget: runBudget);
 
     private async Task<string?> GetPreviousSummaryAsync(
         string agentId,

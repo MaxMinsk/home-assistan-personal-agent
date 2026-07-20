@@ -144,6 +144,7 @@ export interface AgentRun {
   summary: string | null;
   questions: string[];
   error: string | null;
+  toolCallCount: number;
 }
 
 export interface AgentUpsert {
@@ -195,6 +196,11 @@ export function runAgentNow(agentId: string): Promise<{ ok: boolean }> {
 export function listAgentRuns(agentId: string): Promise<AgentRun[]> {
   return fetch(`api/agents/${encodeURIComponent(agentId)}/runs`, { headers: { Accept: 'application/json' } })
     .then(readJson<AgentRun[]>);
+}
+
+// Глобальный стоп-кран: ставит на паузу всех активных агентов.
+export function pauseAllAgents(): Promise<{ ok: boolean; paused: number }> {
+  return jsonRequest<{ ok: boolean; paused: number }>('api/agents/pause-all', 'POST');
 }
 
 export function replyToAgent(agentId: string, text: string): Promise<{ ok: boolean }> {

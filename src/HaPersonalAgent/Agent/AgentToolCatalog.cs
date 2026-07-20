@@ -2,6 +2,7 @@ using HaPersonalAgent.Configuration;
 using HaPersonalAgent.Confirmation;
 using HaPersonalAgent.HomeAssistant;
 using HaPersonalAgent.Memory;
+using HaPersonalAgent.Search;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -39,6 +40,7 @@ public sealed class AgentToolCatalog
     private readonly IConfirmationService? _confirmationService;
     private readonly IMemoryMcpClient? _memoryMcpClient;
     private readonly IOptions<MemoryMcpOptions>? _memoryMcpOptions;
+    private readonly IWebSearchProvider? _webSearchProvider;
     private readonly ILogger<AgentToolCatalog> _logger;
 
     public AgentToolCatalog(
@@ -47,8 +49,10 @@ public sealed class AgentToolCatalog
         HomeAssistantMcpStatusTool? homeAssistantMcpStatusTool = null,
         IConfirmationService? confirmationService = null,
         IMemoryMcpClient? memoryMcpClient = null,
-        IOptions<MemoryMcpOptions>? memoryMcpOptions = null)
+        IOptions<MemoryMcpOptions>? memoryMcpOptions = null,
+        IWebSearchProvider? webSearchProvider = null)
     {
+        _webSearchProvider = webSearchProvider;
         _statusTool = statusTool ?? throw new ArgumentNullException(nameof(statusTool));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _homeAssistantMcpStatusTool = homeAssistantMcpStatusTool;
@@ -88,11 +92,19 @@ public sealed class AgentToolCatalog
                 serializerOptions: null));
         }
 
-        tools.AddRange(homeAssistantMcpTools.Tools);
-
-        // Политика run'а решает, доступны ли рискованные инструменты: фоновый research-запуск
-        // идёт без пользователя, поэтому управление устройствами и предложения записи ему не выдаются.
+        // Политика run'а решает, какие инструменты доступны: фоновый research-запуск идёт без пользователя
+        // (нет управления устройствами и предложений записи), а владелец агента дополнительно ограничивает оси галочками.
         var toolPolicy = context.EffectiveToolPolicy;
+
+        if (toolPolicy.AllowHomeAssistantRead)
+        {
+            tools.AddRange(homeAssistantMcpTools.Tools);
+        }
+
+        if (_webSearchProvider is { IsConfigured: true } && toolPolicy.AllowWebSearch)
+        {
+            tools.Add(CreateWebSearchTool());
+        }
 
         if (_confirmationService is not null
             && homeAssistantMcpTools.ConfirmationRequiredTools.Count > 0
@@ -108,7 +120,7 @@ public sealed class AgentToolCatalog
             tools.Add(CreateMemoryMcpStatusTool());
         }
 
-        if (_memoryMcpClient is not null && _memoryMcpOptions?.Value.IsConfigured == true)
+        if (_memoryMcpClient is not null && _memoryMcpOptions?.Value.IsConfigured == true && toolPolicy.AllowMemoryRead)
         {
             tools.Add(CreateMemoryRecallTool(context));
             tools.Add(CreateMemoryTagsTool());
@@ -186,6 +198,11 @@ public sealed class AgentToolCatalog
             instructions.AppendLine("Counting and listing: a recall result shows only a page of snippets but reports the full match count as `total`. Answer 'how many X' from `total`, not from the number of snippets shown. To enumerate every item, if `hasMore` is true call memory_recall again with a larger topK or the next offset until you have covered `total` before listing.");
         }
 
+        if (_webSearchProvider is { IsConfigured: true } && context.EffectiveToolPolicy.AllowWebSearch)
+        {
+            instructions.AppendLine("Web search is available via web_search. It returns titles, urls and short snippets — NEVER full article text, so do not claim to have read a page. Cite the url behind any web-sourced claim; if the snippets do not actually support an answer, say that plainly instead of extrapolating from them.");
+        }
+
         return instructions.ToString();
     }
 
@@ -246,6 +263,41 @@ public sealed class AgentToolCatalog
             : string.Empty;
 
         return string.Join("; ", formattedTools) + suffix;
+    }
+
+    private AIFunction CreateWebSearchTool()
+    {
+        async Task<string> SearchWebAsync(string query, int count, CancellationToken cancellationToken)
+        {
+            var response = await _webSearchProvider!.SearchAsync(query, count, cancellationToken);
+
+            return JsonSerializer.Serialize(
+                new
+                {
+                    available = response.IsAvailable,
+                    query = response.Query,
+                    reason = response.Reason,
+                    count = response.Results.Count,
+                    results = response.Results.Select(result => new
+                    {
+                        title = result.Title,
+                        url = result.Url,
+                        snippet = result.Description,
+                        age = result.Age,
+                    }),
+                },
+                ToolJsonOptions);
+        }
+
+        return AIFunctionFactory.Create(
+            (Func<string, int, CancellationToken, Task<string>>)SearchWebAsync,
+            name: "web_search",
+            description: "Searches the public web and returns ranked results as title + url + a short snippet. "
+                + "IMPORTANT: it returns SNIPPETS, not full page text — do not claim to have read an article in full. "
+                + "Base every factual claim on what a snippet actually says and cite the url; if the snippets are too thin to answer, "
+                + "say so plainly and suggest what to check manually instead of guessing. Arguments: query (what to search), "
+                + "count (how many results, 1-20; use a small number unless you really need breadth). Read-only.",
+            serializerOptions: null);
     }
 
     private AIFunction CreateMemoryMcpStatusTool()

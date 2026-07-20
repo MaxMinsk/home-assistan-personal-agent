@@ -24,6 +24,7 @@ public static class WebAgentEndpoints
 
         endpoints.MapGet("/api/agents", HandleListAsync);
         endpoints.MapPost("/api/agents", HandleCreateAsync);
+        endpoints.MapPost("/api/agents/pause-all", HandlePauseAllAsync);
         endpoints.MapGet("/api/agents/{agentId}", HandleGetAsync);
         endpoints.MapPut("/api/agents/{agentId}", HandleUpdateAsync);
         endpoints.MapDelete("/api/agents/{agentId}", HandleDeleteAsync);
@@ -62,6 +63,26 @@ public static class WebAgentEndpoints
         }
 
         return Results.Json(summaries, JsonOptions);
+    }
+
+    /// <summary>
+    /// Глобальный стоп-кран: разом ставит на паузу всех активных агентов.
+    /// Идущий прямо сейчас запуск он не обрывает — тот доработает и завершится, но следующего не будет.
+    /// </summary>
+    private static async Task<IResult> HandlePauseAllAsync(
+        AutonomousAgentService agents,
+        CancellationToken cancellationToken)
+    {
+        var definitions = await agents.ListAsync(cancellationToken);
+        var paused = 0;
+
+        foreach (var definition in definitions.Where(d => d.Status == AutonomousAgentStatus.Active))
+        {
+            await agents.SetStatusAsync(definition.Id, AutonomousAgentStatus.Paused, cancellationToken);
+            paused++;
+        }
+
+        return Results.Json(new { ok = true, paused }, JsonOptions);
     }
 
     private static async Task<IResult> HandleGetAsync(
@@ -216,7 +237,8 @@ public static class WebAgentEndpoints
                 ToIso(run.FinishedUtc),
                 run.Summary,
                 ParseQuestions(run.QuestionsJson),
-                run.Error))
+                run.Error,
+                run.ToolCallCount))
             .ToList();
 
         return Results.Json(responses, JsonOptions);

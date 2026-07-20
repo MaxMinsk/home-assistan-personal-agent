@@ -65,7 +65,8 @@ public sealed record AgentRunResponse(
     string? FinishedUtc,
     string? Summary,
     IReadOnlyList<string> Questions,
-    string? Error);
+    string? Error,
+    int ToolCallCount);
 
 /// <summary>
 /// Что: тело создания/редактирования агента.

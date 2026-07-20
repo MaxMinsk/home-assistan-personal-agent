@@ -22,6 +22,12 @@ public sealed class AutonomousAgentOptions
     public int MaxConcurrentRuns { get; set; } = 1;
 
     /// <summary>
+    /// Потолок вызовов инструментов за один фоновый запуск. Защищает от длинного дорогого цикла
+    /// (особенно с включённым веб-поиском), когда рядом нет пользователя, чтобы прервать агента.
+    /// </summary>
+    public int MaxToolCallsPerRun { get; set; } = 20;
+
+    /// <summary>
     /// Что делать с пропущенными запусками (add-on был выключен): run_once — выполнить один раз сейчас; skip — просто перейти к следующему сроку.
     /// </summary>
     public string CatchUpPolicy { get; set; } = CatchUpRunOnce;

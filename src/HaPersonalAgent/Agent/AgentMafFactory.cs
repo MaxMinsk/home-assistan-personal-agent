@@ -103,6 +103,18 @@ public sealed class AgentMafFactory
             context,
             executionPlan,
             homeAssistantMcpTools).ToList();
+
+        // HPA-036: если у run есть бюджет (фоновые запуски), оборачиваем ВСЕ инструменты —
+        // и наши, и пришедшие из MCP — чтобы счётчик был честным, а потолок реально работал.
+        if (context.RunBudget is { } runBudget)
+        {
+            var budgetLogger = _loggerFactory.CreateLogger<BudgetedAIFunction>();
+            tools = tools
+                .Select(tool => tool is Microsoft.Extensions.AI.AIFunction function
+                    ? new BudgetedAIFunction(function, runBudget, budgetLogger)
+                    : tool)
+                .ToList();
+        }
         var instructions = _toolCatalog.CreateInstructions(
             context,
             executionPlan,

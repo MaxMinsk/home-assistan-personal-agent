@@ -23,7 +23,8 @@ public sealed record AgentContext(
     string? ConversationId = null,
     string? ParticipantId = null,
     LlmExecutionProfile ExecutionProfile = LlmExecutionProfile.ToolEnabled,
-    AgentToolPolicy? ToolPolicy = null)
+    AgentToolPolicy? ToolPolicy = null,
+    AgentRunBudget? RunBudget = null)
 {
     /// <summary>Политика рискованных инструментов для этого run; отсутствие политики означает обычный интерактивный диалог.</summary>
     public AgentToolPolicy EffectiveToolPolicy => ToolPolicy ?? AgentToolPolicy.Default;
@@ -44,7 +45,8 @@ public sealed record AgentContext(
         string? conversationId = null,
         string? participantId = null,
         LlmExecutionProfile executionProfile = LlmExecutionProfile.ToolEnabled,
-        AgentToolPolicy? toolPolicy = null) =>
+        AgentToolPolicy? toolPolicy = null,
+        AgentRunBudget? runBudget = null) =>
         new(
             string.IsNullOrWhiteSpace(correlationId) ? Guid.NewGuid().ToString("N") : correlationId,
             conversationMessages ?? Array.Empty<AgentConversationMessage>(),
@@ -61,5 +63,6 @@ public sealed record AgentContext(
             string.IsNullOrWhiteSpace(conversationId) ? null : conversationId.Trim(),
             string.IsNullOrWhiteSpace(participantId) ? null : participantId.Trim(),
             executionProfile,
-            toolPolicy);
+            toolPolicy,
+            runBudget);
 }

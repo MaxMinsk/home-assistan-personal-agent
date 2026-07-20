@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.12.0
+
+- **Agents can search the web.** A `web_search` tool is now available to both the chat assistant and background agents, backed by the Brave Search API. Add your key in the add-on configuration (`web_search_api_key`, plus optional `web_search_country` for regional ranking); without a key the tool is simply not offered, so the assistant never pretends it searched. This closes the main gap from 0.11.0 — research missions that depend on the outside world now actually work. (HPA-034.)
+- Brave returns titles, links and short snippets rather than full articles, and the assistant is instructed accordingly: cite the link behind every web-sourced claim, and say plainly when the snippets are too thin to answer instead of filling the gap.
+- **Per-agent permissions now really apply.** The "search the web" / "read Home Assistant" / "read long-term memory" checkboxes on an agent previously had no effect — every background run got the same tools. They are now enforced for real. Writing to long-term memory stays disabled for background runs regardless of the checkbox, since nobody is there to approve it.
+- **A run can no longer spiral.** Each background run has a tool-call budget (`autonomous_agent_max_tool_calls`, default 20). When it is spent, further tool calls stop and the agent is told to finish with what it has and state what it could not verify — it ends cleanly instead of looping. This matters most now that web search exists. (HPA-036.)
+- **Honest run stats.** The "tool calls" figure in an agent's run history was previously always 0; it now shows the real count, along with whether the run hit its budget.
+- **Stop switch.** A "стоп-кран" control in the agent roster pauses every agent at once (a run already in progress finishes; no new one starts). The `autonomous_agents_enabled` option still turns the scheduler off entirely.
+- Known gap: there is no token/cost ceiling yet — the runtime does not report usage, so rather than showing an invented number this is left out for now.
+- Internal: new `Search` layer with a pluggable `IWebSearchProvider` (Brave first, others can slot in), `AgentToolPolicy` extended to five axes and honoured by the tool catalog, and `BudgetedAIFunction` wrapping every tool of a budgeted run — including MCP-provided ones — so the cap and the counter cover everything. Sprint HPA-S5: HPA-034, HPA-036.
+
+
 ## 0.11.0
 
 - **Autonomous agents.** You can now create background agents from the panel: give one a mission (a topic you want tracked), a cadence, and what it may use — and it wakes up on its own, researches, and sends you a short brief. It never interrupts you between runs. (Sprint HPA-S4 of the autonomous-agents epic.)
