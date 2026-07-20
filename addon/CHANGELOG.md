@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.0
+
+- Add an embedded Web UI host behind Home Assistant Ingress. The add-on now serves a web panel (sidebar entry "Personal Agent") on ingress port 8099 in the same process as the worker and the Telegram bot. This release lays the foundation — a health endpoint and a placeholder page; the full management interface (conversation chat + autonomous agents) follows. New options: `web_ui_enabled` (default on) and an optional `web_api_token` that protects direct (non-ingress) access — requests that arrive through HA Ingress are trusted, so the panel needs no token. (HPA-025.)
+- Add a JSON dialogue API for the conversation agent, served by the same web host and reusing the transport-agnostic dialogue core, so Telegram and the Web UI share one runtime, history and memory: `POST /api/dialogue/turn`, `POST /api/dialogue/stream` (Server-Sent Events with live reasoning), `GET /api/dialogue/context` and `POST /api/dialogue/reset`. Web conversations use a separate `web` identity that never collides with Telegram keys. (HPA-026.)
+- Internal: the host moved from the plain generic host to ASP.NET Core `WebApplication` (Kestrel) with a `Microsoft.AspNetCore.App` framework reference; the `ask` CLI path stays server-less. Ingress path handling uses the `X-Ingress-Path` header, and the static SPA is served from `wwwroot`. First slice of the autonomous-agents epic (HPA-024), sprint HPA-S3.
+
+
 ## 0.8.0
 
 - Retire the local project-capsule subsystem (memory redesign, Phase A). Structured long-term memory now lives only in Memory MCP — read via `memory_recall`/`memory_tags`, written via `propose_memory_save` — removing the divergent local copy that caused stale and confabulated answers (the agent wrote capsules to local SQLite, mirrored them to MCP, but always read from local, so MCP fixes were invisible). Removed: capsule auto-extraction from raw events, the local `project_capsules`/extraction-state tables, the `project_capsules_list`/`project_capsule_get`/`propose_project_capsule_upsert` tools, the capsule→MCP mirror, the `/showCapsules`, `/refreshCapsules` and `/clearlocalcapsules` commands, and the `capsule_extraction_mode`/`capsule_auto_batch_raw_event_threshold` options.

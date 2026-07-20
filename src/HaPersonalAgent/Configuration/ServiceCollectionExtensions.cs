@@ -32,6 +32,9 @@ public static class ServiceCollectionExtensions
         services.AddOptions<MemoryMcpOptions>()
             .Bind(configuration.GetSection(MemoryMcpOptions.SectionName));
 
+        services.AddOptions<WebHostOptions>()
+            .Bind(configuration.GetSection(WebHostOptions.SectionName));
+
         services.AddSingleton<ConfigurationStatusProvider>();
 
         return services;

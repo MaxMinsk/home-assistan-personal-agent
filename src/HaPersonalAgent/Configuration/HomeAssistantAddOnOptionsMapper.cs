@@ -42,6 +42,8 @@ public static class HomeAssistantAddOnOptionsMapper
             ["memory_mcp_domain"] = $"{MemoryMcpOptions.SectionName}:Domain",
             ["memory_mcp_project"] = $"{MemoryMcpOptions.SectionName}:Project",
             ["memory_store_type"] = $"{MemoryMcpOptions.SectionName}:StoreType",
+            ["web_ui_enabled"] = $"{WebHostOptions.SectionName}:Enabled",
+            ["web_api_token"] = $"{WebHostOptions.SectionName}:ApiToken",
         };
 
     public static IReadOnlyDictionary<string, string?> MapFileIfExists(string path)

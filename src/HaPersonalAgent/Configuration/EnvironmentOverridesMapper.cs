@@ -15,6 +15,7 @@ public static class EnvironmentOverridesMapper
             ["HOME_ASSISTANT_LONG_LIVED_ACCESS_TOKEN"] = $"{HomeAssistantOptions.SectionName}:LongLivedAccessToken",
             ["HA_LONG_LIVED_ACCESS_TOKEN"] = $"{HomeAssistantOptions.SectionName}:LongLivedAccessToken",
             ["MEMORY_MCP_TOKEN"] = $"{MemoryMcpOptions.SectionName}:Token",
+            ["WEB_API_TOKEN"] = $"{WebHostOptions.SectionName}:ApiToken",
         };
 
     public static IReadOnlyDictionary<string, string?> Map(IReadOnlyDictionary<string, string?> environmentVariables)
