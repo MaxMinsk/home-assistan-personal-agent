@@ -41,8 +41,8 @@ public class AutonomousAgentStorageTests
         try
         {
             var definition = AutonomousAgentDefinition.Create(
-                "Бизнес в Минске",
-                "Исследуй, каким бизнесом заняться после увольнения.",
+                "Еженедельный дайджест",
+                "Тестовая миссия.",
                 AutonomousAgentScheduleKind.Weekly,
                 toolScope: AutonomousAgentToolScope.Create(true, true, true, true, 3),
                 deliveryTelegramChatId: 4242);
@@ -53,7 +53,7 @@ public class AutonomousAgentStorageTests
                 .GetDefinitionAsync(definition.Id, CancellationToken.None);
 
             Assert.NotNull(loaded);
-            Assert.Equal("Бизнес в Минске", loaded!.Name);
+            Assert.Equal("Еженедельный дайджест", loaded!.Name);
             Assert.Equal(AutonomousAgentScheduleKind.Weekly, loaded.ScheduleKind);
             Assert.Equal(AutonomousAgentStatus.Active, loaded.Status);
             Assert.Equal(4242, loaded.DeliveryTelegramChatId);
@@ -171,7 +171,7 @@ public class AutonomousAgentStorageTests
                 AutonomousAgentInboxEntry.Create(agentId, "Да, B2B интересен.", AutonomousAgentReplySource.Telegram),
                 CancellationToken.None);
             await repository.EnqueueReplyAsync(
-                AutonomousAgentInboxEntry.Create(agentId, "Регион — только Минск.", AutonomousAgentReplySource.Web),
+                AutonomousAgentInboxEntry.Create(agentId, "Ответ, пришедший из панели.", AutonomousAgentReplySource.Web),
                 CancellationToken.None);
 
             var pending = await repository.GetPendingRepliesAsync(agentId, CancellationToken.None);

@@ -156,7 +156,7 @@ public class AutonomousAgentSchedulerTests
             {
               "summary": "Три ниши выглядят реалистично.",
               "questions": ["Интересует B2B?", "Бюджет до 10k?"],
-              "durableFacts": ["Аренда в центре Минска ~25 USD/m2"],
+              "durableFacts": ["Факт, который стоит запомнить"],
               "nextFocus": "Посчитать unit-экономику кофейни"
             }
             ```
@@ -211,8 +211,8 @@ public class AutonomousAgentSchedulerTests
     public void Prompt_includes_mission_pending_replies_and_previous_focus()
     {
         var definition = AutonomousAgentDefinition.Create(
-            "Бизнес",
-            "Исследуй бизнес в Минске.",
+            "Тестовый агент",
+            "Тестовая миссия.",
             AutonomousAgentScheduleKind.Weekly);
         var continuity = new AutonomousAgentContinuity(
             definition.Id,
@@ -228,7 +228,7 @@ public class AutonomousAgentSchedulerTests
 
         var prompt = AutonomousAgentPromptBuilder.BuildRunInput(definition, continuity, replies, "Прошлая сводка");
 
-        Assert.Contains("Исследуй бизнес в Минске.", prompt, StringComparison.Ordinal);
+        Assert.Contains("Тестовая миссия.", prompt, StringComparison.Ordinal);
         Assert.Contains("Бюджет 20k USD.", prompt, StringComparison.Ordinal);
         Assert.Contains("Посчитать аренду", prompt, StringComparison.Ordinal);
         Assert.Contains("Прошлая сводка", prompt, StringComparison.Ordinal);

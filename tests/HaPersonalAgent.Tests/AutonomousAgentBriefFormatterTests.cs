@@ -13,7 +13,7 @@ public class AutonomousAgentBriefFormatterTests
     public void Brief_contains_name_summary_numbered_questions_and_reply_hint()
     {
         var definition = AutonomousAgentDefinition.Create(
-            "Бизнес в Минске",
+            "Еженедельный дайджест",
             "миссия",
             AutonomousAgentScheduleKind.Weekly);
         var output = new AutonomousRunOutput(
@@ -24,7 +24,7 @@ public class AutonomousAgentBriefFormatterTests
 
         var brief = AutonomousAgentBriefFormatter.BuildBrief(definition, output);
 
-        Assert.Contains("Бизнес в Минске", brief, StringComparison.Ordinal);
+        Assert.Contains("Еженедельный дайджест", brief, StringComparison.Ordinal);
         Assert.Contains("Нашёл три ниши.", brief, StringComparison.Ordinal);
         Assert.Contains("1. Интересует B2B?", brief, StringComparison.Ordinal);
         Assert.Contains("2. Бюджет до 20k?", brief, StringComparison.Ordinal);

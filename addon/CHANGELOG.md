@@ -2,7 +2,7 @@
 
 ## 0.11.0
 
-- **Autonomous agents.** You can now create background agents from the panel: give one a mission ("research what business to start in Minsk after I quit"), a cadence, and what it may use — and it wakes up on its own, researches, and sends you a short brief. It never interrupts you between runs. (Sprint HPA-S4 of the autonomous-agents epic.)
+- **Autonomous agents.** You can now create background agents from the panel: give one a mission (a topic you want tracked), a cadence, and what it may use — and it wakes up on its own, researches, and sends you a short brief. It never interrupts you between runs. (Sprint HPA-S4 of the autonomous-agents epic.)
 - **The reply loop.** A brief arrives in Telegram with up to three clarifying questions. Reply to that message and your answer is queued — it is folded into the context of the *next* scheduled run rather than starting one immediately. You can answer from the panel instead; both go to the same queue. Each agent carries its focus and still-open questions across runs, so it continues rather than restarting.
 - **Managing agents in the panel.** The left roster now lists your agents with a live status (running, waiting for your answer, paused) and the next run time. Each agent has tabs: Обзор (run now, pause, delete), Запуски (feed of past briefs), Вопросы (answer box), Настройки (mission, schedule, Telegram target, permissions), Память (what it is focused on and its memory note).
 - **Memory stays clean.** Each agent keeps exactly ONE note in long-term memory — a research capsule rewritten on every run, so notes never pile up. Beyond that it may save at most a few durable facts per run (hard cap of 5), and everything else — run history, briefs, your answers — stays local to the add-on.

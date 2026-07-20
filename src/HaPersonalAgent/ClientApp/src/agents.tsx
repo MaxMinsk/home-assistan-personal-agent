@@ -352,7 +352,7 @@ export function AgentForm(props: {
         <input
           class="form-input"
           value={name}
-          placeholder="Бизнес в Минске"
+          placeholder="Еженедельный дайджест"
           onInput={(e) => { setName((e.target as HTMLInputElement).value); setSaved(false); }}
         />
       </label>
@@ -362,7 +362,7 @@ export function AgentForm(props: {
         <textarea
           class="form-input form-input--area"
           value={mission}
-          placeholder="Исследуй, каким бизнесом заняться в Минске после увольнения: ниши, unit-экономика, барьеры входа."
+          placeholder="Опиши, что отслеживать и на что смотреть. Например: следи за выбранной темой и раз в неделю присылай ключевые находки и открытые вопросы."
           onInput={(e) => { setMission((e.target as HTMLTextAreaElement).value); setSaved(false); }}
         />
       </label>

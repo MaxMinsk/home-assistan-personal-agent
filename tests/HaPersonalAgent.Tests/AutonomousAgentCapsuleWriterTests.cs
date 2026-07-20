@@ -107,8 +107,8 @@ public class AutonomousAgentCapsuleWriterTests
 
     private static AutonomousAgentDefinition CreateAgent(int maxDurableFacts) =>
         AutonomousAgentDefinition.Create(
-            "Бизнес в Минске",
-            "Исследуй бизнес.",
+            "Еженедельный дайджест",
+            "Тестовая миссия.",
             AutonomousAgentScheduleKind.Weekly,
             toolScope: AutonomousAgentToolScope.Create(true, true, true, true, maxDurableFacts));
 
