@@ -18,6 +18,7 @@ public class AutonomousAgentBriefFormatterTests
             AutonomousAgentScheduleKind.Weekly);
         var output = new AutonomousRunOutput(
             "Нашёл три ниши.",
+            new[] { "Ниша A выглядит перспективно", "Ниша B перегрета" },
             new[] { "Интересует B2B?", "Бюджет до 20k?" },
             Array.Empty<string>(),
             "дальше");

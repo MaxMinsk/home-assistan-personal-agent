@@ -95,9 +95,7 @@ public sealed class AutonomousAgentCapsuleWriter
             ["payload"] = new Dictionary<string, object?>
             {
                 ["project"] = BuildProjectSlug(definition),
-                ["state"] = Truncate(
-                    string.IsNullOrWhiteSpace(output.Summary) ? "Запуск не дал сводки." : output.Summary,
-                    MaxStateLength),
+                ["state"] = Truncate(BuildStateText(output), MaxStateLength),
                 ["open_issues"] = output.Questions.ToArray(),
                 ["updated"] = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
             },
@@ -203,7 +201,7 @@ public sealed class AutonomousAgentCapsuleWriter
         builder.AppendLine(definition.Mission);
         builder.AppendLine();
         builder.AppendLine("## Текущее состояние исследования");
-        builder.AppendLine(string.IsNullOrWhiteSpace(output.Summary) ? "(нет сводки)" : output.Summary);
+        builder.AppendLine(BuildStateText(output));
 
         if (output.Questions.Count > 0)
         {
@@ -223,6 +221,24 @@ public sealed class AutonomousAgentCapsuleWriter
         }
 
         return builder.ToString();
+    }
+
+    /// <summary>Сводка теперь — лишь рамка, суть в findings; в состояние капсулы кладём и то, и другое.</summary>
+    private static string BuildStateText(AutonomousRunOutput output)
+    {
+        var builder = new StringBuilder();
+        if (!string.IsNullOrWhiteSpace(output.Summary))
+        {
+            builder.AppendLine(output.Summary.Trim());
+        }
+
+        foreach (var finding in output.Findings)
+        {
+            builder.AppendLine($"- {finding}");
+        }
+
+        var text = builder.ToString().Trim();
+        return text.Length == 0 ? "Запуск не дал результата." : text;
     }
 
     private static string BuildProjectSlug(AutonomousAgentDefinition definition)

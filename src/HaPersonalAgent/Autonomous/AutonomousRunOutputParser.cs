@@ -10,6 +10,7 @@ namespace HaPersonalAgent.Autonomous;
 public static class AutonomousRunOutputParser
 {
     private const int MaxQuestions = 3;
+    private const int MaxFindings = 5;
     private const int MaxSummaryLength = 4_000;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -36,6 +37,7 @@ public static class AutonomousRunOutputParser
             Truncate(responseText.Trim(), MaxSummaryLength),
             Array.Empty<string>(),
             Array.Empty<string>(),
+            Array.Empty<string>(),
             NextFocus: null);
     }
 
@@ -58,6 +60,7 @@ public static class AutonomousRunOutputParser
 
             return new AutonomousRunOutput(
                 Truncate(summary.Trim(), MaxSummaryLength),
+                ReadStringArray(root, "findings", MaxFindings),
                 ReadStringArray(root, "questions", MaxQuestions),
                 ReadStringArray(root, "durableFacts", Math.Max(0, maxDurableFacts)),
                 ReadString(root, "nextFocus")?.Trim());

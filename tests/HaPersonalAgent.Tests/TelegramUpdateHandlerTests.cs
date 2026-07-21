@@ -1255,6 +1255,7 @@ public class TelegramUpdateHandlerTests
         public List<(long ChatId, int MessageId)> DeletedMessages { get; } = new();
         public List<(long ChatId, int MessageId)> ClearedInlineKeyboards { get; } = new();
         public List<(string CallbackQueryId, string? Text, bool ShowAlert)> AnsweredCallbackQueries { get; } = new();
+        public List<(long ChatId, string Text, IReadOnlyList<(string Label, string CallbackData)> Buttons)> SentButtonMessages { get; } = new();
         public List<IReadOnlyList<(string Command, string Description)>> ConfiguredCommands { get; } = new();
         private int _nextMessageId = 10;
 
@@ -1321,6 +1322,18 @@ public class TelegramUpdateHandlerTests
             SentConfirmationMessages.Add((chatId, text, confirmationId));
             SentMessages.Add((chatId, text));
             return Task.CompletedTask;
+        }
+
+        public Task<int> SendMessageWithButtonsAsync(
+            long chatId,
+            string text,
+            IReadOnlyList<(string Label, string CallbackData)> buttons,
+            CancellationToken cancellationToken)
+        {
+            var messageId = Interlocked.Increment(ref _nextMessageId);
+            SentButtonMessages.Add((chatId, text, buttons));
+            SentMessagesWithIds.Add((chatId, messageId, text));
+            return Task.FromResult(messageId);
         }
 
         public Task ClearInlineKeyboardAsync(

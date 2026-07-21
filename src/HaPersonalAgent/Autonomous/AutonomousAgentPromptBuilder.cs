@@ -75,7 +75,8 @@ public static class AutonomousAgentPromptBuilder
         builder.AppendLine("## Answer format (respond with ONLY this JSON object)");
         builder.AppendLine("""
             {
-              "summary": "3-5 short findings as plain text, most important first; this is what the user reads",
+              "summary": "one or two sentences framing what this run covered",
+              "findings": ["3-5 findings, most important first; each a single scannable line: thesis + one-line support"],
               "questions": ["clarifying question 1", "clarifying question 2"],
               "durableFacts": ["a durable fact worth remembering long-term, only if genuinely reusable"],
               "nextFocus": "one sentence: what you will work on next run"

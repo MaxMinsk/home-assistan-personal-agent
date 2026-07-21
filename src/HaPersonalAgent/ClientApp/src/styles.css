@@ -826,6 +826,54 @@ button {
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
+/* ---------- Agent templates (HPA-040) ---------- */
+.templates {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.template {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  text-align: left;
+  padding: 14px 15px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text);
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+
+.template:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-weak);
+}
+
+.template--blank {
+  border-style: dashed;
+}
+
+.template__label {
+  font-weight: 600;
+}
+
+.template__blurb {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.template__badge {
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  color: var(--wait);
+}
+
 /* ---------- Forms ---------- */
 .form-row {
   display: block;

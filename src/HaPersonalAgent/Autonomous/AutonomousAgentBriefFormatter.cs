@@ -21,8 +21,17 @@ public static class AutonomousAgentBriefFormatter
         builder.AppendLine($"🤖 {definition.Name}");
         builder.AppendLine();
         builder.AppendLine(string.IsNullOrWhiteSpace(output.Summary)
-            ? "Запуск завершился без сводки."
+            ? (output.Findings.Count > 0 ? "Итоги запуска:" : "Запуск завершился без сводки.")
             : output.Summary.Trim());
+
+        if (output.Findings.Count > 0)
+        {
+            builder.AppendLine();
+            foreach (var finding in output.Findings)
+            {
+                builder.AppendLine($"• {finding}");
+            }
+        }
 
         if (output.Questions.Count > 0)
         {

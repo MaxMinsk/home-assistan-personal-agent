@@ -131,6 +131,28 @@ public sealed class TelegramBotClientAdapter : ITelegramBotClientAdapter
             cancellationToken: cancellationToken);
     }
 
+    public async Task<int> SendMessageWithButtonsAsync(
+        long chatId,
+        string text,
+        IReadOnlyList<(string Label, string CallbackData)> buttons,
+        CancellationToken cancellationToken)
+    {
+        var replyMarkup = new InlineKeyboardMarkup(
+            new[]
+            {
+                buttons
+                    .Select(button => InlineKeyboardButton.WithCallbackData(button.Label, button.CallbackData))
+                    .ToArray(),
+            });
+        var message = await _client.SendMessage(
+            chatId: chatId,
+            text: text,
+            replyMarkup: replyMarkup,
+            cancellationToken: cancellationToken);
+
+        return message.Id;
+    }
+
     public async Task ClearInlineKeyboardAsync(
         long chatId,
         int messageId,

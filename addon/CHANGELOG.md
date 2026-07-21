@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.0
+
+- **Fix: the assistant failed with an "empty text content" error whenever it used a tool across more than one step.** This hit any multi-step tool turn (and became common now that web search exists). The assistant message that carries a tool call was being sent with an empty text field, which the model provider rejects; it is now sent correctly. (HPA-042.)
+- **Agent briefs are now scannable and interactive.** A background agent's brief arrives as a short framing line, 3–5 bullet findings, and up to three questions — not a wall of text. In Telegram the brief carries two buttons: "⏭ Отложить" (the questions wait for the next run) and "🚫 Не актуально" (drop this thread — the agent stops raising it and moves on). Text replies still work by replying to the message. The same content now also shows in the panel's run history and the agent's memory note. (HPA-038.)
+- **Create an agent from a template.** The "+ New agent" flow now opens with ready-made templates — business research, regulatory watch, opportunity scan, learning plan, and a home-and-garden helper — each prefilling the mission, cadence and permissions so a useful agent is one click away. Everything stays editable, and templates that need web search are flagged when no Brave key is configured. (HPA-040.)
+- Internal: the run contract gained a `findings` field; a general inline-button send was added to the Telegram adapter; a new `GET /api/capabilities` reports whether web search and memory are configured. Sprint HPA-S6: HPA-038, HPA-040, HPA-042.
+
+
 ## 0.12.0
 
 - **Agents can search the web.** A `web_search` tool is now available to both the chat assistant and background agents, backed by the Brave Search API. Add your key in the add-on configuration (`web_search_api_key`, plus optional `web_search_country` for regional ranking); without a key the tool is simply not offered, so the assistant never pretends it searched. This closes the main gap from 0.11.0 — research missions that depend on the outside world now actually work. (HPA-034.)

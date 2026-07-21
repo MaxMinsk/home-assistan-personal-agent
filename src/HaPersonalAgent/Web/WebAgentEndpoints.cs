@@ -1,9 +1,13 @@
 using System.Globalization;
 using System.Text.Json;
 using HaPersonalAgent.Autonomous;
+using HaPersonalAgent.Configuration;
+using HaPersonalAgent.Memory;
+using HaPersonalAgent.Search;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Options;
 
 namespace HaPersonalAgent.Web;
 
@@ -22,6 +26,7 @@ public static class WebAgentEndpoints
     {
         ArgumentNullException.ThrowIfNull(endpoints);
 
+        endpoints.MapGet("/api/capabilities", HandleCapabilities);
         endpoints.MapGet("/api/agents", HandleListAsync);
         endpoints.MapPost("/api/agents", HandleCreateAsync);
         endpoints.MapPost("/api/agents/pause-all", HandlePauseAllAsync);
@@ -35,6 +40,21 @@ public static class WebAgentEndpoints
 
         return endpoints;
     }
+
+    /// <summary>
+    /// Сообщает UI, какие возможности реально настроены, чтобы форма/шаблоны честно помечали то, что не заработает
+    /// без ключа (веб-поиск) или без настроенной памяти.
+    /// </summary>
+    private static IResult HandleCapabilities(
+        IWebSearchProvider? webSearch,
+        IOptions<MemoryMcpOptions> memoryOptions) =>
+        Results.Json(
+            new
+            {
+                webSearchConfigured = webSearch?.IsConfigured ?? false,
+                memoryConfigured = memoryOptions.Value.IsConfigured,
+            },
+            JsonOptions);
 
     private static async Task<IResult> HandleListAsync(
         AutonomousAgentService agents,

@@ -17,6 +17,11 @@ namespace HaPersonalAgent.Telegram;
 public sealed class TelegramAutonomousAgentNotifier : IAutonomousAgentNotifier
 {
     public const string BriefNotificationKind = "autonomous.agent_brief";
+
+    /// <summary>Callback-префиксы кнопок брифа; по ним TelegramUpdateHandler маршрутизирует нажатия (HPA-038).</summary>
+    public const string SnoozeCallbackPrefix = "agentbrief:snooze:";
+    public const string DismissCallbackPrefix = "agentbrief:dismiss:";
+
     private const string TelegramTransportName = "telegram";
 
     private readonly ITelegramBotClientAdapterFactory _clientFactory;
@@ -71,9 +76,28 @@ public sealed class TelegramAutonomousAgentNotifier : IAutonomousAgentNotifier
         {
             var client = _clientFactory.Create(botToken);
             int? lastMessageId = null;
-            foreach (var chunk in chunks)
+            for (var index = 0; index < chunks.Count; index++)
             {
-                lastMessageId = await client.SendMessageWithIdAsync(chatId, chunk, cancellationToken);
+                var isLast = index == chunks.Count - 1;
+
+                // К последнему чанку крепим кнопки только когда есть открытые вопросы: «Отложить» (ответлю позже)
+                // и «Не актуально» (сними эту ветку). Обычный ответ по-прежнему делается реплаем (HPA-032).
+                if (isLast && output.Questions.Count > 0)
+                {
+                    lastMessageId = await client.SendMessageWithButtonsAsync(
+                        chatId,
+                        chunks[index],
+                        new[]
+                        {
+                            ("⏭ Отложить", $"{SnoozeCallbackPrefix}{run.Id}"),
+                            ("🚫 Не актуально", $"{DismissCallbackPrefix}{run.Id}"),
+                        },
+                        cancellationToken);
+                }
+                else
+                {
+                    lastMessageId = await client.SendMessageWithIdAsync(chatId, chunks[index], cancellationToken);
+                }
             }
 
             await RecordNotificationAsync(definition, run, chatId, brief, cancellationToken);

@@ -43,6 +43,7 @@ public class AutonomousAgentCapsuleWriterTests
         var output = new AutonomousRunOutput(
             "сводка",
             Array.Empty<string>(),
+            Array.Empty<string>(),
             new[] { "факт 1", "факт 2", "факт 3", "факт 4" },
             "дальше");
 
@@ -113,7 +114,7 @@ public class AutonomousAgentCapsuleWriterTests
             toolScope: AutonomousAgentToolScope.Create(true, true, true, true, maxDurableFacts));
 
     private static AutonomousRunOutput CreateOutput() =>
-        new("Текущее состояние", new[] { "Вопрос?" }, Array.Empty<string>(), "следующий шаг");
+        new("Текущее состояние", Array.Empty<string>(), new[] { "Вопрос?" }, Array.Empty<string>(), "следующий шаг");
 
     private sealed record UpsertCall(string Type, string DedupKey);
 

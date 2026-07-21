@@ -170,6 +170,45 @@ public sealed class AutonomousAgentService
         CancellationToken cancellationToken) =>
         _repository.GetPendingRepliesAsync(agentId, cancellationToken);
 
+    /// <summary>
+    /// «Не актуально» из брифа: снимает открытые вопросы этой ветки, чтобы агент перестал их поднимать,
+    /// и кладёт в очередь явную инструкцию двигаться дальше — она попадёт в контекст следующего запуска.
+    /// </summary>
+    public async Task<AutonomousAgentDefinition?> DismissBriefThreadsAsync(
+        string agentId,
+        string? runId,
+        AutonomousAgentReplySource source,
+        CancellationToken cancellationToken)
+    {
+        var existing = await _repository.GetDefinitionAsync(agentId, cancellationToken);
+        if (existing is null)
+        {
+            return null;
+        }
+
+        await _repository.EnqueueReplyAsync(
+            AutonomousAgentInboxEntry.Create(
+                agentId,
+                "[Пользователь отметил вопросы прошлого брифа как неактуальные. Не поднимай их снова — двигайся дальше по миссии.]",
+                source,
+                runId),
+            cancellationToken);
+
+        // Открытые вопросы больше не «открыты»: убираем их из continuity, чтобы они не переинъектировались как ещё висящие.
+        var continuity = await _repository.GetContinuityAsync(agentId, cancellationToken)
+            ?? AutonomousAgentContinuity.Empty(agentId);
+        await _repository.UpsertContinuityAsync(
+            continuity with { OpenQuestions = null, UpdatedUtc = DateTimeOffset.UtcNow },
+            cancellationToken);
+
+        _logger.LogInformation(
+            "Autonomous agent {AgentId} had its brief threads dismissed from {Source}; open questions cleared and a move-on note queued for the next run.",
+            agentId,
+            source);
+
+        return existing;
+    }
+
     public Task<AutonomousAgentContinuity?> GetContinuityAsync(
         string agentId,
         CancellationToken cancellationToken) =>

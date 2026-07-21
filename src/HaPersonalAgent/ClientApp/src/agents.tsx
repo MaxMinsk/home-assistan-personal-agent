@@ -3,6 +3,7 @@ import {
   createAgent,
   deleteAgent,
   getAgent,
+  getCapabilities,
   listAgentRuns,
   replyToAgent,
   runAgentNow,
@@ -12,6 +13,7 @@ import {
   type AgentRun,
   type AgentToolScope,
   type AgentUpsert,
+  type Capabilities,
 } from './api';
 
 // Что: экраны управления автономным агентом (детальная панель и форма создания).
@@ -35,6 +37,107 @@ const DEFAULT_TOOL_SCOPE: AgentToolScope = {
   allowMemoryWrite: true,
   maxDurableFactsPerRun: 3,
 };
+
+// Префилл формы: подмножество полей агента, которым можно заполнить форму (шаблон или редактирование).
+export interface AgentFormPrefill {
+  name?: string;
+  mission?: string;
+  scheduleKind?: string;
+  scheduleExpression?: string | null;
+  deliveryTelegramChatId?: number | null;
+  toolScope?: AgentToolScope;
+}
+
+interface AgentTemplate {
+  id: string;
+  label: string;
+  blurb: string;
+  needsWebSearch: boolean;
+  prefill: AgentFormPrefill;
+}
+
+const webScope = (): AgentToolScope => ({
+  allowHomeAssistantRead: false,
+  allowWebSearch: true,
+  allowMemoryRead: true,
+  allowMemoryWrite: true,
+  maxDurableFactsPerRun: 3,
+});
+
+// Шаблоны — это ДАННЫЕ, а не код: строка миссии + каденция + границы инструментов. Любое поле правится перед сохранением.
+const AGENT_TEMPLATES: AgentTemplate[] = [
+  {
+    id: 'business',
+    label: 'Бизнес-исследование',
+    blurb: 'Ниши, спрос, конкуренция, unit-экономика по открытым данным.',
+    needsWebSearch: true,
+    prefill: {
+      name: 'Бизнес-исследование',
+      mission:
+        'Исследуй перспективные ниши для нового бизнеса: спрос, конкуренцию, оценку unit-экономики по открытым данным и барьеры входа. Раз в неделю присылай 3–5 находок и, при необходимости, уточняющие вопросы.',
+      scheduleKind: 'Weekly',
+      toolScope: webScope(),
+    },
+  },
+  {
+    id: 'legal',
+    label: 'Мониторинг регулирования',
+    blurb: 'Изменения в законах и правилах по твоим темам.',
+    needsWebSearch: true,
+    prefill: {
+      name: 'Мониторинг регулирования',
+      mission:
+        'Отслеживай изменения в законодательстве и регулировании по темам, которые я укажу. Сообщай, что вступило в силу или готовится, и как это может меня касаться.',
+      scheduleKind: 'Weekly',
+      toolScope: webScope(),
+    },
+  },
+  {
+    id: 'asset',
+    label: 'Поиск возможностей',
+    blurb: 'Торги, объявления, распродажи ниже рынка со сроками.',
+    needsWebSearch: true,
+    prefill: {
+      name: 'Поиск возможностей',
+      mission:
+        'Ищи выгодные предложения и возможности (торги, объявления, распродажи) по заданным категориям и региону. Отмечай то, что заметно ниже рынка, и указывай сроки.',
+      scheduleKind: 'Weekly',
+      toolScope: webScope(),
+    },
+  },
+  {
+    id: 'learning',
+    label: 'План обучения',
+    blurb: 'Микро-план на неделю: ключевая статья + следующий шаг.',
+    needsWebSearch: true,
+    prefill: {
+      name: 'План обучения',
+      mission:
+        'Составляй еженедельный микро-план обучения по моим темам: одна ключевая статья или кейс с кратким пересказом и ссылками, плюс конкретный следующий шаг.',
+      scheduleKind: 'Weekly',
+      toolScope: webScope(),
+    },
+  },
+  {
+    id: 'home',
+    label: 'Дом и сад',
+    blurb: 'Сезонные напоминания с учётом датчиков дома. Без веб-поиска.',
+    needsWebSearch: false,
+    prefill: {
+      name: 'Дом и сад',
+      mission:
+        'С учётом сезона и данных датчиков дома давай практичные напоминания по саду и хозяйству: что и когда пора сделать, на что обратить внимание по погоде.',
+      scheduleKind: 'Weekly',
+      toolScope: {
+        allowHomeAssistantRead: true,
+        allowWebSearch: false,
+        allowMemoryRead: true,
+        allowMemoryWrite: true,
+        maxDurableFactsPerRun: 3,
+      },
+    },
+  },
+];
 
 export function formatDateTime(iso: string | null | undefined): string {
   if (!iso) {
@@ -307,7 +410,7 @@ function QuestionsTab(props: { agent: AgentDetail; runs: AgentRun[]; onAnswered:
 }
 
 export function AgentForm(props: {
-  initial?: AgentDetail;
+  initial?: AgentFormPrefill;
   submitLabel: string;
   onSubmit: (request: AgentUpsert) => Promise<void>;
   onCancel?: () => void;
@@ -472,15 +575,58 @@ export function AgentForm(props: {
 }
 
 export function AgentCreateView(props: { onCreated: (agentId: string) => void; onCancel: () => void }) {
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
+  const [prefill, setPrefill] = useState<AgentFormPrefill | null>(null);
+
+  useEffect(() => {
+    getCapabilities()
+      .then(setCapabilities)
+      .catch(() => setCapabilities(null));
+  }, []);
+
+  if (prefill) {
+    return (
+      <AgentForm
+        initial={prefill}
+        submitLabel="Создать агента"
+        onCancel={() => setPrefill(null)}
+        onSubmit={async (request) => {
+          const created = await createAgent(request);
+          props.onCreated(created.id);
+        }}
+      />
+    );
+  }
+
   return (
-    <AgentForm
-      submitLabel="Создать агента"
-      onCancel={props.onCancel}
-      onSubmit={async (request) => {
-        const created = await createAgent(request);
-        props.onCreated(created.id);
-      }}
-    />
+    <div class="panel-pad">
+      <p class="hint">
+        Начни с шаблона или создай с нуля. Любое поле можно поправить перед сохранением.
+      </p>
+      <div class="templates">
+        {AGENT_TEMPLATES.map((template) => {
+          const webBlocked = template.needsWebSearch && capabilities !== null && !capabilities.webSearchConfigured;
+          return (
+            <button key={template.id} class="template" type="button" onClick={() => setPrefill(template.prefill)}>
+              <span class="template__label">{template.label}</span>
+              <span class="template__blurb">{template.blurb}</span>
+              {webBlocked && (
+                <span class="template__badge">нужен ключ Brave в настройках add-on</span>
+              )}
+            </button>
+          );
+        })}
+        <button class="template template--blank" type="button" onClick={() => setPrefill({})}>
+          <span class="template__label">С нуля</span>
+          <span class="template__blurb">Пустая форма — опиши миссию сам.</span>
+        </button>
+      </div>
+      <div class="form-actions">
+        <button class="mini" type="button" onClick={props.onCancel}>
+          Отмена
+        </button>
+      </div>
+    </div>
   );
 }
 

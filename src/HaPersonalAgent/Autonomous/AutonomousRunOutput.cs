@@ -7,12 +7,14 @@ namespace HaPersonalAgent.Autonomous;
 /// </summary>
 public sealed record AutonomousRunOutput(
     string Summary,
+    IReadOnlyList<string> Findings,
     IReadOnlyList<string> Questions,
     IReadOnlyList<string> DurableFacts,
     string? NextFocus)
 {
     public static AutonomousRunOutput Empty { get; } = new(
         string.Empty,
+        Array.Empty<string>(),
         Array.Empty<string>(),
         Array.Empty<string>(),
         NextFocus: null);

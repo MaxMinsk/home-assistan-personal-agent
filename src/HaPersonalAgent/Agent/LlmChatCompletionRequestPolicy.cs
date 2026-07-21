@@ -94,6 +94,18 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
             patchKind = LlmRequestPatchKind.AutoToolStepSafetyDisable;
         }
 
+        // Провайдерская особенность Moonshot: assistant-сообщение с tool_calls и content: ""
+        // отклоняется с "Invalid request: text content is empty". По спецификации OpenAI у такого
+        // сообщения content может быть null, поэтому нормализуем пустую строку в null.
+        if (TryNormalizeEmptyToolCallContent(root))
+        {
+            patched = true;
+            if (patchKind == LlmRequestPatchKind.None)
+            {
+                patchKind = LlmRequestPatchKind.EmptyToolCallContentNormalized;
+            }
+        }
+
         if (!patched)
         {
             patchKind = LlmRequestPatchKind.None;
@@ -131,6 +143,69 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         };
 
         return true;
+    }
+
+    /// <summary>
+    /// Нормализует пустой content у assistant-сообщений, несущих tool_calls.
+    /// Такие сообщения легальны по спецификации OpenAI с content = null, но Moonshot отвергает
+    /// именно пустую СТРОКУ ("Invalid request: text content is empty"), что ломало любой tool-шаг.
+    /// </summary>
+    internal static bool TryNormalizeEmptyToolCallContent(JsonObject root)
+    {
+        if (root["messages"] is not JsonArray messages)
+        {
+            return false;
+        }
+
+        var changed = false;
+        foreach (var item in messages)
+        {
+            if (item is not JsonObject message)
+            {
+                continue;
+            }
+
+            if (!string.Equals(message["role"]?.GetValue<string>(), "assistant", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (message["tool_calls"] is not JsonArray toolCalls || toolCalls.Count == 0)
+            {
+                continue;
+            }
+
+            if (!IsEmptyContent(message["content"]))
+            {
+                continue;
+            }
+
+            message["content"] = null;
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    private static bool IsEmptyContent(JsonNode? contentNode)
+    {
+        // null уже допустим — трогать нечего.
+        if (contentNode is null)
+        {
+            return false;
+        }
+
+        if (contentNode is JsonArray array)
+        {
+            return array.Count == 0;
+        }
+
+        if (contentNode is JsonValue value)
+        {
+            return value.TryGetValue<string>(out var text) && string.IsNullOrEmpty(text);
+        }
+
+        return false;
     }
 
     private static bool HasAssistantToolCallsWithoutReasoning(JsonObject root)
@@ -298,6 +373,10 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
                 _logger.LogWarning(
                     "LLM request patch applied safety fallback: thinking disabled for this tool-step request because assistant tool-call history has missing reasoning_content.");
                 break;
+            case LlmRequestPatchKind.EmptyToolCallContentNormalized:
+                _logger.LogInformation(
+                    "LLM request patch normalized empty content on assistant tool-call messages to null (provider rejects an empty string).");
+                break;
             case LlmRequestPatchKind.ForcedThinkingDisable:
                 _logger.LogInformation(
                     "LLM request patch forced thinking disabled by execution plan.");
@@ -324,5 +403,6 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         ForcedThinkingDisable,
         ForcedThinkingEnable,
         AutoToolStepSafetyDisable,
+        EmptyToolCallContentNormalized,
     }
 }

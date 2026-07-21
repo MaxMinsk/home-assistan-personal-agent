@@ -39,6 +39,12 @@ public interface ITelegramBotClientAdapter
         string confirmationId,
         CancellationToken cancellationToken);
 
+    Task<int> SendMessageWithButtonsAsync(
+        long chatId,
+        string text,
+        IReadOnlyList<(string Label, string CallbackData)> buttons,
+        CancellationToken cancellationToken);
+
     Task ClearInlineKeyboardAsync(
         long chatId,
         int messageId,

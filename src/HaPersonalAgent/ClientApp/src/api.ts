@@ -164,6 +164,15 @@ function jsonRequest<T>(path: string, method: string, body?: unknown): Promise<T
   }).then(readJson<T>);
 }
 
+export interface Capabilities {
+  webSearchConfigured: boolean;
+  memoryConfigured: boolean;
+}
+
+export function getCapabilities(): Promise<Capabilities> {
+  return fetch('api/capabilities', { headers: { Accept: 'application/json' } }).then(readJson<Capabilities>);
+}
+
 export function listAgents(): Promise<AgentSummary[]> {
   return fetch('api/agents', { headers: { Accept: 'application/json' } }).then(readJson<AgentSummary[]>);
 }

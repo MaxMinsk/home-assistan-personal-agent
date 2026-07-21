@@ -88,7 +88,7 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
                 definition.ToolScope.MaxDurableFactsPerRun);
 
             var completed = run.Complete(
-                summary: string.IsNullOrWhiteSpace(output.Summary) ? response.Text : output.Summary,
+                summary: ComposeRunSummary(output, response.Text),
                 questionsJson: output.Questions.Count > 0
                     ? JsonSerializer.Serialize(output.Questions, JsonOptions)
                     : null,
@@ -158,6 +158,27 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
                 definition.Id);
             await FailRunAsync(run, $"{exception.GetType().Name}: {exception.Message}");
         }
+    }
+
+    /// <summary>
+    /// Сводка для журнала запусков и UI: суть теперь в findings, поэтому склеиваем рамку + тезисы,
+    /// чтобы вкладка «Запуски» показывала то же содержание, что и бриф в Telegram.
+    /// </summary>
+    private static string ComposeRunSummary(AutonomousRunOutput output, string fallbackText)
+    {
+        var builder = new System.Text.StringBuilder();
+        if (!string.IsNullOrWhiteSpace(output.Summary))
+        {
+            builder.AppendLine(output.Summary.Trim());
+        }
+
+        foreach (var finding in output.Findings)
+        {
+            builder.AppendLine($"• {finding}");
+        }
+
+        var composed = builder.ToString().Trim();
+        return composed.Length > 0 ? composed : fallbackText;
     }
 
     private AgentContext BuildContext(

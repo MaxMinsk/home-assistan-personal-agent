@@ -356,6 +356,15 @@ public sealed class TelegramUpdateHandler
             return;
         }
 
+        // HPA-038: кнопки брифа автономного агента (Отложить / Не актуально).
+        if (callbackData is not null
+            && (callbackData.StartsWith(TelegramAutonomousAgentNotifier.SnoozeCallbackPrefix, StringComparison.Ordinal)
+                || callbackData.StartsWith(TelegramAutonomousAgentNotifier.DismissCallbackPrefix, StringComparison.Ordinal)))
+        {
+            await HandleAgentBriefCallbackAsync(client, callbackQuery, callbackData, cancellationToken);
+            return;
+        }
+
         if (!TryParseConfirmationCallbackData(callbackData, out var actionId, out var approve))
         {
             await client.AnswerCallbackQueryAsync(
@@ -536,6 +545,72 @@ public sealed class TelegramUpdateHandler
                 ? "Принято: агент проснётся в ближайшую минуту, сводка придёт сюда."
                 : $"Агент с id {agentId} не найден. Список — /agents.",
             cancellationToken);
+    }
+
+    private async Task HandleAgentBriefCallbackAsync(
+        ITelegramBotClientAdapter client,
+        CallbackQuery callbackQuery,
+        string callbackData,
+        CancellationToken cancellationToken)
+    {
+        var isDismiss = callbackData.StartsWith(TelegramAutonomousAgentNotifier.DismissCallbackPrefix, StringComparison.Ordinal);
+        var prefix = isDismiss
+            ? TelegramAutonomousAgentNotifier.DismissCallbackPrefix
+            : TelegramAutonomousAgentNotifier.SnoozeCallbackPrefix;
+        var runId = callbackData[prefix.Length..].Trim();
+        var chatId = callbackQuery.Message!.Chat.Id;
+
+        await client.AnswerCallbackQueryAsync(
+            callbackQuery.Id,
+            isDismiss ? "Снимаю эту ветку..." : "Откладываю...",
+            showAlert: false,
+            cancellationToken);
+
+        // Кнопки одноразовые — убираем клавиатуру, чтобы по ней нельзя было нажать повторно.
+        try
+        {
+            await client.ClearInlineKeyboardAsync(chatId, callbackQuery.Message.Id, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogDebug(exception, "Failed to clear brief keyboard for run {RunId}.", runId);
+        }
+
+        if (_autonomousAgentService is null || _autonomousAgentRepository is null || string.IsNullOrWhiteSpace(runId))
+        {
+            return;
+        }
+
+        var run = await _autonomousAgentRepository.GetRunAsync(runId, cancellationToken);
+        if (run is null)
+        {
+            await client.SendMessageAsync(chatId, "Этот бриф уже неактуален.", cancellationToken);
+            return;
+        }
+
+        if (isDismiss)
+        {
+            var agent = await _autonomousAgentService.DismissBriefThreadsAsync(
+                run.AgentId,
+                run.Id,
+                Autonomous.AutonomousAgentReplySource.Telegram,
+                cancellationToken);
+            await client.SendMessageAsync(
+                chatId,
+                agent is null
+                    ? "Агент уже удалён."
+                    : $"Понял, снял эти вопросы у агента «{agent.Name}» — больше не буду их поднимать.",
+                cancellationToken);
+        }
+        else
+        {
+            // «Отложить» — мягкий перенос: ничего не меняем, вопросы просто дождутся следующего планового запуска.
+            var agent = await _autonomousAgentService.GetAsync(run.AgentId, cancellationToken);
+            var nextRun = agent?.NextRunUtc is { } next
+                ? $" Вопросы подниму снова в следующем запуске ({next:yyyy-MM-dd HH:mm} UTC)."
+                : " Вопросы подниму снова в следующем запуске.";
+            await client.SendMessageAsync(chatId, $"Отложено.{nextRun}", cancellationToken);
+        }
     }
 
     private async Task HandleConfirmationCommandAsync(
