@@ -160,7 +160,7 @@ public class WebSearchTests
                 maxDurableFactsPerRun: 1));
         await repository.UpsertDefinitionAsync(definition, CancellationToken.None);
 
-        await runner.RunAsync(definition, CancellationToken.None);
+        await runner.RunAsync(definition, deliverIndividually: true, CancellationToken.None);
 
         var policy = runtime.LastContext!.EffectiveToolPolicy;
         Assert.False(policy.AllowWebSearch);

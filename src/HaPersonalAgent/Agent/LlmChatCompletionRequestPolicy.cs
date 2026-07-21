@@ -19,15 +19,18 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
     private readonly LlmExecutionPlan _executionPlan;
     private readonly ILogger<LlmChatCompletionRequestPolicy>? _logger;
     private readonly ReasoningRunDiagnostics? _diagnostics;
+    private readonly ToolCallReasoningStore? _reasoningStore;
 
     public LlmChatCompletionRequestPolicy(
         LlmExecutionPlan executionPlan,
         ILogger<LlmChatCompletionRequestPolicy>? logger = null,
-        ReasoningRunDiagnostics? diagnostics = null)
+        ReasoningRunDiagnostics? diagnostics = null,
+        ToolCallReasoningStore? reasoningStore = null)
     {
         _executionPlan = executionPlan;
         _logger = logger;
         _diagnostics = diagnostics;
+        _reasoningStore = reasoningStore;
     }
 
     public override void Process(
@@ -53,12 +56,22 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         LlmExecutionPlan executionPlan,
         out string patchedJson)
     {
-        return TryPatchRequestJson(json, executionPlan, out patchedJson, out _);
+        return TryPatchRequestJson(json, executionPlan, reasoningStore: null, out patchedJson, out _);
     }
 
     internal static bool TryPatchRequestJson(
         string json,
         LlmExecutionPlan executionPlan,
+        out string patchedJson,
+        out LlmRequestPatchKind patchKind)
+    {
+        return TryPatchRequestJson(json, executionPlan, reasoningStore: null, out patchedJson, out patchKind);
+    }
+
+    internal static bool TryPatchRequestJson(
+        string json,
+        LlmExecutionPlan executionPlan,
+        ToolCallReasoningStore? reasoningStore,
         out string patchedJson,
         out LlmRequestPatchKind patchKind)
     {
@@ -84,6 +97,12 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
 
         var patched = false;
 
+        // HPA-041 follow-up: сначала вписываем захваченный reasoning_content обратно в assistant tool-call сообщения.
+        // Это ДО safety-fallback намеренно: удовлетворив round-trip требование провайдера, мы позволяем оставить
+        // thinking включённым на continuation-шаге вместо того, чтобы глушить его.
+        var reasoningInjected = reasoningStore is not null
+            && TryInjectToolCallReasoning(root, reasoningStore);
+
         // Патчи thinking применяются только когда этого требует план исполнения (provider-default их не трогает).
         if (executionPlan.ShouldPatchChatCompletionRequest)
         {
@@ -93,6 +112,15 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
             {
                 patched = true;
                 patchKind = LlmRequestPatchKind.AutoToolStepSafetyDisable;
+            }
+        }
+
+        if (reasoningInjected)
+        {
+            patched = true;
+            if (patchKind == LlmRequestPatchKind.None)
+            {
+                patchKind = LlmRequestPatchKind.ReasoningContentReplayed;
             }
         }
 
@@ -117,6 +145,61 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         patchedJson = root.ToJsonString(JsonOptions);
 
         return true;
+    }
+
+    /// <summary>
+    /// Что: вписывает захваченный reasoning_content в assistant-сообщения с tool_calls, у которых его ещё нет.
+    /// Зачем: OpenAI-адаптер M.E.AI не доносит reasoning до провода (см. HPA-041), поэтому единственный слой,
+    /// где его можно вернуть провайдеру, — это raw-JSON запроса. Наличие reasoning_content снимает необходимость
+    /// safety-fallback глушить thinking, и модель продолжает рассуждать между вызовами инструментов.
+    /// Как: для каждого assistant-сообщения с tool_calls без reasoning_content ищем reasoning в store по id любого его tool_call.
+    /// </summary>
+    internal static bool TryInjectToolCallReasoning(JsonObject root, ToolCallReasoningStore reasoningStore)
+    {
+        if (root["messages"] is not JsonArray messages)
+        {
+            return false;
+        }
+
+        var changed = false;
+        foreach (var item in messages)
+        {
+            if (item is not JsonObject message)
+            {
+                continue;
+            }
+
+            if (!string.Equals(message["role"]?.GetValue<string>(), "assistant", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (message["tool_calls"] is not JsonArray toolCalls || toolCalls.Count == 0)
+            {
+                continue;
+            }
+
+            // Уже есть непустой reasoning_content — не трогаем.
+            if (!IsReasoningContentMissing(message["reasoning_content"]))
+            {
+                continue;
+            }
+
+            foreach (var toolCall in toolCalls)
+            {
+                if (toolCall is JsonObject callObject
+                    && callObject["id"] is JsonValue idValue
+                    && idValue.TryGetValue<string>(out var toolCallId)
+                    && reasoningStore.TryGet(toolCallId, out var reasoning))
+                {
+                    message["reasoning_content"] = reasoning;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+
+        return changed;
     }
 
     private static bool TryApplyToolStepReasoningSafetyFallback(
@@ -371,7 +454,7 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         var json = Encoding.UTF8.GetString(stream.ToArray());
 
         LogMessageContentDiagnostic(json);
-        var patched = TryPatchRequestJson(json, _executionPlan, out var patchedJson, out var patchKind);
+        var patched = TryPatchRequestJson(json, _executionPlan, _reasoningStore, out var patchedJson, out var patchKind);
         _diagnostics?.RecordPolicyPatchDecision(patchKind);
 
         if (patched)
@@ -396,7 +479,7 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         var json = Encoding.UTF8.GetString(stream.ToArray());
 
         LogMessageContentDiagnostic(json);
-        var patched = TryPatchRequestJson(json, _executionPlan, out var patchedJson, out var patchKind);
+        var patched = TryPatchRequestJson(json, _executionPlan, _reasoningStore, out var patchedJson, out var patchKind);
         _diagnostics?.RecordPolicyPatchDecision(patchKind);
 
         if (patched)
@@ -428,12 +511,16 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         switch (patchKind)
         {
             case LlmRequestPatchKind.AutoToolStepSafetyDisable:
-                _logger.LogWarning(
-                    "LLM request patch applied safety fallback: thinking disabled for this tool-step request because assistant tool-call history has missing reasoning_content.");
+                _logger.LogInformation(
+                    "LLM request patch disabled thinking for this tool-step request: the provider requires reasoning_content to be echoed back on tool steps, but none was captured for this assistant tool-call message, so thinking is disabled here to satisfy the round-trip requirement without a 400. Expected on continuation requests where reasoning could not be captured (e.g. a streaming step), not a failure.");
+                break;
+            case LlmRequestPatchKind.ReasoningContentReplayed:
+                _logger.LogInformation(
+                    "LLM request patch injected captured reasoning_content back onto assistant tool-call message(s), satisfying the provider round-trip so thinking stays on for this continuation tool step (HPA-041 follow-up).");
                 break;
             case LlmRequestPatchKind.EmptyToolCallContentNormalized:
                 _logger.LogInformation(
-                    "LLM request patch normalized empty content on assistant tool-call messages to null (provider rejects an empty string).");
+                    "LLM request patch removed empty content on assistant tool-call messages (provider rejects both an empty string and null).");
                 break;
             case LlmRequestPatchKind.ForcedThinkingDisable:
                 _logger.LogInformation(
@@ -483,5 +570,6 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         ForcedThinkingEnable,
         AutoToolStepSafetyDisable,
         EmptyToolCallContentNormalized,
+        ReasoningContentReplayed,
     }
 }

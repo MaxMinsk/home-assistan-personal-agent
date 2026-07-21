@@ -10,7 +10,9 @@ public sealed record AgentToolScopeDto(
     bool AllowWebSearch,
     bool AllowMemoryRead,
     bool AllowMemoryWrite,
-    int MaxDurableFactsPerRun);
+    int MaxDurableFactsPerRun,
+    bool AllowProposeActions = false,
+    bool AllowCrossAgentContext = false);
 
 /// <summary>
 /// Что: строка списка агентов для левого ростера.
@@ -91,6 +93,19 @@ public sealed record AgentInboxEntryResponse(
     string Source,
     string Text,
     string ReceivedUtc);
+
+/// <summary>
+/// Что: одно предложенное агентом действие, ожидающее одобрения (HPA-035).
+/// Зачем: вкладка «Действия» показывает, что агент предложил; выполнится это только после Одобрить.
+/// Как: плоская проекция PendingConfirmation — без payload, только человекочитаемое описание и срок.
+/// </summary>
+public sealed record AgentActionResponse(
+    string Id,
+    string ActionKind,
+    string Summary,
+    string Risk,
+    string CreatedUtc,
+    string ExpiresUtc);
 
 /// <summary>
 /// Что: тело ответа пользователя агенту из Web UI.

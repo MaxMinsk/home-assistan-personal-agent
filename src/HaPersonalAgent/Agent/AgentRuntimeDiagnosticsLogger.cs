@@ -86,29 +86,24 @@ public sealed class AgentRuntimeDiagnosticsLogger
     {
         var snapshot = diagnostics.Snapshot();
 
+        // HPA-041: replay-счётчики убраны — источник истины один (решение raw-JSON политики). Если thinking
+        // снят на tool-шаге (safety fallback), это ожидаемо: провайдер требует round-trip reasoning_content,
+        // а OpenAI-адаптер не доносит его до провода, поэтому thinking выключается на continuation-запросах.
         _logger.LogInformation(
-            "Agent run {CorrelationId} reasoning diagnostics: success {Success}, requested {RequestedThinkingMode}, effective {EffectiveThinkingMode}, patch pipeline enabled {PatchPipelineEnabled}, provider reasoning observed {ProviderReasoningObserved}, replay needed {ReplayNeeded}, safety fallback applied {SafetyFallbackApplied}; policy requests {PolicyRequests}, policy no-patch {PolicyNoPatch}, policy forced disable {PolicyForcedDisable}, policy forced enable {PolicyForcedEnable}, policy auto safety disable {PolicyAutoSafetyDisable}; replay requests {ReplayRequests}, replay request tool-call messages {ReplayRequestToolCalls}, replay request missing reasoning {ReplayRequestMissingReasoning}, replay injected {ReplayInjected}, replay responses {ReplayResponses}, replay response tool-call messages {ReplayResponseToolCalls}, replay response missing reasoning {ReplayResponseMissingReasoning}, replay captured {ReplayCaptured}.",
+            "Agent run {CorrelationId} reasoning diagnostics: success {Success}, requested {RequestedThinkingMode}, effective {EffectiveThinkingMode}, patch pipeline enabled {PatchPipelineEnabled}, reasoning replayed to wire {ReasoningReplayedToWire}, tool-step safety fallback applied {SafetyFallbackApplied}; policy requests {PolicyRequests}, policy no-patch {PolicyNoPatch}, policy forced disable {PolicyForcedDisable}, policy forced enable {PolicyForcedEnable}, policy reasoning replay {PolicyReasoningReplay}, policy auto safety disable {PolicyAutoSafetyDisable}.",
             correlationId,
             success,
             executionPlan.RequestedThinkingMode,
             executionPlan.EffectiveThinkingMode,
             executionPlan.ShouldPatchChatCompletionRequest,
-            snapshot.ProviderReasoningObserved,
-            snapshot.ReplayWasNeeded,
+            snapshot.ReasoningReplayedToWire,
             snapshot.SafetyFallbackApplied,
             snapshot.PolicyObservedRequests,
             snapshot.PolicyNoPatchRequests,
             snapshot.PolicyForcedDisablePatches,
             snapshot.PolicyForcedEnablePatches,
-            snapshot.PolicyAutoSafetyDisablePatches,
-            snapshot.ReplayRequestsObserved,
-            snapshot.ReplayRequestToolCallMessages,
-            snapshot.ReplayRequestMissingToolCallReasoningMessages,
-            snapshot.ReplayInjectedMessages,
-            snapshot.ReplayResponsesObserved,
-            snapshot.ReplayResponseToolCallMessages,
-            snapshot.ReplayResponseMissingToolCallReasoningMessages,
-            snapshot.ReplayCapturedMessages);
+            snapshot.PolicyReasoningReplayPatches,
+            snapshot.PolicyAutoSafetyDisablePatches);
     }
 
     public void LogCompactionDiagnostics(

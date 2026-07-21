@@ -7,5 +7,13 @@ namespace HaPersonalAgent.Autonomous;
 /// </summary>
 public interface IAutonomousAgentRunner
 {
-    Task RunAsync(AutonomousAgentDefinition definition, CancellationToken cancellationToken);
+    /// <summary>
+    /// Выполняет один запуск. При deliverIndividually доставляет бриф сразу (как раньше); иначе доставку подавляет
+    /// и возвращает payload — планировщик соберёт несколько и отправит один сводный дайджест (HPA-039).
+    /// Возвращает null, если запуск не дал доставляемого результата (не настроен рантайм или ошибка).
+    /// </summary>
+    Task<AutonomousRunDelivery?> RunAsync(
+        AutonomousAgentDefinition definition,
+        bool deliverIndividually,
+        CancellationToken cancellationToken);
 }

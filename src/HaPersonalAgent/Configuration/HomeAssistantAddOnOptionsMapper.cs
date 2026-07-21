@@ -25,6 +25,7 @@ public static class HomeAssistantAddOnOptionsMapper
             ["llm_model"] = $"{LlmOptions.SectionName}:Model",
             ["llm_api_key"] = $"{LlmOptions.SectionName}:ApiKey",
             ["llm_thinking_mode"] = $"{LlmOptions.SectionName}:ThinkingMode",
+            ["llm_replay_reasoning_to_wire"] = $"{LlmOptions.SectionName}:ReplayReasoningContentToWire",
             ["llm_router_mode"] = $"{LlmOptions.SectionName}:RouterMode",
             ["llm_router_small_model"] = $"{LlmOptions.SectionName}:RouterSmallModel",
             ["llm_router_max_input_chars_for_small"] = $"{LlmOptions.SectionName}:RouterMaxInputCharsForSmall",

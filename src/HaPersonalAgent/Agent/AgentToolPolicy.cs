@@ -40,4 +40,23 @@ public sealed record AgentToolPolicy(
             AllowWebSearch: allowWebSearch,
             AllowHomeAssistantRead: allowHomeAssistantRead,
             AllowScheduledAgentRouting: false);
+
+    /// <summary>
+    /// HPA-035: фоновый агент, которому владелец галочкой разрешил ПРЕДЛАГАТЬ действия. Управление Home Assistant
+    /// и запись в долгосрочную память становятся доступны как propose-инструменты — они лишь создают pending
+    /// confirmation и НИЧЕГО не исполняют без явного одобрения владельца. Гарантия MVP (фон не действует сам) цела.
+    /// Роутинг в плановые агенты по-прежнему выключен (это capability интерактивного агента, во избежание петель).
+    /// </summary>
+    public static AgentToolPolicy ReadOnlyResearchWithProposals(
+        bool allowWebSearch,
+        bool allowHomeAssistantRead,
+        bool allowMemoryRead) =>
+        new(
+            AllowControlActions: true,
+            AllowMemoryRead: allowMemoryRead,
+            // Инструмент propose_memory_save вложен в ветку memory-read и требует write — поэтому write=read.
+            AllowMemoryWrite: allowMemoryRead,
+            AllowWebSearch: allowWebSearch,
+            AllowHomeAssistantRead: allowHomeAssistantRead,
+            AllowScheduledAgentRouting: false);
 }

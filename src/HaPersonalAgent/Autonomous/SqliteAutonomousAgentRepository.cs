@@ -50,6 +50,8 @@ public sealed class SqliteAutonomousAgentRepository : IAutonomousAgentRepository
                     allow_web_search INTEGER NOT NULL,
                     allow_memory_read INTEGER NOT NULL,
                     allow_memory_write INTEGER NOT NULL,
+                    allow_propose_actions INTEGER NOT NULL DEFAULT 0,
+                    allow_cross_agent_context INTEGER NOT NULL DEFAULT 0,
                     max_durable_facts_per_run INTEGER NOT NULL,
                     delivery_telegram_chat_id INTEGER NULL,
                     created_utc TEXT NOT NULL,
@@ -107,6 +109,22 @@ public sealed class SqliteAutonomousAgentRepository : IAutonomousAgentRepository
                 """;
 
             await command.ExecuteNonQueryAsync(cancellationToken);
+
+            // HPA-035: колонка добавлена позже — для уже существующих /data баз доводим схему миграцией
+            // (CREATE TABLE IF NOT EXISTS новую колонку в старую таблицу не добавит).
+            await EnsureColumnAsync(
+                connection,
+                table: "autonomous_agents",
+                column: "allow_propose_actions",
+                columnDefinition: "INTEGER NOT NULL DEFAULT 0",
+                cancellationToken);
+            await EnsureColumnAsync(
+                connection,
+                table: "autonomous_agents",
+                column: "allow_cross_agent_context",
+                columnDefinition: "INTEGER NOT NULL DEFAULT 0",
+                cancellationToken);
+
             _initialized = true;
         }
         finally
@@ -130,12 +148,12 @@ public sealed class SqliteAutonomousAgentRepository : IAutonomousAgentRepository
             INSERT INTO autonomous_agents (
                 id, name, mission, schedule_kind, schedule_expression, status,
                 allow_home_assistant_read, allow_web_search, allow_memory_read, allow_memory_write,
-                max_durable_facts_per_run, delivery_telegram_chat_id,
+                allow_propose_actions, allow_cross_agent_context, max_durable_facts_per_run, delivery_telegram_chat_id,
                 created_utc, updated_utc, next_run_utc, last_run_utc)
             VALUES (
                 $id, $name, $mission, $scheduleKind, $scheduleExpression, $status,
                 $allowHaRead, $allowWebSearch, $allowMemoryRead, $allowMemoryWrite,
-                $maxDurableFacts, $telegramChatId,
+                $allowProposeActions, $allowCrossAgentContext, $maxDurableFacts, $telegramChatId,
                 $createdUtc, $updatedUtc, $nextRunUtc, $lastRunUtc)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
@@ -147,6 +165,8 @@ public sealed class SqliteAutonomousAgentRepository : IAutonomousAgentRepository
                 allow_web_search = excluded.allow_web_search,
                 allow_memory_read = excluded.allow_memory_read,
                 allow_memory_write = excluded.allow_memory_write,
+                allow_propose_actions = excluded.allow_propose_actions,
+                allow_cross_agent_context = excluded.allow_cross_agent_context,
                 max_durable_facts_per_run = excluded.max_durable_facts_per_run,
                 delivery_telegram_chat_id = excluded.delivery_telegram_chat_id,
                 updated_utc = excluded.updated_utc,
@@ -575,7 +595,7 @@ public sealed class SqliteAutonomousAgentRepository : IAutonomousAgentRepository
         SELECT id, name, mission, schedule_kind, schedule_expression, status,
                allow_home_assistant_read, allow_web_search, allow_memory_read, allow_memory_write,
                max_durable_facts_per_run, delivery_telegram_chat_id,
-               created_utc, updated_utc, next_run_utc, last_run_utc
+               created_utc, updated_utc, next_run_utc, last_run_utc, allow_propose_actions, allow_cross_agent_context
         FROM autonomous_agents
         """;
 
@@ -592,6 +612,44 @@ public sealed class SqliteAutonomousAgentRepository : IAutonomousAgentRepository
         FROM autonomous_agent_inbox
         """;
 
+    /// <summary>
+    /// Идемпотентно доводит схему: добавляет колонку, если её ещё нет (для баз, созданных до её появления).
+    /// Имена таблицы/колонки — только внутренние константы, не пользовательский ввод.
+    /// </summary>
+    private static async Task EnsureColumnAsync(
+        SqliteConnection connection,
+        string table,
+        string column,
+        string columnDefinition,
+        CancellationToken cancellationToken)
+    {
+        await using var pragma = connection.CreateCommand();
+        pragma.CommandText = $"PRAGMA table_info({table});";
+
+        var columnExists = false;
+        await using (var reader = await pragma.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                // В table_info имя колонки — во втором столбце (индекс 1).
+                if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                {
+                    columnExists = true;
+                    break;
+                }
+            }
+        }
+
+        if (columnExists)
+        {
+            return;
+        }
+
+        await using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {columnDefinition};";
+        await alter.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private static void BindDefinition(SqliteCommand command, AutonomousAgentDefinition definition)
     {
         command.Parameters.AddWithValue("$id", definition.Id);
@@ -604,6 +662,8 @@ public sealed class SqliteAutonomousAgentRepository : IAutonomousAgentRepository
         command.Parameters.AddWithValue("$allowWebSearch", definition.ToolScope.AllowWebSearch ? 1 : 0);
         command.Parameters.AddWithValue("$allowMemoryRead", definition.ToolScope.AllowMemoryRead ? 1 : 0);
         command.Parameters.AddWithValue("$allowMemoryWrite", definition.ToolScope.AllowMemoryWrite ? 1 : 0);
+        command.Parameters.AddWithValue("$allowProposeActions", definition.ToolScope.AllowProposeActions ? 1 : 0);
+        command.Parameters.AddWithValue("$allowCrossAgentContext", definition.ToolScope.AllowCrossAgentContext ? 1 : 0);
         command.Parameters.AddWithValue("$maxDurableFacts", definition.ToolScope.MaxDurableFactsPerRun);
         command.Parameters.AddWithValue("$telegramChatId", ToDbValue(definition.DeliveryTelegramChatId));
         command.Parameters.AddWithValue("$createdUtc", ToIsoString(definition.CreatedUtc));
@@ -641,7 +701,9 @@ public sealed class SqliteAutonomousAgentRepository : IAutonomousAgentRepository
                 reader.GetInt32(7) != 0,
                 reader.GetInt32(8) != 0,
                 reader.GetInt32(9) != 0,
-                reader.GetInt32(10)),
+                reader.GetInt32(10),
+                allowProposeActions: reader.GetInt32(16) != 0,
+                allowCrossAgentContext: reader.GetInt32(17) != 0),
             reader.IsDBNull(11) ? null : reader.GetInt64(11),
             DateTimeOffset.Parse(reader.GetString(12), CultureInfo.InvariantCulture),
             DateTimeOffset.Parse(reader.GetString(13), CultureInfo.InvariantCulture),

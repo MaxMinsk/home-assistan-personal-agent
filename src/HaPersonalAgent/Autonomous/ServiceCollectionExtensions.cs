@@ -21,6 +21,9 @@ public static class ServiceCollectionExtensions
         // Мост для conversation-агента (HPA-043/044): роутинг контекста из чата в плановых агентов.
         services.AddSingleton<HaPersonalAgent.Agent.IScheduledAgentBridge, AutonomousScheduledAgentBridge>();
         services.AddSingleton<IAutonomousAgentRunner, AutonomousAgentRunner>();
+        // HPA-039: поиск связей для сводного дайджеста + координатор доставки результатов тика.
+        services.AddSingleton<IAutonomousConnectionFinder, AutonomousConnectionFinder>();
+        services.AddSingleton<AutonomousDigestDelivery>();
         services.AddHostedService<AutonomousAgentScheduler>();
 
         return services;

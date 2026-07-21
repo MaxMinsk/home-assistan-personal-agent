@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using HaPersonalAgent.Autonomous;
 using HaPersonalAgent.Configuration;
 using HaPersonalAgent.Dialogue;
@@ -21,6 +22,10 @@ public sealed class TelegramAutonomousAgentNotifier : IAutonomousAgentNotifier
     /// <summary>Callback-префиксы кнопок брифа; по ним TelegramUpdateHandler маршрутизирует нажатия (HPA-038).</summary>
     public const string SnoozeCallbackPrefix = "agentbrief:snooze:";
     public const string DismissCallbackPrefix = "agentbrief:dismiss:";
+
+    /// <summary>Callback-префиксы кнопок предложенных действий (HPA-035): одобрить/отклонить pending confirmation по его id.</summary>
+    public const string ApproveActionCallbackPrefix = "agentaction:approve:";
+    public const string RejectActionCallbackPrefix = "agentaction:reject:";
 
     private const string TelegramTransportName = "telegram";
 
@@ -45,11 +50,13 @@ public sealed class TelegramAutonomousAgentNotifier : IAutonomousAgentNotifier
         AutonomousAgentDefinition definition,
         AutonomousAgentRun run,
         AutonomousRunOutput output,
+        IReadOnlyList<AutonomousProposedAction> proposedActions,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(run);
         ArgumentNullException.ThrowIfNull(output);
+        ArgumentNullException.ThrowIfNull(proposedActions);
 
         if (definition.DeliveryTelegramChatId is not { } chatId)
         {
@@ -100,6 +107,10 @@ public sealed class TelegramAutonomousAgentNotifier : IAutonomousAgentNotifier
                 }
             }
 
+            // HPA-035: предложенные действия идут ОТДЕЛЬНЫМИ сообщениями с кнопками Одобрить/Отклонить — так якорь
+            // для reply остаётся на самом брифе, а каждое действие одобряется/отклоняется независимо по своему id.
+            await SendProposedActionsAsync(client, chatId, proposedActions, cancellationToken);
+
             await RecordNotificationAsync(definition, run, chatId, brief, cancellationToken);
 
             _logger.LogInformation(
@@ -120,6 +131,177 @@ public sealed class TelegramAutonomousAgentNotifier : IAutonomousAgentNotifier
                 definition.Id,
                 chatId);
             return null;
+        }
+    }
+
+    public async Task<IReadOnlyList<AutonomousDigestAnchor>> DeliverDigestAsync(
+        IReadOnlyList<AutonomousRunDelivery> deliveries,
+        IReadOnlyList<string> connections,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(deliveries);
+        ArgumentNullException.ThrowIfNull(connections);
+
+        var anchors = new List<AutonomousDigestAnchor>();
+
+        // Агенты без Telegram-цели видны только в панели — reply-якоря у них нет.
+        foreach (var delivery in deliveries.Where(item => item.Definition.DeliveryTelegramChatId is null))
+        {
+            anchors.Add(new AutonomousDigestAnchor(delivery.Run.Id, null));
+        }
+
+        var byChat = deliveries
+            .Where(item => item.Definition.DeliveryTelegramChatId is not null)
+            .GroupBy(item => item.Definition.DeliveryTelegramChatId!.Value)
+            .ToList();
+
+        var botToken = _telegramOptions.Value.BotToken;
+        if (byChat.Count == 0)
+        {
+            return anchors;
+        }
+
+        if (string.IsNullOrWhiteSpace(botToken))
+        {
+            _logger.LogWarning("Autonomous digest could not be delivered: no Telegram bot token is configured.");
+            foreach (var delivery in byChat.SelectMany(group => group))
+            {
+                anchors.Add(new AutonomousDigestAnchor(delivery.Run.Id, null));
+            }
+
+            return anchors;
+        }
+
+        var client = _clientFactory.Create(botToken);
+        foreach (var group in byChat)
+        {
+            var chatId = group.Key;
+            var items = group.ToList();
+            try
+            {
+                var overview = BuildDigestOverview(items, connections);
+                foreach (var chunk in AutonomousAgentBriefFormatter.Chunk(overview))
+                {
+                    await client.SendMessageWithIdAsync(chatId, chunk, cancellationToken);
+                }
+
+                foreach (var delivery in items)
+                {
+                    var anchorMessageId = await SendQuestionsTailAsync(client, chatId, delivery, cancellationToken);
+                    await SendProposedActionsAsync(client, chatId, delivery.ProposedActions, cancellationToken);
+                    anchors.Add(new AutonomousDigestAnchor(delivery.Run.Id, anchorMessageId));
+                }
+
+                await RecordNotificationAsync(items[0].Definition, items[0].Run, chatId, overview, cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                _logger.LogWarning(exception, "Failed to deliver the autonomous digest to Telegram chat {ChatId}.", chatId);
+                foreach (var delivery in items)
+                {
+                    anchors.Add(new AutonomousDigestAnchor(delivery.Run.Id, null));
+                }
+            }
+        }
+
+        return anchors;
+    }
+
+    private static string BuildDigestOverview(
+        IReadOnlyList<AutonomousRunDelivery> items,
+        IReadOnlyList<string> connections)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"📋 Сводка автономных агентов ({items.Count})");
+
+        foreach (var delivery in items)
+        {
+            builder.AppendLine();
+            builder.AppendLine($"▸ {delivery.Definition.Name}");
+            if (!string.IsNullOrWhiteSpace(delivery.Output.Summary))
+            {
+                builder.AppendLine(delivery.Output.Summary.Trim());
+            }
+
+            foreach (var finding in delivery.Output.Findings)
+            {
+                builder.AppendLine($"• {finding}");
+            }
+        }
+
+        if (connections.Count > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("🔗 Связи между агентами:");
+            foreach (var connection in connections)
+            {
+                builder.AppendLine($"— {connection}");
+            }
+        }
+
+        return builder.ToString().Trim();
+    }
+
+    /// <summary>
+    /// Отправляет хвост с вопросами агента и кнопками Отложить/Не актуально, если вопросы есть; возвращает id
+    /// этого сообщения как reply-якорь (по нему сопоставится ответ пользователя). Нет вопросов — null.
+    /// </summary>
+    private async Task<string?> SendQuestionsTailAsync(
+        ITelegramBotClientAdapter client,
+        long chatId,
+        AutonomousRunDelivery delivery,
+        CancellationToken cancellationToken)
+    {
+        if (delivery.Output.Questions.Count == 0)
+        {
+            return null;
+        }
+
+        var builder = new StringBuilder();
+        builder.AppendLine($"❓ Вопросы агента «{delivery.Definition.Name}» (ответь реплаем на это сообщение):");
+        var index = 1;
+        foreach (var question in delivery.Output.Questions)
+        {
+            builder.AppendLine($"{index}. {question}");
+            index++;
+        }
+
+        var messageId = await client.SendMessageWithButtonsAsync(
+            chatId,
+            builder.ToString().Trim(),
+            new[]
+            {
+                ("⏭ Отложить", $"{SnoozeCallbackPrefix}{delivery.Run.Id}"),
+                ("🚫 Не актуально", $"{DismissCallbackPrefix}{delivery.Run.Id}"),
+            },
+            cancellationToken);
+
+        return messageId.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private async Task SendProposedActionsAsync(
+        ITelegramBotClientAdapter client,
+        long chatId,
+        IReadOnlyList<AutonomousProposedAction> proposedActions,
+        CancellationToken cancellationToken)
+    {
+        foreach (var action in proposedActions)
+        {
+            var text = string.Join(
+                Environment.NewLine,
+                "Предлагаю действие (выполнится только после твоего одобрения):",
+                action.Summary,
+                $"Риск: {action.Risk}");
+
+            await client.SendMessageWithButtonsAsync(
+                chatId,
+                text,
+                new[]
+                {
+                    ("✅ Одобрить", $"{ApproveActionCallbackPrefix}{action.Id}"),
+                    ("🚫 Отклонить", $"{RejectActionCallbackPrefix}{action.Id}"),
+                },
+                cancellationToken);
         }
     }
 

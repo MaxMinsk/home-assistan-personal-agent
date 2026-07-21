@@ -39,6 +39,9 @@ public static class WebAgentEndpoints
         endpoints.MapGet("/api/agents/{agentId}/inbox", HandleInboxAsync);
         endpoints.MapDelete("/api/agents/{agentId}/inbox/{entryId}", HandleDeleteInboxAsync);
         endpoints.MapPost("/api/agents/{agentId}/reply", HandleReplyAsync);
+        endpoints.MapGet("/api/agents/{agentId}/actions", HandleListActionsAsync);
+        endpoints.MapPost("/api/agents/{agentId}/actions/{actionId}/approve", HandleApproveActionAsync);
+        endpoints.MapPost("/api/agents/{agentId}/actions/{actionId}/reject", HandleRejectActionAsync);
 
         return endpoints;
     }
@@ -325,6 +328,70 @@ public static class WebAgentEndpoints
             : Results.Json(new { ok = true, queuedAt = ToIso(entry.ReceivedUtc) }, JsonOptions);
     }
 
+    private static async Task<IResult> HandleListActionsAsync(
+        string agentId,
+        AutonomousAgentService agents,
+        HaPersonalAgent.Confirmation.IConfirmationService confirmations,
+        CancellationToken cancellationToken)
+    {
+        var definition = await agents.GetAsync(agentId, cancellationToken);
+        if (definition is null)
+        {
+            return Results.NotFound(new { error = "Agent not found." });
+        }
+
+        var pending = await confirmations.ListPendingForParticipantAsync(agentId, correlationId: null, cancellationToken);
+        var responses = pending
+            .Select(confirmation => new AgentActionResponse(
+                confirmation.Id,
+                confirmation.ActionKind,
+                confirmation.Summary,
+                confirmation.Risk,
+                ToIso(confirmation.CreatedAtUtc)!,
+                ToIso(confirmation.ExpiresAtUtc)!))
+            .ToList();
+
+        return Results.Json(responses, JsonOptions);
+    }
+
+    private static async Task<IResult> HandleApproveActionAsync(
+        string agentId,
+        string actionId,
+        AutonomousAgentService agents,
+        HaPersonalAgent.Confirmation.IConfirmationService confirmations,
+        CancellationToken cancellationToken)
+    {
+        var definition = await agents.GetAsync(agentId, cancellationToken);
+        if (definition is null)
+        {
+            return Results.NotFound(new { error = "Agent not found." });
+        }
+
+        var result = await confirmations.ApproveForParticipantAsync(agentId, actionId, cancellationToken);
+        return Results.Json(
+            new { ok = result.IsSuccess, outcome = result.Outcome.ToString(), message = result.Message },
+            JsonOptions);
+    }
+
+    private static async Task<IResult> HandleRejectActionAsync(
+        string agentId,
+        string actionId,
+        AutonomousAgentService agents,
+        HaPersonalAgent.Confirmation.IConfirmationService confirmations,
+        CancellationToken cancellationToken)
+    {
+        var definition = await agents.GetAsync(agentId, cancellationToken);
+        if (definition is null)
+        {
+            return Results.NotFound(new { error = "Agent not found." });
+        }
+
+        var result = await confirmations.RejectForParticipantAsync(agentId, actionId, cancellationToken);
+        return Results.Json(
+            new { ok = result.IsSuccess, outcome = result.Outcome.ToString(), message = result.Message },
+            JsonOptions);
+    }
+
     private static bool TryValidateUpsert(
         AgentUpsertRequest? request,
         out string name,
@@ -366,7 +433,9 @@ public static class WebAgentEndpoints
                 dto.AllowWebSearch,
                 dto.AllowMemoryRead,
                 dto.AllowMemoryWrite,
-                dto.MaxDurableFactsPerRun);
+                dto.MaxDurableFactsPerRun,
+                dto.AllowProposeActions,
+                dto.AllowCrossAgentContext);
 
     private static AgentDetailResponse ToDetail(
         AutonomousAgentDefinition definition,
@@ -386,7 +455,9 @@ public static class WebAgentEndpoints
                 definition.ToolScope.AllowWebSearch,
                 definition.ToolScope.AllowMemoryRead,
                 definition.ToolScope.AllowMemoryWrite,
-                definition.ToolScope.MaxDurableFactsPerRun),
+                definition.ToolScope.MaxDurableFactsPerRun,
+                definition.ToolScope.AllowProposeActions,
+                definition.ToolScope.AllowCrossAgentContext),
             ToIso(definition.NextRunUtc),
             ToIso(definition.LastRunUtc),
             ToIso(definition.CreatedUtc)!,

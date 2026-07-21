@@ -912,6 +912,53 @@ public class TelegramUpdateHandlerTests
     }
 
     [Fact]
+    public async Task Callback_agent_action_approve_routes_to_confirmation_service_by_id()
+    {
+        // HPA-035: кнопка Одобрить под предложенным действием одобряет подтверждение ПО ID
+        // (участник-владелец резолвится из него самого), не привязываясь к чату-инициатору.
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var runtime = new FakeAgentRuntime("unused");
+            var confirmationService = new FakeConfirmationService(
+                new ConfirmationDecisionResult(
+                    ConfirmationDecisionOutcome.Completed,
+                    IsSuccess: true,
+                    "Выполнено действие act-1.",
+                    "act-1"));
+            var handler = CreateHandler(
+                CreateRepository(databasePath),
+                runtime,
+                confirmationService: confirmationService);
+            var adapter = new FakeTelegramBotClientAdapter();
+
+            await handler.HandleAsync(
+                adapter,
+                CreateCallbackUpdate(
+                    updateId: 40,
+                    callbackQueryId: "cb-2",
+                    chatId: 200,
+                    userId: 100,
+                    callbackData: $"{HaPersonalAgent.Telegram.TelegramAutonomousAgentNotifier.ApproveActionCallbackPrefix}act-1"),
+                new TelegramOptions { AllowedUserIds = new long[] { 100 } },
+                CancellationToken.None);
+
+            Assert.Empty(runtime.Calls);
+            Assert.Single(confirmationService.ApprovedByConfirmationId);
+            Assert.Equal("act-1", confirmationService.ApprovedByConfirmationId[0]);
+            Assert.Single(adapter.ClearedInlineKeyboards);
+            Assert.Single(adapter.AnsweredCallbackQueries);
+            Assert.Contains("Одобряю", adapter.AnsweredCallbackQueries[0].Text ?? string.Empty, StringComparison.Ordinal);
+            Assert.Contains("Выполнено", adapter.SentMessages.Single().Text, StringComparison.Ordinal);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Agent_runtime_exception_returns_user_facing_message_without_saving_context()
     {
         var databasePath = CreateTemporaryDatabasePath();
@@ -1237,6 +1284,54 @@ public class TelegramUpdateHandlerTests
         {
             LatestPendingLookupRequests.Add((conversation, correlationId));
             return Task.FromResult(LatestPendingConfirmationId);
+        }
+
+        public List<string> ApprovedByConfirmationId { get; } = new();
+
+        public List<string> RejectedByConfirmationId { get; } = new();
+
+        public Task<IReadOnlyList<PendingConfirmation>> ListPendingForParticipantAsync(
+            string participantId,
+            string? correlationId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<PendingConfirmation>>(Array.Empty<PendingConfirmation>());
+
+        public Task<ConfirmationDecisionResult> ApproveForParticipantAsync(
+            string participantId,
+            string confirmationId,
+            CancellationToken cancellationToken)
+        {
+            ApprovedConfirmations.Add((
+                DialogueConversation.Create("autonomous", participantId, participantId),
+                confirmationId));
+            return Task.FromResult(_result);
+        }
+
+        public Task<ConfirmationDecisionResult> RejectForParticipantAsync(
+            string participantId,
+            string confirmationId,
+            CancellationToken cancellationToken)
+        {
+            RejectedConfirmations.Add((
+                DialogueConversation.Create("autonomous", participantId, participantId),
+                confirmationId));
+            return Task.FromResult(_result);
+        }
+
+        public Task<ConfirmationDecisionResult> ApproveByConfirmationIdAsync(
+            string confirmationId,
+            CancellationToken cancellationToken)
+        {
+            ApprovedByConfirmationId.Add(confirmationId);
+            return Task.FromResult(_result);
+        }
+
+        public Task<ConfirmationDecisionResult> RejectByConfirmationIdAsync(
+            string confirmationId,
+            CancellationToken cancellationToken)
+        {
+            RejectedByConfirmationId.Add(confirmationId);
+            return Task.FromResult(_result);
         }
     }
 

@@ -301,6 +301,87 @@ public sealed class ConfirmationService : IConfirmationService
             pendingConfirmation.Id);
     }
 
+    // HPA-035: транспорт для реконструкции переписки при одобрении «за участника». Значение не важно для поиска —
+    // GetScopedConfirmationAsync сверяет ТОЛЬКО participant (fallback по id), поэтому conversationKey может не совпасть.
+    private const string ParticipantScopeTransport = "autonomous";
+
+    public async Task<IReadOnlyList<PendingConfirmation>> ListPendingForParticipantAsync(
+        string participantId,
+        string? correlationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(participantId);
+
+        var pending = await _stateRepository.ListPendingConfirmationsByParticipantAsync(
+            participantId.Trim(),
+            correlationId,
+            cancellationToken);
+
+        var now = DateTimeOffset.UtcNow;
+        return pending.Where(confirmation => !confirmation.IsExpired(now)).ToList();
+    }
+
+    public Task<ConfirmationDecisionResult> ApproveForParticipantAsync(
+        string participantId,
+        string confirmationId,
+        CancellationToken cancellationToken) =>
+        ApproveAsync(ParticipantConversation(participantId), confirmationId, cancellationToken);
+
+    public Task<ConfirmationDecisionResult> RejectForParticipantAsync(
+        string participantId,
+        string confirmationId,
+        CancellationToken cancellationToken) =>
+        RejectAsync(ParticipantConversation(participantId), confirmationId, cancellationToken);
+
+    public async Task<ConfirmationDecisionResult> ApproveByConfirmationIdAsync(
+        string confirmationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(confirmationId);
+
+        var confirmation = await _stateRepository.GetPendingConfirmationByIdAsync(
+            confirmationId.Trim(),
+            cancellationToken);
+        if (confirmation is null)
+        {
+            return new ConfirmationDecisionResult(
+                ConfirmationDecisionOutcome.NotFound,
+                IsSuccess: false,
+                $"Действие {confirmationId} не найдено.",
+                confirmationId);
+        }
+
+        return await ApproveForParticipantAsync(confirmation.ParticipantId, confirmation.Id, cancellationToken);
+    }
+
+    public async Task<ConfirmationDecisionResult> RejectByConfirmationIdAsync(
+        string confirmationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(confirmationId);
+
+        var confirmation = await _stateRepository.GetPendingConfirmationByIdAsync(
+            confirmationId.Trim(),
+            cancellationToken);
+        if (confirmation is null)
+        {
+            return new ConfirmationDecisionResult(
+                ConfirmationDecisionOutcome.NotFound,
+                IsSuccess: false,
+                $"Действие {confirmationId} не найдено.",
+                confirmationId);
+        }
+
+        return await RejectForParticipantAsync(confirmation.ParticipantId, confirmation.Id, cancellationToken);
+    }
+
+    private static DialogueConversation ParticipantConversation(string participantId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(participantId);
+        var trimmed = participantId.Trim();
+        return DialogueConversation.Create(ParticipantScopeTransport, trimmed, trimmed);
+    }
+
     public async Task<string?> GetLatestPendingConfirmationIdAsync(
         DialogueConversation conversation,
         string correlationId,

@@ -22,17 +22,20 @@ public sealed class AutonomousAgentScheduler : BackgroundService
     private readonly IAutonomousAgentRunner _runner;
     private readonly IOptions<AutonomousAgentOptions> _options;
     private readonly ILogger<AutonomousAgentScheduler> _logger;
+    private readonly AutonomousDigestDelivery? _digestDelivery;
 
     public AutonomousAgentScheduler(
         IAutonomousAgentRepository repository,
         IAutonomousAgentRunner runner,
         IOptions<AutonomousAgentOptions> options,
-        ILogger<AutonomousAgentScheduler> logger)
+        ILogger<AutonomousAgentScheduler> logger,
+        AutonomousDigestDelivery? digestDelivery = null)
     {
         _repository = repository;
         _runner = runner;
         _options = options;
         _logger = logger;
+        _digestDelivery = digestDelivery;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -130,7 +133,7 @@ public sealed class AutonomousAgentScheduler : BackgroundService
 
         var maxConcurrent = Math.Clamp(_options.Value.MaxConcurrentRuns, 1, 8);
         using var concurrencyLimit = new SemaphoreSlim(maxConcurrent, maxConcurrent);
-        var runTasks = new List<Task>();
+        var runTasks = new List<Task<AutonomousRunDelivery?>>();
 
         foreach (var definition in dueAgents)
         {
@@ -180,13 +183,32 @@ public sealed class AutonomousAgentScheduler : BackgroundService
             runTasks.Add(RunWithLimitsAsync(definition, concurrencyLimit, isMissed, nextRunUtc, cancellationToken));
         }
 
-        if (runTasks.Count > 0)
+        if (runTasks.Count == 0)
         {
-            await Task.WhenAll(runTasks);
+            return;
+        }
+
+        // HPA-039: собираем результаты тика и доставляем их вместе — один сводный дайджест вместо N сообщений,
+        // если сработало несколько агентов; для одного — обычный бриф. Доставка вынесена из раннера сюда.
+        var deliveries = (await Task.WhenAll(runTasks))
+            .Where(delivery => delivery is not null)
+            .Select(delivery => delivery!)
+            .ToList();
+
+        if (deliveries.Count > 0 && _digestDelivery is not null)
+        {
+            try
+            {
+                await _digestDelivery.DeliverAsync(deliveries, cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                _logger.LogWarning(exception, "Failed to deliver autonomous agent results for this tick.");
+            }
         }
     }
 
-    private async Task RunWithLimitsAsync(
+    private async Task<AutonomousRunDelivery?> RunWithLimitsAsync(
         AutonomousAgentDefinition definition,
         SemaphoreSlim concurrencyLimit,
         bool isMissed,
@@ -207,11 +229,13 @@ public sealed class AutonomousAgentScheduler : BackgroundService
                 isMissed ? " (catch-up for a missed slot)" : string.Empty,
                 nextRunUtc);
 
-            await _runner.RunAsync(definition, runCancellation.Token);
+            // Индивидуальную доставку подавляем: результат вернётся наверх и уйдёт одним дайджестом на весь тик.
+            return await _runner.RunAsync(definition, deliverIndividually: false, runCancellation.Token);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             _logger.LogInformation("Autonomous agent {AgentId} run cancelled because the host is stopping.", definition.Id);
+            return null;
         }
         catch (OperationCanceledException)
         {
@@ -219,10 +243,12 @@ public sealed class AutonomousAgentScheduler : BackgroundService
                 "Autonomous agent {AgentId} run exceeded the {RunTimeoutMinutes}-minute timeout and was cancelled.",
                 definition.Id,
                 _options.Value.RunTimeoutMinutes);
+            return null;
         }
         catch (Exception exception)
         {
             _logger.LogError(exception, "Autonomous agent {AgentId} run failed.", definition.Id);
+            return null;
         }
         finally
         {

@@ -15,7 +15,8 @@ public static class AutonomousAgentPromptBuilder
         AutonomousAgentDefinition definition,
         AutonomousAgentContinuity? continuity,
         IReadOnlyList<AutonomousAgentInboxEntry> pendingReplies,
-        string? previousSummary)
+        string? previousSummary,
+        IReadOnlyList<AutonomousCrossAgentNote>? crossAgentNotes = null)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(pendingReplies);
@@ -88,9 +89,38 @@ public static class AutonomousAgentPromptBuilder
             builder.AppendLine();
         }
 
+        // HPA-039: находки других агентов — только для замечания РЕАЛЬНЫХ связей, не для смешивания задач.
+        if (crossAgentNotes is { Count: > 0 })
+        {
+            builder.AppendLine("## What your other agents are working on (read-only context — for spotting real connections only)");
+            var index = 1;
+            foreach (var note in crossAgentNotes)
+            {
+                builder.AppendLine($"{index}. Агент «{note.AgentName}»: {note.Summary.Trim()}");
+                if (!string.IsNullOrWhiteSpace(note.Focus))
+                {
+                    builder.AppendLine($"   (сейчас в фокусе: {note.Focus!.Trim()})");
+                }
+
+                index++;
+            }
+
+            builder.AppendLine();
+            builder.AppendLine("Only mention a connection to another agent's work when the findings genuinely support it; never invent a link, and do not drift from YOUR mission.");
+            builder.AppendLine();
+        }
+
         builder.AppendLine("## Rules for this run");
         builder.AppendLine("- Ground every claim in something you actually retrieved with a tool. If a tool returned nothing, say so plainly — never invent facts, numbers, sources or listings.");
-        builder.AppendLine("- This is a read-only run: you cannot control devices and cannot write to long-term memory yourself.");
+        if (definition.ToolScope.AllowProposeActions)
+        {
+            builder.AppendLine("- You may PROPOSE a control action or a long-term memory write with the propose tools, but nothing executes until the owner approves it later — you cannot act directly in this run.");
+        }
+        else
+        {
+            builder.AppendLine("- This is a read-only run: you cannot control devices and cannot write to long-term memory yourself.");
+        }
+
         builder.AppendLine($"- Ask at most {MaxQuestionsPerRun} questions, and only ones that would genuinely change your next step.");
         builder.AppendLine();
 

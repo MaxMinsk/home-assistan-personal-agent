@@ -10,30 +10,40 @@ public sealed record AutonomousAgentToolScope(
     bool AllowWebSearch,
     bool AllowMemoryRead,
     bool AllowMemoryWrite,
-    int MaxDurableFactsPerRun)
+    int MaxDurableFactsPerRun,
+    bool AllowProposeActions = false,
+    bool AllowCrossAgentContext = false)
 {
     /// <summary>Максимально допустимое число durable-фактов за один запуск — защита от засорения общей памяти.</summary>
     public const int MaxAllowedDurableFactsPerRun = 5;
 
-    /// <summary>Профиль по умолчанию: полноценное исследование с ограниченной записью в память.</summary>
+    /// <summary>Профиль по умолчанию: полноценное исследование с ограниченной записью в память, без предложения действий и без кросс-чтения.</summary>
     public static AutonomousAgentToolScope ResearchDefault { get; } = new(
         AllowHomeAssistantRead: true,
         AllowWebSearch: true,
         AllowMemoryRead: true,
         AllowMemoryWrite: true,
-        MaxDurableFactsPerRun: 3);
+        MaxDurableFactsPerRun: 3,
+        AllowProposeActions: false,
+        AllowCrossAgentContext: false);
 
     public static AutonomousAgentToolScope Create(
         bool allowHomeAssistantRead,
         bool allowWebSearch,
         bool allowMemoryRead,
         bool allowMemoryWrite,
-        int maxDurableFactsPerRun) =>
+        int maxDurableFactsPerRun,
+        bool allowProposeActions = false,
+        bool allowCrossAgentContext = false) =>
         new(
             allowHomeAssistantRead,
             allowWebSearch,
             allowMemoryRead,
             // Запись без чтения бессмысленна и опасна: агент писал бы, не сверяясь с уже сохранённым.
             allowMemoryWrite && allowMemoryRead,
-            Math.Clamp(maxDurableFactsPerRun, 0, MaxAllowedDurableFactsPerRun));
+            Math.Clamp(maxDurableFactsPerRun, 0, MaxAllowedDurableFactsPerRun),
+            // HPA-035: предлагать действия (управление HA + крупные записи) можно только с этой галочкой; по умолчанию OFF.
+            allowProposeActions,
+            // HPA-039: видеть находки других агентов (для связей) — тоже opt-in, по умолчанию OFF.
+            allowCrossAgentContext);
 }

@@ -72,7 +72,12 @@ public class AutonomousBriefInteractionTests
             Array.Empty<string>(),
             "дальше");
 
-        var deliveredMessageId = await notifier.DeliverAsync(definition, run, output, CancellationToken.None);
+        var deliveredMessageId = await notifier.DeliverAsync(
+            definition,
+            run,
+            output,
+            Array.Empty<AutonomousProposedAction>(),
+            CancellationToken.None);
 
         var buttonMessage = Assert.Single(adapter.SentButtonMessages);
         Assert.Equal(2, buttonMessage.Buttons.Count);
@@ -97,6 +102,7 @@ public class AutonomousBriefInteractionTests
             definition,
             AutonomousAgentRun.Start(definition.Id),
             new AutonomousRunOutput("рамка", new[] { "находка" }, Array.Empty<string>(), Array.Empty<string>(), null),
+            Array.Empty<AutonomousProposedAction>(),
             CancellationToken.None);
 
         Assert.Empty(adapter.SentButtonMessages);
@@ -146,6 +152,93 @@ public class AutonomousBriefInteractionTests
                 Directory.Delete(directory, recursive: true);
             }
         }
+    }
+
+    [Fact]
+    public async Task Proposed_actions_are_delivered_as_messages_with_approve_and_reject_buttons()
+    {
+        // HPA-035: каждое предложенное действие идёт отдельным сообщением с кнопками одобрить/отклонить по его id.
+        var adapter = new FakeAdapter();
+        var (notifier, _) = await CreateNotifierAsync(adapter);
+        var definition = AutonomousAgentDefinition.Create(
+            "Агент",
+            "миссия",
+            AutonomousAgentScheduleKind.Weekly,
+            deliveryTelegramChatId: 555);
+        var output = new AutonomousRunOutput(
+            "рамка",
+            new[] { "находка" },
+            Array.Empty<string>(),
+            Array.Empty<string>(),
+            null);
+
+        await notifier.DeliverAsync(
+            definition,
+            AutonomousAgentRun.Start(definition.Id),
+            output,
+            new[] { new AutonomousProposedAction("cid-1", "Включить свет в гостиной", "Изменит состояние устройства") },
+            CancellationToken.None);
+
+        var actionMessage = Assert.Single(adapter.SentButtonMessages);
+        Assert.Contains("Включить свет в гостиной", actionMessage.Text, StringComparison.Ordinal);
+        Assert.Contains(actionMessage.Buttons, b => b.CallbackData == $"{TelegramAutonomousAgentNotifier.ApproveActionCallbackPrefix}cid-1");
+        Assert.Contains(actionMessage.Buttons, b => b.CallbackData == $"{TelegramAutonomousAgentNotifier.RejectActionCallbackPrefix}cid-1");
+    }
+
+    [Fact]
+    public async Task Digest_sends_one_overview_plus_per_agent_question_tails_with_anchors()
+    {
+        // HPA-039: несколько агентов -> ОДИН обзор (без кнопок) + по-агентные вопросы с кнопками и reply-якорем.
+        var adapter = new FakeAdapter();
+        var (notifier, _) = await CreateNotifierAsync(adapter);
+        var withQuestions = DigestDelivery("Бизнес", chatId: 555, questions: new[] { "Какой бюджет?" });
+        var withoutQuestions = DigestDelivery("Сканер", chatId: 555, questions: Array.Empty<string>());
+
+        var anchors = await notifier.DeliverDigestAsync(
+            new[] { withQuestions, withoutQuestions },
+            new[] { "«Бизнес» и «Сканер» пересекаются по офису" },
+            CancellationToken.None);
+
+        // Обзор — обычное сообщение (без кнопок), содержит обоих агентов и блок связей.
+        Assert.Contains(
+            adapter.PlainMessages,
+            m => m.Text.Contains("Сводка автономных агентов", StringComparison.Ordinal)
+                && m.Text.Contains("Бизнес", StringComparison.Ordinal)
+                && m.Text.Contains("Сканер", StringComparison.Ordinal)
+                && m.Text.Contains("Связи", StringComparison.Ordinal));
+
+        // У агента с вопросами — сообщение с кнопками Отложить/Не актуально; якорь возвращён.
+        var buttonMessage = Assert.Single(adapter.SentButtonMessages);
+        Assert.Contains("Какой бюджет?", buttonMessage.Text, StringComparison.Ordinal);
+        Assert.Contains(
+            buttonMessage.Buttons,
+            b => b.CallbackData == $"{TelegramAutonomousAgentNotifier.SnoozeCallbackPrefix}{withQuestions.Run.Id}");
+        Assert.Equal(
+            buttonMessage.MessageId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            anchors.Single(a => a.RunId == withQuestions.Run.Id).DeliveredMessageId);
+
+        // Агент без вопросов — reply-якоря нет.
+        Assert.Null(anchors.Single(a => a.RunId == withoutQuestions.Run.Id).DeliveredMessageId);
+    }
+
+    private static AutonomousRunDelivery DigestDelivery(string name, long chatId, string[] questions)
+    {
+        var definition = AutonomousAgentDefinition.Create(
+            name,
+            "миссия",
+            AutonomousAgentScheduleKind.Weekly,
+            deliveryTelegramChatId: chatId);
+        var output = new AutonomousRunOutput(
+            $"сводка {name}",
+            new[] { $"находка {name}" },
+            questions,
+            Array.Empty<string>(),
+            null);
+        return new AutonomousRunDelivery(
+            definition,
+            AutonomousAgentRun.Start(definition.Id),
+            output,
+            Array.Empty<AutonomousProposedAction>());
     }
 
     private static async Task<(TelegramAutonomousAgentNotifier Notifier, DialogueService Dialogue)> CreateNotifierAsync(

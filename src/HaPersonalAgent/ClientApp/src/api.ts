@@ -113,6 +113,8 @@ export interface AgentToolScope {
   allowMemoryRead: boolean;
   allowMemoryWrite: boolean;
   maxDurableFactsPerRun: number;
+  allowProposeActions: boolean;
+  allowCrossAgentContext: boolean;
 }
 
 export interface AgentSummary {
@@ -244,6 +246,40 @@ export function deleteInboxEntry(agentId: string, entryId: string): Promise<{ ok
   return jsonRequest<{ ok: boolean }>(
     `api/agents/${encodeURIComponent(agentId)}/inbox/${encodeURIComponent(entryId)}`,
     'DELETE',
+  );
+}
+
+export interface AgentAction {
+  id: string;
+  actionKind: string;
+  summary: string;
+  risk: string;
+  createdUtc: string;
+  expiresUtc: string;
+}
+
+export interface AgentActionDecision {
+  ok: boolean;
+  outcome: string;
+  message: string;
+}
+
+export function getAgentActions(agentId: string): Promise<AgentAction[]> {
+  return fetch(`api/agents/${encodeURIComponent(agentId)}/actions`, { headers: { Accept: 'application/json' } })
+    .then(readJson<AgentAction[]>);
+}
+
+export function approveAgentAction(agentId: string, actionId: string): Promise<AgentActionDecision> {
+  return jsonRequest<AgentActionDecision>(
+    `api/agents/${encodeURIComponent(agentId)}/actions/${encodeURIComponent(actionId)}/approve`,
+    'POST',
+  );
+}
+
+export function rejectAgentAction(agentId: string, actionId: string): Promise<AgentActionDecision> {
+  return jsonRequest<AgentActionDecision>(
+    `api/agents/${encodeURIComponent(agentId)}/actions/${encodeURIComponent(actionId)}/reject`,
+    'POST',
   );
 }
 

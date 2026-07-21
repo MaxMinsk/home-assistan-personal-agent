@@ -365,6 +365,16 @@ public sealed class TelegramUpdateHandler
             return;
         }
 
+        // HPA-035: кнопки предложенных действий автономного агента (Одобрить / Отклонить). Одобрение идёт по id
+        // подтверждения — участник-владелец резолвится из него самого, поэтому чат-инициатор не обязан совпадать.
+        if (callbackData is not null
+            && (callbackData.StartsWith(TelegramAutonomousAgentNotifier.ApproveActionCallbackPrefix, StringComparison.Ordinal)
+                || callbackData.StartsWith(TelegramAutonomousAgentNotifier.RejectActionCallbackPrefix, StringComparison.Ordinal)))
+        {
+            await HandleAgentActionCallbackAsync(client, callbackQuery, callbackData, cancellationToken);
+            return;
+        }
+
         if (!TryParseConfirmationCallbackData(callbackData, out var actionId, out var approve))
         {
             await client.AnswerCallbackQueryAsync(
@@ -611,6 +621,58 @@ public sealed class TelegramUpdateHandler
                 : " Вопросы подниму снова в следующем запуске.";
             await client.SendMessageAsync(chatId, $"Отложено.{nextRun}", cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// HPA-035: обрабатывает нажатие Одобрить/Отклонить под предложенным действием автономного агента.
+    /// Пользователь уже прошёл allowlist выше; одобрение идёт по id подтверждения (участник резолвится из него самого).
+    /// </summary>
+    private async Task HandleAgentActionCallbackAsync(
+        ITelegramBotClientAdapter client,
+        CallbackQuery callbackQuery,
+        string callbackData,
+        CancellationToken cancellationToken)
+    {
+        var approve = callbackData.StartsWith(
+            TelegramAutonomousAgentNotifier.ApproveActionCallbackPrefix,
+            StringComparison.Ordinal);
+        var prefix = approve
+            ? TelegramAutonomousAgentNotifier.ApproveActionCallbackPrefix
+            : TelegramAutonomousAgentNotifier.RejectActionCallbackPrefix;
+        var confirmationId = callbackData[prefix.Length..].Trim();
+        var chatId = callbackQuery.Message!.Chat.Id;
+
+        if (_confirmationService is null || string.IsNullOrWhiteSpace(confirmationId))
+        {
+            await client.AnswerCallbackQueryAsync(
+                callbackQuery.Id,
+                "Не удалось обработать действие.",
+                showAlert: true,
+                cancellationToken);
+            return;
+        }
+
+        await client.AnswerCallbackQueryAsync(
+            callbackQuery.Id,
+            approve ? "Одобряю действие..." : "Отклоняю действие...",
+            showAlert: false,
+            cancellationToken);
+
+        // Кнопки одноразовые — убираем клавиатуру, чтобы нельзя было нажать повторно.
+        try
+        {
+            await client.ClearInlineKeyboardAsync(chatId, callbackQuery.Message.Id, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogDebug(exception, "Failed to clear action keyboard for confirmation {ConfirmationId}.", confirmationId);
+        }
+
+        var result = approve
+            ? await _confirmationService.ApproveByConfirmationIdAsync(confirmationId, cancellationToken)
+            : await _confirmationService.RejectByConfirmationIdAsync(confirmationId, cancellationToken);
+
+        await client.SendMessageAsync(chatId, result.Message, cancellationToken);
     }
 
     private async Task HandleConfirmationCommandAsync(

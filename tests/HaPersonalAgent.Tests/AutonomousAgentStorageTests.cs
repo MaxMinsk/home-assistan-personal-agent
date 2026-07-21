@@ -68,6 +68,129 @@ public class AutonomousAgentStorageTests
     }
 
     [Fact]
+    public async Task Allow_propose_actions_flag_round_trips()
+    {
+        // HPA-035: галочка «может предлагать действия» должна честно сохраняться и читаться из /data.
+        var databasePath = CreateTemporaryDatabasePath();
+        try
+        {
+            var definition = AutonomousAgentDefinition.Create(
+                "Агент с предложениями",
+                "Миссия.",
+                AutonomousAgentScheduleKind.Weekly,
+                toolScope: AutonomousAgentToolScope.Create(true, true, true, true, 3, allowProposeActions: true));
+
+            await CreateRepository(databasePath).UpsertDefinitionAsync(definition, CancellationToken.None);
+            var loaded = await CreateRepository(databasePath)
+                .GetDefinitionAsync(definition.Id, CancellationToken.None);
+
+            Assert.NotNull(loaded);
+            Assert.True(loaded!.ToolScope.AllowProposeActions);
+
+            // По умолчанию — выключено (безопасный дефолт), и это тоже переживает roundtrip.
+            var safe = AutonomousAgentDefinition.Create(
+                "Обычный агент",
+                "Миссия.",
+                AutonomousAgentScheduleKind.Weekly);
+            await CreateRepository(databasePath).UpsertDefinitionAsync(safe, CancellationToken.None);
+            var loadedSafe = await CreateRepository(databasePath)
+                .GetDefinitionAsync(safe.Id, CancellationToken.None);
+            Assert.False(loadedSafe!.ToolScope.AllowProposeActions);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Allow_cross_agent_context_flag_round_trips()
+    {
+        // HPA-039: галочка «видеть находки других агентов» тоже сохраняется и читается из /data.
+        var databasePath = CreateTemporaryDatabasePath();
+        try
+        {
+            var on = AutonomousAgentDefinition.Create(
+                "Кросс-агент",
+                "Миссия.",
+                AutonomousAgentScheduleKind.Weekly,
+                toolScope: AutonomousAgentToolScope.Create(
+                    true, true, true, true, 3, allowProposeActions: false, allowCrossAgentContext: true));
+            await CreateRepository(databasePath).UpsertDefinitionAsync(on, CancellationToken.None);
+            var loadedOn = await CreateRepository(databasePath).GetDefinitionAsync(on.Id, CancellationToken.None);
+            Assert.True(loadedOn!.ToolScope.AllowCrossAgentContext);
+
+            var off = AutonomousAgentDefinition.Create("Обычный", "Миссия.", AutonomousAgentScheduleKind.Weekly);
+            await CreateRepository(databasePath).UpsertDefinitionAsync(off, CancellationToken.None);
+            var loadedOff = await CreateRepository(databasePath).GetDefinitionAsync(off.Id, CancellationToken.None);
+            Assert.False(loadedOff!.ToolScope.AllowCrossAgentContext);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Missing_allow_propose_actions_column_is_migrated_on_existing_databases()
+    {
+        // HPA-035: у пользователей с базой ДО этой колонки старт не должен падать — репозиторий доигрывает схему.
+        var databasePath = CreateTemporaryDatabasePath();
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
+            var connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
+            await using (var seed = new SqliteConnection(connectionString))
+            {
+                await seed.OpenAsync();
+                await using var create = seed.CreateCommand();
+                create.CommandText =
+                    """
+                    CREATE TABLE autonomous_agents (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        name TEXT NOT NULL,
+                        mission TEXT NOT NULL,
+                        schedule_kind TEXT NOT NULL,
+                        schedule_expression TEXT NULL,
+                        status TEXT NOT NULL,
+                        allow_home_assistant_read INTEGER NOT NULL,
+                        allow_web_search INTEGER NOT NULL,
+                        allow_memory_read INTEGER NOT NULL,
+                        allow_memory_write INTEGER NOT NULL,
+                        max_durable_facts_per_run INTEGER NOT NULL,
+                        delivery_telegram_chat_id INTEGER NULL,
+                        created_utc TEXT NOT NULL,
+                        updated_utc TEXT NOT NULL,
+                        next_run_utc TEXT NULL,
+                        last_run_utc TEXT NULL
+                    );
+                    INSERT INTO autonomous_agents (
+                        id, name, mission, schedule_kind, schedule_expression, status,
+                        allow_home_assistant_read, allow_web_search, allow_memory_read, allow_memory_write,
+                        max_durable_facts_per_run, delivery_telegram_chat_id,
+                        created_utc, updated_utc, next_run_utc, last_run_utc)
+                    VALUES (
+                        'legacy-1', 'Старый агент', 'миссия', 'Weekly', NULL, 'Active',
+                        1, 1, 1, 1, 3, NULL,
+                        '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00', NULL, NULL);
+                    """;
+                await create.ExecuteNonQueryAsync();
+            }
+
+            var loaded = await CreateRepository(databasePath).GetDefinitionAsync("legacy-1", CancellationToken.None);
+
+            Assert.NotNull(loaded);
+            Assert.Equal("Старый агент", loaded!.Name);
+            // Колонки не было — добавлена с безопасным дефолтом (не может предлагать).
+            Assert.False(loaded.ToolScope.AllowProposeActions);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Schedule_state_is_updated_without_touching_user_fields()
     {
         var databasePath = CreateTemporaryDatabasePath();

@@ -11,5 +11,16 @@ public interface IAutonomousAgentNotifier
         AutonomousAgentDefinition definition,
         AutonomousAgentRun run,
         AutonomousRunOutput output,
+        IReadOnlyList<AutonomousProposedAction> proposedActions,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// HPA-039: доставляет результаты НЕСКОЛЬКИХ агентов одним сводным дайджестом (обзор по агентам + блок «Связи»),
+    /// а интерактив (вопросы с кнопками, предложения) — по-агентно, чтобы reply-якоря и одобрения работали.
+    /// Возвращает reply-якорь на каждый прогон, чтобы вызывающий сохранил его в запуск.
+    /// </summary>
+    Task<IReadOnlyList<AutonomousDigestAnchor>> DeliverDigestAsync(
+        IReadOnlyList<AutonomousRunDelivery> deliveries,
+        IReadOnlyList<string> connections,
         CancellationToken cancellationToken);
 }

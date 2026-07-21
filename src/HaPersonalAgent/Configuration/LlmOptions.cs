@@ -19,6 +19,14 @@ public sealed class LlmOptions
 
     public string ThinkingMode { get; set; } = LlmThinkingModes.Auto;
 
+    /// <summary>
+    /// HPA-041 follow-up: вписывать ли захваченный reasoning_content обратно в исходящий tool-шаг,
+    /// чтобы модель продолжала думать во время работы с инструментами. По умолчанию OFF — безопасное
+    /// поведение (thinking глушится на continuation-шаге). Включать осознанно: у части провайдеров эхо
+    /// reasoning_content может дать HTTP 400, поэтому это опт-ин с проверкой на живом ключе.
+    /// </summary>
+    public bool ReplayReasoningContentToWire { get; set; }
+
     public string RouterMode { get; set; } = LlmRouterModes.Enforced;
 
     public string RouterSmallModel { get; set; } = "moonshot-v1-8k";

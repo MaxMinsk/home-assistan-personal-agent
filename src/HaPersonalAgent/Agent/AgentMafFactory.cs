@@ -57,6 +57,17 @@ public sealed class AgentMafFactory
         ArgumentNullException.ThrowIfNull(reasoningDiagnostics);
         ArgumentNullException.ThrowIfNull(compactionDiagnostics);
 
+        // HPA-041 follow-up: общий per-run канал reasoning между capture-клиентом (M.E.AI парсит reasoning_content
+        // из ответа) и request-политикой (единственный слой, что доносит его обратно на провод). Опт-ин через
+        // llm_replay_reasoning_to_wire (по умолчанию OFF — безопасное поведение), и только когда есть инструменты и
+        // провайдер требует round-trip reasoning для tool-шагов; иначе thinking-during-tools неактуален.
+        var reasoningStore =
+            llmOptions.ReplayReasoningContentToWire
+            && executionPlan.UsesTools
+            && executionPlan.Capabilities.RequiresReasoningContentRoundTripForToolCalls
+                ? new ToolCallReasoningStore()
+                : null;
+
         var chatClient = new ChatClient(
             model: model,
             credential: new ApiKeyCredential(llmOptions.ApiKey),
@@ -64,15 +75,19 @@ public sealed class AgentMafFactory
                 llmOptions,
                 executionPlan,
                 _loggerFactory,
-                reasoningDiagnostics));
+                reasoningDiagnostics,
+                reasoningStore));
+
+        // Wire-тест (ReasoningContentWireSerializationTests) доказал: OpenAI-клиент M.E.AI парсит reasoning_content
+        // из ответа в TextReasoningContent, но НЕ сериализует его обратно. Поэтому захват reasoning живёт здесь
+        // (на уровне M.E.AI), а вписывание — в LlmChatCompletionRequestPolicy (raw JSON); общий канал — reasoningStore.
         IChatClient aiChatClient = chatClient.AsIChatClient();
-        if (executionPlan.UsesTools
-            && executionPlan.Capabilities.RequiresReasoningContentRoundTripForToolCalls)
+        if (reasoningStore is not null)
         {
-            aiChatClient = new ReasoningContentReplayChatClient(
+            aiChatClient = new ToolCallReasoningCaptureChatClient(
                 aiChatClient,
-                _loggerFactory.CreateLogger<ReasoningContentReplayChatClient>(),
-                reasoningDiagnostics);
+                reasoningStore,
+                _loggerFactory.CreateLogger<ToolCallReasoningCaptureChatClient>());
         }
 
         aiChatClient = new LlmRequestLoggingChatClient(
@@ -133,7 +148,8 @@ public sealed class AgentMafFactory
         LlmOptions options,
         LlmExecutionPlan executionPlan,
         ILoggerFactory loggerFactory,
-        ReasoningRunDiagnostics reasoningDiagnostics)
+        ReasoningRunDiagnostics reasoningDiagnostics,
+        ToolCallReasoningStore? reasoningStore)
     {
         var clientOptions = new OpenAIClientOptions
         {
@@ -142,11 +158,13 @@ public sealed class AgentMafFactory
 
         // Политика подключается ВСЕГДА: даже когда thinking-патчи не нужны (provider-default), она чинит
         // некорректный content: "" на assistant-сообщениях с tool_calls, иначе Moonshot валит любой tool-шаг с HTTP 400.
+        // reasoningStore (если есть) позволяет ей вписывать захваченный reasoning_content обратно на провод (HPA-041 follow-up).
         clientOptions.AddPolicy(
             new LlmChatCompletionRequestPolicy(
                 executionPlan,
                 loggerFactory.CreateLogger<LlmChatCompletionRequestPolicy>(),
-                reasoningDiagnostics),
+                reasoningDiagnostics,
+                reasoningStore),
             PipelinePosition.BeforeTransport);
 
         return clientOptions;

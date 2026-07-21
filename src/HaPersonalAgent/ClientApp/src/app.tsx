@@ -37,7 +37,25 @@ interface ChatMessage {
   correlationId?: string;
   isConfigured?: boolean;
   streaming?: boolean;
+  /// Локальный вывод команды веб-чата (не ответ модели) — рендерится как приглушённая инфо-плашка.
+  system?: boolean;
 }
+
+interface WebCommand {
+  name: string;
+  description: string;
+}
+
+// Команды веб-чата (HPA-048): обрабатываются на клиенте, в модель не уходят. Диагностические
+// telegram-команды сознательно не тащим — им место в UI-аффордансах (кнопки/вкладки).
+const WEB_COMMANDS: WebCommand[] = [
+  { name: '/help', description: 'список команд' },
+  { name: '/status', description: 'версия и снимок контекста' },
+  { name: '/summary', description: 'свёрнутая память чата' },
+  { name: '/reset', description: 'очистить контекст' },
+  { name: '/fast', description: 'режим ответа: быстрый' },
+  { name: '/deep', description: 'режим ответа: глубокий' },
+];
 
 const CONVERSATION_ID_KEY = 'hpa.conversationId';
 const THEME_KEY = 'hpa.theme';
@@ -231,6 +249,10 @@ function agentDot(agent: AgentSummary | undefined): DotKind {
   if (agent.status === 'Paused') {
     return 'idle';
   }
+  // Есть открытые вопросы, но пользователь уже что-то поставил в очередь → ждём не его, а следующего запуска.
+  if (agent.openQuestionCount > 0 && agent.pendingReplyCount > 0) {
+    return 'ok';
+  }
   return agent.openQuestionCount > 0 ? 'wait' : 'ok';
 }
 
@@ -243,6 +265,10 @@ function agentStateLabel(agent: AgentSummary | undefined): string {
   }
   if (agent.status === 'Paused') {
     return 'на паузе';
+  }
+  // Ответ/контекст уже в очереди — не «ждёт ответа», а учтёт при следующем запуске.
+  if (agent.openQuestionCount > 0 && agent.pendingReplyCount > 0) {
+    return 'ответ в очереди';
   }
   return agent.openQuestionCount > 0 ? 'ждёт ответа' : 'активен';
 }
@@ -366,7 +392,16 @@ function ChatTab(props: {
   const { conversationId, messages, setMessages, busy, setBusy } = props;
   const [input, setInput] = useState('');
   const [profile, setProfile] = useState<ExecutionProfile>('tool');
+  const [commandIndex, setCommandIndex] = useState(0);
+  const [paletteDismissed, setPaletteDismissed] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const commandToken = input.startsWith('/') ? input.split(/\s/)[0].toLowerCase() : null;
+  const matchingCommands = commandToken !== null
+    ? WEB_COMMANDS.filter((command) => command.name.startsWith(commandToken))
+    : [];
+  const paletteOpen = matchingCommands.length > 0 && !paletteDismissed && !busy;
+  const activeCommand = matchingCommands[Math.min(commandIndex, matchingCommands.length - 1)];
 
   useEffect(() => {
     const node = scrollRef.current;
@@ -432,6 +467,69 @@ function ChatTab(props: {
     setMessages(() => []);
   }, [conversationId, setMessages]);
 
+  const pushSystem = useCallback(
+    (text: string) => setMessages((prev) => [...prev, { id: uid(), role: 'assistant', text, system: true }]),
+    [setMessages],
+  );
+
+  const runCommand = useCallback(
+    async (name: string) => {
+      setInput('');
+      setPaletteDismissed(false);
+      setCommandIndex(0);
+
+      switch (name) {
+        case '/help':
+          pushSystem('Команды веб-чата:\n' + WEB_COMMANDS.map((c) => `${c.name} — ${c.description}`).join('\n'));
+          break;
+        case '/reset':
+          await reset();
+          pushSystem('Контекст очищен.');
+          break;
+        case '/fast':
+          setProfile('tool');
+          pushSystem('Режим ответа: быстрый (инструменты доступны).');
+          break;
+        case '/deep':
+          setProfile('deep');
+          pushSystem('Режим ответа: глубокий (инструменты доступны).');
+          break;
+        case '/status':
+          try {
+            const [health, context] = await Promise.all([getHealth(), getContext(conversationId)]);
+            pushSystem(
+              [
+                `${health.application} v${health.version}`,
+                `Сообщений в истории: ${context.storedMessageCount}`,
+                `Загружено / окно: ${context.loadedHistoryMessageCount} / ${context.maxContextMessages}`,
+                `Токенов (оценка): ${context.estimatedContextTokenCount}`,
+                `Режим памяти: ${context.memoryRetrievalMode}`,
+                `Persisted summary: ${context.persistedSummaryPresent ? 'v' + context.persistedSummaryVersion : 'нет'}`,
+              ].join('\n'),
+            );
+          } catch (e) {
+            pushSystem('Не удалось получить статус: ' + (e as Error).message);
+          }
+          break;
+        case '/summary':
+          try {
+            const summary = await getSummary(conversationId);
+            pushSystem(
+              summary.present && summary.summary
+                ? `Свёрнутая память (v${summary.version}):\n\n${summary.summary}`
+                : 'Свёрнутой памяти для этого чата пока нет.',
+            );
+          } catch (e) {
+            pushSystem('Не удалось получить summary: ' + (e as Error).message);
+          }
+          break;
+        default:
+          break;
+      }
+    },
+    [conversationId, pushSystem, reset],
+  );
+
   return (
     <div class="chat">
       <div class="messages" ref={scrollRef}>
@@ -445,13 +543,57 @@ function ChatTab(props: {
         )}
       </div>
       <div class="composer">
+        {paletteOpen && (
+          <div class="cmd-palette" role="listbox">
+            {matchingCommands.map((command, index) => (
+              <button
+                key={command.name}
+                type="button"
+                class={command === activeCommand ? 'cmd is-active' : 'cmd'}
+                onMouseEnter={() => setCommandIndex(index)}
+                onClick={() => void runCommand(command.name)}
+              >
+                <span class="cmd__name">{command.name}</span>
+                <span class="cmd__desc">{command.description}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div class="composer__row">
           <textarea
             value={input}
-            placeholder="Сообщение агенту…"
+            placeholder="Сообщение агенту… (/ — команды)"
             rows={1}
-            onInput={(e) => setInput((e.target as HTMLTextAreaElement).value)}
+            onInput={(e) => {
+              setInput((e.target as HTMLTextAreaElement).value);
+              setPaletteDismissed(false);
+              setCommandIndex(0);
+            }}
             onKeyDown={(e) => {
+              if (paletteOpen) {
+                if (e.key === 'ArrowDown') {
+                  e.preventDefault();
+                  setCommandIndex((i) => Math.min(i + 1, matchingCommands.length - 1));
+                  return;
+                }
+                if (e.key === 'ArrowUp') {
+                  e.preventDefault();
+                  setCommandIndex((i) => Math.max(i - 1, 0));
+                  return;
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault();
+                  setPaletteDismissed(true);
+                  return;
+                }
+                if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+                  e.preventDefault();
+                  if (activeCommand) {
+                    void runCommand(activeCommand.name);
+                  }
+                  return;
+                }
+              }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 void send();
@@ -494,6 +636,16 @@ function ChatTab(props: {
 function MessageView(props: { message: ChatMessage }) {
   const { message } = props;
   const isUser = message.role === 'user';
+
+  if (message.system) {
+    return (
+      <div class="msg msg--system">
+        <span class="msg__role">команда</span>
+        <div class="bubble bubble--system">{message.text}</div>
+      </div>
+    );
+  }
+
   return (
     <div class={`msg msg--${message.role}`}>
       <span class="msg__role">{isUser ? 'ты' : 'агент'}</span>

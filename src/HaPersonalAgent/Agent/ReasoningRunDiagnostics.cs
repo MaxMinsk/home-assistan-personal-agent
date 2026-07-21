@@ -4,8 +4,10 @@ namespace HaPersonalAgent.Agent;
 
 /// <summary>
 /// Что: per-run агрегатор reasoning/thinking диагностики.
-/// Зачем: разрозненные логи policy/replay сложно интерпретировать; нужен единый итоговый снимок по одному agent run.
-/// Как: policy и replay middleware пишут счетчики в этот объект, а AgentRuntime в конце run логирует summary.
+/// Зачем: разрозненные логи policy сложно интерпретировать; нужен единый итоговый снимок по одному agent run.
+/// Как: request policy пишет счетчики в этот объект, а AgentRuntime в конце run логирует summary.
+/// HPA-041: replay-счётчики удалены вместе с инертным ReasoningContentReplayChatClient — источник истины один,
+/// это raw-JSON решение политики, поэтому противоречивых диагностик больше нет.
 /// </summary>
 public sealed class ReasoningRunDiagnostics
 {
@@ -13,18 +15,8 @@ public sealed class ReasoningRunDiagnostics
     private int _policyForcedDisablePatches;
     private int _policyForcedEnablePatches;
     private int _policyAutoSafetyDisablePatches;
+    private int _policyReasoningReplayPatches;
     private int _policyNoPatchRequests;
-
-    private int _replayRequestsObserved;
-    private int _replayRequestToolCallMessages;
-    private int _replayRequestMissingToolCallReasoningMessages;
-    private int _replayInjectedMessages;
-
-    private int _replayResponsesObserved;
-    private int _replayResponseToolCallMessages;
-    private int _replayResponseMissingToolCallReasoningMessages;
-    private int _replayCapturedMessages;
-    private int _replayResponsesWithAssistantReasoning;
 
     internal void RecordPolicyPatchDecision(LlmChatCompletionRequestPolicy.LlmRequestPatchKind patchKind)
     {
@@ -41,45 +33,12 @@ public sealed class ReasoningRunDiagnostics
             case LlmChatCompletionRequestPolicy.LlmRequestPatchKind.AutoToolStepSafetyDisable:
                 Interlocked.Increment(ref _policyAutoSafetyDisablePatches);
                 return;
+            case LlmChatCompletionRequestPolicy.LlmRequestPatchKind.ReasoningContentReplayed:
+                Interlocked.Increment(ref _policyReasoningReplayPatches);
+                return;
             default:
                 Interlocked.Increment(ref _policyNoPatchRequests);
                 return;
-        }
-    }
-
-    public void RecordReplayRequest(
-        int toolCallMessageCount,
-        int missingToolCallReasoningMessageCount)
-    {
-        Interlocked.Increment(ref _replayRequestsObserved);
-        Interlocked.Add(ref _replayRequestToolCallMessages, toolCallMessageCount);
-        Interlocked.Add(ref _replayRequestMissingToolCallReasoningMessages, missingToolCallReasoningMessageCount);
-    }
-
-    public void RecordReplayInjection(int injectedMessageCount)
-    {
-        if (injectedMessageCount <= 0)
-        {
-            return;
-        }
-
-        Interlocked.Add(ref _replayInjectedMessages, injectedMessageCount);
-    }
-
-    public void RecordReplayResponse(
-        int toolCallMessageCount,
-        int missingToolCallReasoningMessageCount,
-        int capturedMessageCount,
-        bool hasAssistantReasoning)
-    {
-        Interlocked.Increment(ref _replayResponsesObserved);
-        Interlocked.Add(ref _replayResponseToolCallMessages, toolCallMessageCount);
-        Interlocked.Add(ref _replayResponseMissingToolCallReasoningMessages, missingToolCallReasoningMessageCount);
-        Interlocked.Add(ref _replayCapturedMessages, capturedMessageCount);
-
-        if (hasAssistantReasoning)
-        {
-            Interlocked.Increment(ref _replayResponsesWithAssistantReasoning);
         }
     }
 
@@ -89,16 +48,8 @@ public sealed class ReasoningRunDiagnostics
             PolicyForcedDisablePatches: Volatile.Read(ref _policyForcedDisablePatches),
             PolicyForcedEnablePatches: Volatile.Read(ref _policyForcedEnablePatches),
             PolicyAutoSafetyDisablePatches: Volatile.Read(ref _policyAutoSafetyDisablePatches),
-            PolicyNoPatchRequests: Volatile.Read(ref _policyNoPatchRequests),
-            ReplayRequestsObserved: Volatile.Read(ref _replayRequestsObserved),
-            ReplayRequestToolCallMessages: Volatile.Read(ref _replayRequestToolCallMessages),
-            ReplayRequestMissingToolCallReasoningMessages: Volatile.Read(ref _replayRequestMissingToolCallReasoningMessages),
-            ReplayInjectedMessages: Volatile.Read(ref _replayInjectedMessages),
-            ReplayResponsesObserved: Volatile.Read(ref _replayResponsesObserved),
-            ReplayResponseToolCallMessages: Volatile.Read(ref _replayResponseToolCallMessages),
-            ReplayResponseMissingToolCallReasoningMessages: Volatile.Read(ref _replayResponseMissingToolCallReasoningMessages),
-            ReplayCapturedMessages: Volatile.Read(ref _replayCapturedMessages),
-            ReplayResponsesWithAssistantReasoning: Volatile.Read(ref _replayResponsesWithAssistantReasoning));
+            PolicyReasoningReplayPatches: Volatile.Read(ref _policyReasoningReplayPatches),
+            PolicyNoPatchRequests: Volatile.Read(ref _policyNoPatchRequests));
 }
 
 /// <summary>
@@ -111,20 +62,18 @@ public sealed record ReasoningRunDiagnosticsSnapshot(
     int PolicyForcedDisablePatches,
     int PolicyForcedEnablePatches,
     int PolicyAutoSafetyDisablePatches,
-    int PolicyNoPatchRequests,
-    int ReplayRequestsObserved,
-    int ReplayRequestToolCallMessages,
-    int ReplayRequestMissingToolCallReasoningMessages,
-    int ReplayInjectedMessages,
-    int ReplayResponsesObserved,
-    int ReplayResponseToolCallMessages,
-    int ReplayResponseMissingToolCallReasoningMessages,
-    int ReplayCapturedMessages,
-    int ReplayResponsesWithAssistantReasoning)
+    int PolicyReasoningReplayPatches,
+    int PolicyNoPatchRequests)
 {
-    public bool ProviderReasoningObserved => ReplayResponsesWithAssistantReasoning > 0;
-
-    public bool ReplayWasNeeded => ReplayRequestToolCallMessages > 0 || ReplayResponseToolCallMessages > 0;
-
+    /// <summary>
+    /// Thinking был снят на tool-шаге, потому что для assistant tool-call сообщения не нашлось захваченного
+    /// reasoning_content (например, стриминговый шаг). Это ожидаемый предохранитель от 400, не сбой.
+    /// </summary>
     public bool SafetyFallbackApplied => PolicyAutoSafetyDisablePatches > 0;
+
+    /// <summary>
+    /// Захваченный reasoning_content был вписан обратно в исходящий tool-шаг (HPA-041 follow-up),
+    /// то есть модель продолжала думать во время работы с инструментами.
+    /// </summary>
+    public bool ReasoningReplayedToWire => PolicyReasoningReplayPatches > 0;
 }

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using HaPersonalAgent.Agent;
+using HaPersonalAgent.Confirmation;
 using HaPersonalAgent.Configuration;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -25,6 +26,7 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
     private readonly ILogger<AutonomousAgentRunner> _logger;
     private readonly IAutonomousAgentNotifier? _notifier;
     private readonly IOptions<AutonomousAgentOptions>? _options;
+    private readonly IConfirmationService? _confirmationService;
 
     public AutonomousAgentRunner(
         IAutonomousAgentRepository repository,
@@ -32,7 +34,8 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
         AutonomousAgentCapsuleWriter capsuleWriter,
         ILogger<AutonomousAgentRunner> logger,
         IAutonomousAgentNotifier? notifier = null,
-        IOptions<AutonomousAgentOptions>? options = null)
+        IOptions<AutonomousAgentOptions>? options = null,
+        IConfirmationService? confirmationService = null)
     {
         _repository = repository;
         _agentRuntime = agentRuntime;
@@ -40,9 +43,13 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
         _logger = logger;
         _notifier = notifier;
         _options = options;
+        _confirmationService = confirmationService;
     }
 
-    public async Task RunAsync(AutonomousAgentDefinition definition, CancellationToken cancellationToken)
+    public async Task<AutonomousRunDelivery?> RunAsync(
+        AutonomousAgentDefinition definition,
+        bool deliverIndividually,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
@@ -54,12 +61,14 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
             var continuity = await _repository.GetContinuityAsync(definition.Id, cancellationToken);
             var pendingReplies = await _repository.GetPendingRepliesAsync(definition.Id, cancellationToken);
             var previousSummary = await GetPreviousSummaryAsync(definition.Id, run.Id, cancellationToken);
+            var crossAgentNotes = await GatherCrossAgentContextAsync(definition, cancellationToken);
 
             var input = AutonomousAgentPromptBuilder.BuildRunInput(
                 definition,
                 continuity,
                 pendingReplies,
-                previousSummary);
+                previousSummary,
+                crossAgentNotes);
 
             _logger.LogInformation(
                 "Autonomous run {CorrelationId} for agent {AgentId} starting: {PendingReplyCount} queued user replies, previous summary present {HasPreviousSummary}.",
@@ -80,7 +89,7 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
             if (!response.IsConfigured)
             {
                 await FailRunAsync(run, $"Agent runtime is not configured: {response.Text}");
-                return;
+                return null;
             }
 
             var output = AutonomousRunOutputParser.Parse(
@@ -106,11 +115,16 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
                 toolCallCount: Math.Min(runBudget.UsedToolCalls, runBudget.MaxToolCalls));
             await _repository.UpdateRunAsync(completed, cancellationToken);
 
-            // HPA-032: доставляем бриф и запоминаем id сообщения — это якорь, по которому reply
-            // пользователя будет сопоставлен с этим агентом.
-            if (_notifier is not null)
+            // HPA-035: собираем действия, которые прогон ПРЕДЛОЖИЛ (создал как pending confirmation), чтобы
+            // показать их в брифе с кнопками одобрения. Participant подтверждения == id агента (см. BuildContext).
+            var proposedActions = await CollectProposedActionsAsync(definition, run, cancellationToken);
+
+            // HPA-032: доставляем бриф и запоминаем id сообщения — это якорь, по которому reply сопоставится с агентом.
+            // HPA-039: при батче (несколько агентов в одно окно) индивидуальную доставку подавляем — планировщик
+            // соберёт результаты и отправит ОДИН сводный дайджест; сюда возвращаем payload для этого.
+            if (deliverIndividually && _notifier is not null)
             {
-                var deliveredMessageId = await _notifier.DeliverAsync(definition, completed, output, cancellationToken);
+                var deliveredMessageId = await _notifier.DeliverAsync(definition, completed, output, proposedActions, cancellationToken);
                 if (!string.IsNullOrWhiteSpace(deliveredMessageId))
                 {
                     completed = completed with { DeliveredMessageId = deliveredMessageId };
@@ -142,6 +156,8 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
                 completed.Summary?.Length ?? 0,
                 output.Questions.Count,
                 output.DurableFacts.Count);
+
+            return new AutonomousRunDelivery(definition, completed, output, proposedActions);
         }
         catch (OperationCanceledException)
         {
@@ -157,6 +173,7 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
                 run.CorrelationId,
                 definition.Id);
             await FailRunAsync(run, $"{exception.GetType().Name}: {exception.Message}");
+            return null;
         }
     }
 
@@ -181,6 +198,44 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
         return composed.Length > 0 ? composed : fallbackText;
     }
 
+    /// <summary>
+    /// Собирает действия, предложенные ЭТИМ прогоном (pending confirmations с его correlationId), для показа в брифе.
+    /// Только когда агенту разрешено предлагать; сбои сбора не должны ронять доставку брифа.
+    /// </summary>
+    private async Task<IReadOnlyList<AutonomousProposedAction>> CollectProposedActionsAsync(
+        AutonomousAgentDefinition definition,
+        AutonomousAgentRun run,
+        CancellationToken cancellationToken)
+    {
+        if (_confirmationService is null || !definition.ToolScope.AllowProposeActions)
+        {
+            return Array.Empty<AutonomousProposedAction>();
+        }
+
+        try
+        {
+            var pending = await _confirmationService.ListPendingForParticipantAsync(
+                definition.Id,
+                run.CorrelationId,
+                cancellationToken);
+            return pending
+                .Select(confirmation => new AutonomousProposedAction(
+                    confirmation.Id,
+                    confirmation.Summary,
+                    confirmation.Risk))
+                .ToList();
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                exception,
+                "Failed to collect proposed actions for autonomous agent {AgentId} run {RunId}.",
+                definition.Id,
+                run.Id);
+            return Array.Empty<AutonomousProposedAction>();
+        }
+    }
+
     private AgentContext BuildContext(
         AutonomousAgentDefinition definition,
         AutonomousAgentRun run,
@@ -197,10 +252,17 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
             // Фоновый запуск не ведёт диалоговую историю, поэтому rolling summary ему не пересобирают.
             shouldRefreshPersistedSummary: false,
             // Границы берём из настроек конкретного агента — галочки в UI должны реально что-то значить.
-            toolPolicy: AgentToolPolicy.ReadOnlyResearch(
-                allowWebSearch: definition.ToolScope.AllowWebSearch,
-                allowHomeAssistantRead: definition.ToolScope.AllowHomeAssistantRead,
-                allowMemoryRead: definition.ToolScope.AllowMemoryRead),
+            // HPA-035: с галочкой «может предлагать» фон получает propose-инструменты (control HA + запись в память),
+            // которые лишь создают pending confirmation; без неё — прежний research-only профиль.
+            toolPolicy: definition.ToolScope.AllowProposeActions
+                ? AgentToolPolicy.ReadOnlyResearchWithProposals(
+                    allowWebSearch: definition.ToolScope.AllowWebSearch,
+                    allowHomeAssistantRead: definition.ToolScope.AllowHomeAssistantRead,
+                    allowMemoryRead: definition.ToolScope.AllowMemoryRead)
+                : AgentToolPolicy.ReadOnlyResearch(
+                    allowWebSearch: definition.ToolScope.AllowWebSearch,
+                    allowHomeAssistantRead: definition.ToolScope.AllowHomeAssistantRead,
+                    allowMemoryRead: definition.ToolScope.AllowMemoryRead),
             runBudget: runBudget);
 
     private async Task<string?> GetPreviousSummaryAsync(
@@ -216,6 +278,67 @@ public sealed class AutonomousAgentRunner : IAutonomousAgentRunner
                 && !string.IsNullOrWhiteSpace(candidate.Summary))
             ?.Summary;
     }
+
+    /// <summary>Максимум других агентов и длина сводки в кросс-контексте — чтобы не раздувать промпт.</summary>
+    private const int MaxCrossAgentNotes = 5;
+    private const int MaxCrossAgentSummaryChars = 600;
+
+    /// <summary>
+    /// HPA-039 (часть A): собирает краткий контекст ДРУГИХ активных агентов (последняя сводка + фокус), если владелец
+    /// разрешил этому агенту кросс-чтение. Бюджетно и best-effort: сбои не должны ронять запуск.
+    /// </summary>
+    private async Task<IReadOnlyList<AutonomousCrossAgentNote>> GatherCrossAgentContextAsync(
+        AutonomousAgentDefinition definition,
+        CancellationToken cancellationToken)
+    {
+        if (!definition.ToolScope.AllowCrossAgentContext)
+        {
+            return Array.Empty<AutonomousCrossAgentNote>();
+        }
+
+        try
+        {
+            var all = await _repository.ListDefinitionsAsync(cancellationToken);
+            var notes = new List<AutonomousCrossAgentNote>();
+            foreach (var other in all)
+            {
+                if (notes.Count >= MaxCrossAgentNotes)
+                {
+                    break;
+                }
+
+                if (other.Id == definition.Id || other.Status != AutonomousAgentStatus.Active)
+                {
+                    continue;
+                }
+
+                var summary = await GetPreviousSummaryAsync(other.Id, currentRunId: string.Empty, cancellationToken);
+                var continuity = await _repository.GetContinuityAsync(other.Id, cancellationToken);
+                if (string.IsNullOrWhiteSpace(summary) && string.IsNullOrWhiteSpace(continuity?.Focus))
+                {
+                    continue;
+                }
+
+                notes.Add(new AutonomousCrossAgentNote(
+                    other.Name,
+                    Truncate(summary ?? string.Empty, MaxCrossAgentSummaryChars),
+                    continuity?.Focus));
+            }
+
+            return notes;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                exception,
+                "Failed to gather cross-agent context for autonomous agent {AgentId}; running without it.",
+                definition.Id);
+            return Array.Empty<AutonomousCrossAgentNote>();
+        }
+    }
+
+    private static string Truncate(string value, int maxLength) =>
+        value.Length <= maxLength ? value : value[..maxLength];
 
     private async Task UpdateContinuityAsync(
         string agentId,

@@ -988,6 +988,63 @@ public sealed class AgentStateRepository
             : null;
     }
 
+    /// <summary>
+    /// HPA-035: все ещё ожидающие подтверждения одного участника (для автономного агента participant == agentId),
+    /// опционально суженные до одного прогона (correlationId). Нужно, чтобы показать предложения в брифе и во вкладке «Действия».
+    /// </summary>
+    public async Task<IReadOnlyList<PendingConfirmation>> ListPendingConfirmationsByParticipantAsync(
+        string participantId,
+        string? correlationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(participantId);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        var hasCorrelation = !string.IsNullOrWhiteSpace(correlationId);
+        command.CommandText =
+            $"""
+            SELECT
+                id,
+                action_kind,
+                conversation_key,
+                participant_id,
+                operation_name,
+                payload_json,
+                summary,
+                risk,
+                status,
+                created_utc,
+                expires_utc,
+                completed_utc,
+                correlation_id,
+                result_json,
+                error
+            FROM pending_confirmations
+            WHERE participant_id = $participantId
+              AND status = $status
+              {(hasCorrelation ? "AND correlation_id = $correlationId" : string.Empty)}
+            ORDER BY created_utc DESC, id DESC;
+            """;
+        command.Parameters.AddWithValue("$participantId", participantId);
+        command.Parameters.AddWithValue("$status", ConfirmationActionStatus.Pending.ToString());
+        if (hasCorrelation)
+        {
+            command.Parameters.AddWithValue("$correlationId", correlationId!.Trim());
+        }
+
+        var results = new List<PendingConfirmation>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            results.Add(ReadPendingConfirmation(reader));
+        }
+
+        return results;
+    }
+
     public async Task<bool> TryUpdateConfirmationStatusAsync(
         string confirmationId,
         ConfirmationActionStatus expectedStatus,

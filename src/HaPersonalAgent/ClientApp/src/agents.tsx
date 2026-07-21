@@ -1,16 +1,20 @@
 import { useCallback, useEffect, useState } from 'preact/hooks';
 import {
+  approveAgentAction,
   createAgent,
   deleteAgent,
   deleteInboxEntry,
   getAgent,
+  getAgentActions,
   getAgentInbox,
   getCapabilities,
   listAgentRuns,
+  rejectAgentAction,
   replyToAgent,
   runAgentNow,
   setAgentStatus,
   updateAgent,
+  type AgentAction,
   type AgentDetail,
   type AgentInboxEntry,
   type AgentRun,
@@ -23,7 +27,7 @@ import {
 // Зачем: всё, что обещал эпик — создать, отредактировать, поставить на паузу, запустить сейчас, прочитать сводки и ответить на вопрос.
 // Как: вкладки Обзор/Запуски/Вопросы/Настройки/Память поверх /api/agents; ответ кладётся в ту же очередь, что и Telegram-reply.
 
-type AgentTab = 'overview' | 'runs' | 'questions' | 'settings' | 'memory';
+type AgentTab = 'overview' | 'runs' | 'questions' | 'actions' | 'settings' | 'memory';
 
 const SCHEDULE_LABELS: Record<string, string> = {
   Manual: 'вручную',
@@ -39,6 +43,8 @@ const DEFAULT_TOOL_SCOPE: AgentToolScope = {
   allowMemoryRead: true,
   allowMemoryWrite: true,
   maxDurableFactsPerRun: 3,
+  allowProposeActions: false,
+  allowCrossAgentContext: false,
 };
 
 // Префилл формы: подмножество полей агента, которым можно заполнить форму (шаблон или редактирование).
@@ -65,6 +71,8 @@ const webScope = (): AgentToolScope => ({
   allowMemoryRead: true,
   allowMemoryWrite: true,
   maxDurableFactsPerRun: 3,
+  allowProposeActions: false,
+  allowCrossAgentContext: false,
 });
 
 // Шаблоны — это ДАННЫЕ, а не код: строка миссии + каденция + границы инструментов. Любое поле правится перед сохранением.
@@ -137,6 +145,8 @@ const AGENT_TEMPLATES: AgentTemplate[] = [
         allowMemoryRead: true,
         allowMemoryWrite: true,
         maxDurableFactsPerRun: 3,
+        allowProposeActions: false,
+        allowCrossAgentContext: false,
       },
     },
   },
@@ -224,6 +234,9 @@ export function AgentDetailView(props: {
         <TabButton id="overview" active={tab} label="Обзор" onSelect={setTab} />
         <TabButton id="runs" active={tab} label={`Запуски${runs.length ? ` (${runs.length})` : ''}`} onSelect={setTab} />
         <TabButton id="questions" active={tab} label="Вопросы" onSelect={setTab} />
+        {agent.toolScope.allowProposeActions && (
+          <TabButton id="actions" active={tab} label="Действия" onSelect={setTab} />
+        )}
         <TabButton id="settings" active={tab} label="Настройки" onSelect={setTab} />
         <TabButton id="memory" active={tab} label="Память" onSelect={setTab} />
       </nav>
@@ -311,6 +324,10 @@ export function AgentDetailView(props: {
         <QuestionsTab agent={agent} runs={runs} onAnswered={() => { load(); onChanged(); }} />
       )}
 
+      {tab === 'actions' && (
+        <ActionsTab agent={agent} onChanged={() => { load(); onChanged(); }} />
+      )}
+
       {tab === 'settings' && (
         <AgentForm
           initial={agent}
@@ -351,6 +368,89 @@ const INBOX_SOURCE_LABELS: Record<string, string> = {
   Web: 'из панели',
   Conversation: 'из чата',
 };
+
+function ActionsTab(props: { agent: AgentDetail; onChanged: () => void }) {
+  const { agent, onChanged } = props;
+  const [actions, setActions] = useState<AgentAction[]>([]);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadActions = useCallback(() => {
+    getAgentActions(agent.id)
+      .then(setActions)
+      .catch(() => setActions([]));
+  }, [agent.id]);
+
+  useEffect(loadActions, [loadActions]);
+
+  const decide = useCallback(
+    async (actionId: string, approve: boolean) => {
+      setBusyId(actionId);
+      setError(null);
+      setNote(null);
+      try {
+        const result = approve
+          ? await approveAgentAction(agent.id, actionId)
+          : await rejectAgentAction(agent.id, actionId);
+        setNote(result.message);
+        loadActions();
+        onChanged();
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [agent.id, loadActions, onChanged],
+  );
+
+  return (
+    <div class="panel-pad">
+      <div class="panel-head">
+        <h2>Предложенные действия</h2>
+        <button class="mini" type="button" onClick={loadActions}>Обновить</button>
+      </div>
+      <p class="hint">
+        Агент предлагает действия, но не выполняет их сам. Ничего не произойдёт, пока ты не нажмёшь «Одобрить».
+      </p>
+      {error && <div class="state state--error">{error}</div>}
+      {note && <div class="state">{note}</div>}
+      {actions.length === 0 ? (
+        <div class="state">Ожидающих действий нет.</div>
+      ) : (
+        <ul class="inbox">
+          {actions.map((action) => (
+            <li class="inbox__item" key={action.id}>
+              <span class="inbox__text">
+                {action.summary}
+                <span class="hint"> · Риск: {action.risk}</span>
+              </span>
+              <div class="actions">
+                <button
+                  class="mini"
+                  type="button"
+                  disabled={busyId !== null}
+                  onClick={() => void decide(action.id, true)}
+                >
+                  Одобрить
+                </button>
+                <button
+                  class="mini"
+                  type="button"
+                  disabled={busyId !== null}
+                  onClick={() => void decide(action.id, false)}
+                >
+                  Отклонить
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function QuestionsTab(props: { agent: AgentDetail; runs: AgentRun[]; onAnswered: () => void }) {
   const { agent, runs, onAnswered } = props;
@@ -569,8 +669,9 @@ export function AgentForm(props: {
 
       <h3 class="sub-head">Что агенту разрешено</h3>
       <p class="hint">
-        Фоновый запуск идёт без тебя, поэтому управление устройствами недоступно — только чтение и
-        ограниченная запись в память.
+        Фоновый запуск идёт без тебя. По умолчанию — только чтение и ограниченная запись в память.
+        Управлять устройствами сам он не может; с галочкой ниже он вправе лишь ПРЕДЛОЖИТЬ действие, а
+        выполнится оно только после твоего одобрения.
       </p>
       <div class="checks">
         <Check
@@ -596,6 +697,16 @@ export function AgentForm(props: {
           checked={scope.allowMemoryWrite}
           disabled={!scope.allowMemoryRead}
           onToggle={(v) => { setScope({ ...scope, allowMemoryWrite: v }); setSaved(false); }}
+        />
+        <Check
+          label="Может предлагать действия (управление HA и записи в память — с твоим одобрением)"
+          checked={scope.allowProposeActions}
+          onToggle={(v) => { setScope({ ...scope, allowProposeActions: v }); setSaved(false); }}
+        />
+        <Check
+          label="Видеть находки других агентов (только для связей, не выдумывая)"
+          checked={scope.allowCrossAgentContext}
+          onToggle={(v) => { setScope({ ...scope, allowCrossAgentContext: v }); setSaved(false); }}
         />
       </div>
 

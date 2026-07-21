@@ -343,6 +343,131 @@ public class ConfirmationServiceTests
         }
     }
 
+    [Fact]
+    public async Task Participant_scoped_list_and_approve_drive_an_autonomous_agents_proposal_to_execution()
+    {
+        // HPA-035: фоновый прогон создаёт предложение с participant == agentId; владелец одобряет его сервер-сайд.
+        var databasePath = CreateTemporaryDatabasePath();
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var executor = new FakeActionExecutor(ConfirmationActionExecutionResult.Success("{\"ok\":true}"));
+            var service = CreateService(repository, executor);
+            var agentConversation = DialogueConversation.Create("autonomous", "agent-42", "agent-42");
+
+            var proposal = await service.ProposeAsync(
+                CreateRequest(agentConversation, payloadJson: "{}"),
+                CancellationToken.None);
+
+            var listed = await service.ListPendingForParticipantAsync("agent-42", correlationId: null, CancellationToken.None);
+            Assert.Single(listed);
+            Assert.Equal(proposal.ConfirmationId, listed[0].Id);
+
+            var approved = await service.ApproveForParticipantAsync("agent-42", proposal.ConfirmationId!, CancellationToken.None);
+
+            Assert.True(approved.IsSuccess);
+            Assert.Equal(ConfirmationDecisionOutcome.Completed, approved.Outcome);
+            Assert.Single(executor.ExecutedConfirmations);
+            // После исполнения предложение больше не «ожидающее».
+            Assert.Empty(await service.ListPendingForParticipantAsync("agent-42", null, CancellationToken.None));
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Approve_by_confirmation_id_resolves_the_owner_participant_from_the_confirmation()
+    {
+        // Telegram-кнопка знает только id действия — участник резолвится из самого подтверждения.
+        var databasePath = CreateTemporaryDatabasePath();
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var executor = new FakeActionExecutor(ConfirmationActionExecutionResult.Success("{\"ok\":true}"));
+            var service = CreateService(repository, executor);
+            var agentConversation = DialogueConversation.Create("autonomous", "agent-7", "agent-7");
+
+            var proposal = await service.ProposeAsync(
+                CreateRequest(agentConversation, payloadJson: "{}"),
+                CancellationToken.None);
+
+            var approved = await service.ApproveByConfirmationIdAsync(proposal.ConfirmationId!, CancellationToken.None);
+
+            Assert.True(approved.IsSuccess);
+            Assert.Equal(ConfirmationDecisionOutcome.Completed, approved.Outcome);
+            Assert.Single(executor.ExecutedConfirmations);
+            Assert.Equal("agent-7", executor.ExecutedConfirmations[0].ParticipantId);
+
+            // Неизвестный id — NotFound, ничего не исполняется.
+            var missing = await service.ApproveByConfirmationIdAsync("does-not-exist", CancellationToken.None);
+            Assert.Equal(ConfirmationDecisionOutcome.NotFound, missing.Outcome);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Reject_for_participant_marks_rejected_and_never_executes()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var executor = new FakeActionExecutor(ConfirmationActionExecutionResult.Success("{}"));
+            var service = CreateService(repository, executor);
+            var agentConversation = DialogueConversation.Create("autonomous", "agent-9", "agent-9");
+
+            var proposal = await service.ProposeAsync(
+                CreateRequest(agentConversation, payloadJson: "{}"),
+                CancellationToken.None);
+            var rejected = await service.RejectForParticipantAsync("agent-9", proposal.ConfirmationId!, CancellationToken.None);
+
+            Assert.Equal(ConfirmationDecisionOutcome.Rejected, rejected.Outcome);
+            Assert.Empty(executor.ExecutedConfirmations);
+            Assert.Empty(await service.ListPendingForParticipantAsync("agent-9", null, CancellationToken.None));
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
+    public async Task Participant_scoped_list_filters_out_expired_proposals()
+    {
+        var databasePath = CreateTemporaryDatabasePath();
+        try
+        {
+            var repository = CreateRepository(databasePath);
+            var service = CreateService(repository);
+            var agentConversation = DialogueConversation.Create("autonomous", "agent-x", "agent-x");
+
+            // Предложение с истёкшим сроком не должно попасть в список ожидающих.
+            var expiredRequest = new ConfirmationProposalRequest(
+                AgentContext.Create(
+                    "corr",
+                    conversationKey: DialogueConversationKey.Create(agentConversation),
+                    participantId: agentConversation.ParticipantId),
+                FakeActionKind,
+                "fake_operation",
+                "{}",
+                "summary",
+                "risk",
+                ExpiresAfter: TimeSpan.FromSeconds(-1));
+            await service.ProposeAsync(expiredRequest, CancellationToken.None);
+
+            Assert.Empty(await service.ListPendingForParticipantAsync("agent-x", null, CancellationToken.None));
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
     private static ConfirmationProposalRequest CreateRequest(
         DialogueConversation conversation,
         string payloadJson,

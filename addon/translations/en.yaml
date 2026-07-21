@@ -35,6 +35,9 @@ configuration:
   llm_thinking_mode:
     name: LLM thinking mode
     description: auto keeps tool calls stable, disabled forces no thinking when supported, enabled allows provider defaults unless explicit enable is supported.
+  llm_replay_reasoning_to_wire:
+    name: Keep thinking on during tool use (experimental)
+    description: When on, the model's reasoning is echoed back on tool steps so it keeps thinking while using tools instead of thinking only before the first tool call. Off by default because some providers reject the echoed reasoning with an HTTP 400 — turn on and verify on your key; if answers start failing on tool use, turn it back off.
   llm_router_mode:
     name: LLM router mode
     description: off disables adaptive routing; shadow logs routing decisions only; enforced applies model+reasoning routing per request.

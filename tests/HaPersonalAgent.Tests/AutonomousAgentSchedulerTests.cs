@@ -271,10 +271,13 @@ public class AutonomousAgentSchedulerTests
     {
         public List<string> RunAgentIds { get; } = new();
 
-        public Task RunAsync(AutonomousAgentDefinition definition, CancellationToken cancellationToken)
+        public Task<AutonomousRunDelivery?> RunAsync(
+            AutonomousAgentDefinition definition,
+            bool deliverIndividually,
+            CancellationToken cancellationToken)
         {
             RunAgentIds.Add(definition.Id);
-            return Task.CompletedTask;
+            return Task.FromResult<AutonomousRunDelivery?>(null);
         }
     }
 

@@ -27,4 +27,35 @@ public interface IConfirmationService
         DialogueConversation conversation,
         string correlationId,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// HPA-035: ещё ожидающие подтверждения одного участника (для автономного агента participant == agentId),
+    /// опционально суженные до одного прогона. Истёкшие отфильтрованы. Используется брифом и вкладкой «Действия».
+    /// </summary>
+    Task<IReadOnlyList<PendingConfirmation>> ListPendingForParticipantAsync(
+        string participantId,
+        string? correlationId,
+        CancellationToken cancellationToken);
+
+    /// <summary>Одобрить действие, зная участника-владельца (например, agentId) — минуя привязку к чату-инициатору.</summary>
+    Task<ConfirmationDecisionResult> ApproveForParticipantAsync(
+        string participantId,
+        string confirmationId,
+        CancellationToken cancellationToken);
+
+    /// <summary>Отклонить действие, зная участника-владельца.</summary>
+    Task<ConfirmationDecisionResult> RejectForParticipantAsync(
+        string participantId,
+        string confirmationId,
+        CancellationToken cancellationToken);
+
+    /// <summary>Одобрить действие только по его id: участник-владелец резолвится из самого подтверждения (для компактных Telegram-кнопок).</summary>
+    Task<ConfirmationDecisionResult> ApproveByConfirmationIdAsync(
+        string confirmationId,
+        CancellationToken cancellationToken);
+
+    /// <summary>Отклонить действие только по его id.</summary>
+    Task<ConfirmationDecisionResult> RejectByConfirmationIdAsync(
+        string confirmationId,
+        CancellationToken cancellationToken);
 }
