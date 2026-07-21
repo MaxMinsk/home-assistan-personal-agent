@@ -477,6 +477,33 @@ public sealed class SqliteAutonomousAgentRepository : IAutonomousAgentRepository
         await transaction.CommitAsync(cancellationToken);
     }
 
+    public async Task<bool> DeletePendingReplyAsync(
+        string agentId,
+        string entryId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(agentId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(entryId);
+
+        await InitializeAsync(cancellationToken);
+
+        await using var connection = await _connectionFactory.OpenConnectionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            DELETE FROM autonomous_agent_inbox
+            WHERE id = $id AND agent_id = $agentId AND consumed_utc IS NULL;
+            SELECT changes();
+            """;
+        command.Parameters.AddWithValue("$id", entryId);
+        command.Parameters.AddWithValue("$agentId", agentId);
+
+        var deleted = Convert.ToInt64(
+            await command.ExecuteScalarAsync(cancellationToken),
+            CultureInfo.InvariantCulture);
+        return deleted > 0;
+    }
+
     public async Task<AutonomousAgentContinuity?> GetContinuityAsync(
         string agentId,
         CancellationToken cancellationToken)

@@ -140,15 +140,14 @@ public sealed class AgentMafFactory
             Endpoint = new Uri(options.BaseUrl),
         };
 
-        if (executionPlan.ShouldPatchChatCompletionRequest)
-        {
-            clientOptions.AddPolicy(
-                new LlmChatCompletionRequestPolicy(
-                    executionPlan,
-                    loggerFactory.CreateLogger<LlmChatCompletionRequestPolicy>(),
-                    reasoningDiagnostics),
-                PipelinePosition.BeforeTransport);
-        }
+        // Политика подключается ВСЕГДА: даже когда thinking-патчи не нужны (provider-default), она чинит
+        // некорректный content: "" на assistant-сообщениях с tool_calls, иначе Moonshot валит любой tool-шаг с HTTP 400.
+        clientOptions.AddPolicy(
+            new LlmChatCompletionRequestPolicy(
+                executionPlan,
+                loggerFactory.CreateLogger<LlmChatCompletionRequestPolicy>(),
+                reasoningDiagnostics),
+            PipelinePosition.BeforeTransport);
 
         return clientOptions;
     }

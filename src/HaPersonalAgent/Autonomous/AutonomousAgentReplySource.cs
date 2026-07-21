@@ -9,4 +9,7 @@ public enum AutonomousAgentReplySource
 {
     Telegram,
     Web,
+
+    /// <summary>Проактивный контекст, который основной conversation-агент подметил в чате и переслал агенту (HPA-043).</summary>
+    Conversation,
 }

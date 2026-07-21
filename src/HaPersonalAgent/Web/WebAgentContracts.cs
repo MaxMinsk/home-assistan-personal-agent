@@ -82,6 +82,17 @@ public sealed record AgentUpsertRequest(
     AgentToolScopeDto? ToolScope);
 
 /// <summary>
+/// Что: одна запись очереди контекста агента для Web UI (ответ пользователя или контекст из чата).
+/// Зачем: очередь должна быть видимой и управляемой — пользователь видит, что и откуда прилетело, и может убрать лишнее до запуска.
+/// Как: проекция AutonomousAgentInboxEntry; source — Telegram/Web/Conversation.
+/// </summary>
+public sealed record AgentInboxEntryResponse(
+    string Id,
+    string Source,
+    string Text,
+    string ReceivedUtc);
+
+/// <summary>
 /// Что: тело ответа пользователя агенту из Web UI.
 /// Зачем: ответ из панели должен попадать в ту же очередь, что и reply в Telegram.
 /// Как: текст кладётся в inbox и потребляется следующим плановым запуском, запуск не инициируется.

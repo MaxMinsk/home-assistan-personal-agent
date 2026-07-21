@@ -59,38 +59,48 @@ public sealed class BraveWebSearchProvider : IWebSearchProvider
             1,
             MaxSupportedCount);
 
-        var uri = BuildRequestUri(normalizedQuery, requestedCount, options.Country);
-
         try
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, uri);
-            request.Headers.TryAddWithoutValidation("X-Subscription-Token", options.ApiKey);
-            request.Headers.TryAddWithoutValidation("Accept", "application/json");
-
             var client = _httpClientFactory.CreateClient(HttpClientName);
-            using var response = await client.SendAsync(request, cancellationToken);
+            var country = string.IsNullOrWhiteSpace(options.Country) ? null : options.Country.Trim();
 
-            if (!response.IsSuccessStatusCode)
+            var response = await SendAsync(client, normalizedQuery, requestedCount, country, cancellationToken);
+
+            // 422 при заданной стране почти всегда означает неподдерживаемый Brave код страны (напр. BY):
+            // повторяем один раз без country, чтобы поиск всё же вернул результаты, а не падал.
+            if (response.StatusCode == System.Net.HttpStatusCode.UnprocessableEntity && country is not null)
             {
-                // Ключ/квота — самые частые причины; не раскрываем сам ключ в логах и ответе.
-                _logger.LogWarning(
-                    "Brave web search failed with status {StatusCode} for a query of length {QueryLength}.",
-                    (int)response.StatusCode,
-                    normalizedQuery.Length);
-                return WebSearchResponse.Unavailable(
-                    normalizedQuery,
-                    $"Search provider returned HTTP {(int)response.StatusCode}.");
+                _logger.LogInformation(
+                    "Brave web search returned 422 with country '{Country}'; retrying without a country filter.",
+                    country);
+                response.Dispose();
+                response = await SendAsync(client, normalizedQuery, requestedCount, country: null, cancellationToken);
             }
 
-            var payload = await response.Content.ReadAsStringAsync(cancellationToken);
-            var results = ParseResults(payload, requestedCount);
+            using (response)
+            {
+                if (!response.IsSuccessStatusCode)
+                {
+                    // Ключ/квота/невалидный параметр — не раскрываем сам ключ в логах и ответе.
+                    _logger.LogWarning(
+                        "Brave web search failed with status {StatusCode} for a query of length {QueryLength}.",
+                        (int)response.StatusCode,
+                        normalizedQuery.Length);
+                    return WebSearchResponse.Unavailable(
+                        normalizedQuery,
+                        $"Search provider returned HTTP {(int)response.StatusCode}.");
+                }
 
-            _logger.LogInformation(
-                "Brave web search returned {ResultCount} result(s) for a query of length {QueryLength}.",
-                results.Count,
-                normalizedQuery.Length);
+                var payload = await response.Content.ReadAsStringAsync(cancellationToken);
+                var results = ParseResults(payload, requestedCount);
 
-            return WebSearchResponse.Found(normalizedQuery, results);
+                _logger.LogInformation(
+                    "Brave web search returned {ResultCount} result(s) for a query of length {QueryLength}.",
+                    results.Count,
+                    normalizedQuery.Length);
+
+                return WebSearchResponse.Found(normalizedQuery, results);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -103,6 +113,19 @@ public sealed class BraveWebSearchProvider : IWebSearchProvider
                 normalizedQuery,
                 $"Search request failed: {exception.GetType().Name}.");
         }
+    }
+
+    private async Task<HttpResponseMessage> SendAsync(
+        HttpClient client,
+        string query,
+        int count,
+        string? country,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, BuildRequestUri(query, count, country));
+        request.Headers.TryAddWithoutValidation("X-Subscription-Token", _options.Value.ApiKey);
+        request.Headers.TryAddWithoutValidation("Accept", "application/json");
+        return await client.SendAsync(request, cancellationToken);
     }
 
     private static Uri BuildRequestUri(string query, int count, string? country)

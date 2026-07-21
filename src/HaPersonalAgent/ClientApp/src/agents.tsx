@@ -2,7 +2,9 @@ import { useCallback, useEffect, useState } from 'preact/hooks';
 import {
   createAgent,
   deleteAgent,
+  deleteInboxEntry,
   getAgent,
+  getAgentInbox,
   getCapabilities,
   listAgentRuns,
   replyToAgent,
@@ -10,6 +12,7 @@ import {
   setAgentStatus,
   updateAgent,
   type AgentDetail,
+  type AgentInboxEntry,
   type AgentRun,
   type AgentToolScope,
   type AgentUpsert,
@@ -343,14 +346,29 @@ export function AgentDetailView(props: {
   );
 }
 
+const INBOX_SOURCE_LABELS: Record<string, string> = {
+  Telegram: 'из Telegram',
+  Web: 'из панели',
+  Conversation: 'из чата',
+};
+
 function QuestionsTab(props: { agent: AgentDetail; runs: AgentRun[]; onAnswered: () => void }) {
   const { agent, runs, onAnswered } = props;
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [inbox, setInbox] = useState<AgentInboxEntry[]>([]);
 
   const latestQuestions = runs.find((run) => run.questions.length > 0)?.questions ?? [];
+
+  const loadInbox = useCallback(() => {
+    getAgentInbox(agent.id)
+      .then(setInbox)
+      .catch(() => setInbox([]));
+  }, [agent.id]);
+
+  useEffect(loadInbox, [loadInbox]);
 
   const send = useCallback(async () => {
     if (!text.trim() || busy) {
@@ -362,13 +380,27 @@ function QuestionsTab(props: { agent: AgentDetail; runs: AgentRun[]; onAnswered:
       await replyToAgent(agent.id, text.trim());
       setText('');
       setSent(true);
+      loadInbox();
       onAnswered();
     } catch (e) {
       setError((e as Error).message);
     } finally {
       setBusy(false);
     }
-  }, [agent.id, text, busy, onAnswered]);
+  }, [agent.id, text, busy, onAnswered, loadInbox]);
+
+  const removeEntry = useCallback(
+    async (entryId: string) => {
+      try {
+        await deleteInboxEntry(agent.id, entryId);
+        loadInbox();
+        onAnswered();
+      } catch (e) {
+        setError((e as Error).message);
+      }
+    },
+    [agent.id, loadInbox, onAnswered],
+  );
 
   return (
     <div class="panel-pad">
@@ -385,6 +417,29 @@ function QuestionsTab(props: { agent: AgentDetail; runs: AgentRun[]; onAnswered:
         <ol class="questions">
           {latestQuestions.map((question) => <li key={question}>{question}</li>)}
         </ol>
+      )}
+
+      {inbox.length > 0 && (
+        <>
+          <h3 class="sub-head">Очередь для следующего запуска</h3>
+          <p class="hint">Это ответы и контекст, которые агент учтёт при следующем запуске. Лишнее можно убрать.</p>
+          <ul class="inbox">
+            {inbox.map((entry) => (
+              <li class="inbox__item" key={entry.id}>
+                <span class="inbox__source">{INBOX_SOURCE_LABELS[entry.source] ?? entry.source}</span>
+                <span class="inbox__text">{entry.text}</span>
+                <button
+                  class="inbox__remove"
+                  type="button"
+                  title="Убрать из очереди"
+                  onClick={() => void removeEntry(entry.id)}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
 
       <h3 class="sub-head">Твой ответ</h3>

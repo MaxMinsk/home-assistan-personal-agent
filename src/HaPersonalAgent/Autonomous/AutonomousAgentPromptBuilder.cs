@@ -51,11 +51,18 @@ public static class AutonomousAgentPromptBuilder
             builder.AppendLine();
         }
 
-        if (pendingReplies.Count > 0)
+        var answers = pendingReplies
+            .Where(reply => reply.Source != AutonomousAgentReplySource.Conversation)
+            .ToList();
+        var chatContext = pendingReplies
+            .Where(reply => reply.Source == AutonomousAgentReplySource.Conversation)
+            .ToList();
+
+        if (answers.Count > 0)
         {
             builder.AppendLine("## NEW answers from the user since your last run (authoritative — follow them)");
             var index = 1;
-            foreach (var reply in pendingReplies)
+            foreach (var reply in answers)
             {
                 builder.AppendLine($"{index}. {reply.Text}");
                 index++;
@@ -63,6 +70,21 @@ public static class AutonomousAgentPromptBuilder
 
             builder.AppendLine();
             builder.AppendLine("Treat these answers as decisions: fold them into the research and stop re-asking what they already settled.");
+            builder.AppendLine();
+        }
+
+        if (chatContext.Count > 0)
+        {
+            builder.AppendLine("## New relevant context the user mentioned in chat since your last run");
+            var index = 1;
+            foreach (var note in chatContext)
+            {
+                builder.AppendLine($"{index}. {note.Text}");
+                index++;
+            }
+
+            builder.AppendLine();
+            builder.AppendLine("This is context the user brought up in conversation, not a direct answer to your questions; weigh it and fold in what is relevant to the mission.");
             builder.AppendLine();
         }
 

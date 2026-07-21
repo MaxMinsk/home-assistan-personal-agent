@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.14.0
+
+- **Fix (for real this time): the "empty text content" error that broke the assistant on multi-step tool use.** The 0.13.0 attempt only covered part of the cases — it was tied to the thinking-mode patch, so a deep-reasoning turn (and any turn where the provider uses its default thinking) still failed. Now the correction is applied to every request regardless of thinking mode, and the empty text field on a tool-call message is removed entirely rather than blanked, which the model provider accepts. If a similar error somehow recurs, the add-on log now prints a per-message content-state line (roles and field kinds only, no message text) so the exact cause can be pinpointed instead of guessed. (HPA-047.)
+- **Fix: web search failed for some regions.** With a country set to one Brave does not support (e.g. Belarus), every search returned an error. Search now automatically retries without the country filter in that case, so results come through. You can also just clear `web_search_country`. (HPA-047.)
+- **The chat agent can now feed your scheduled agents.** When you mention something in chat that is relevant to a background agent's mission — say you tell it you are considering a new project — the assistant can drop that as context into the right agent's queue, so its next run takes it into account. It only does this when the relevance is clear and tells you what it noted and for which agent; nothing runs immediately. You can also ask "what did my research agent find / what is it waiting on" and get an answer from that agent's real state. (HPA-043, HPA-044.)
+- **See and clear an agent's queued context.** An agent's Questions tab now lists what is waiting for its next run — your replies and anything the chat agent routed in — each tagged with where it came from (chat / Telegram / panel), with a × to remove any item before it is used. (HPA-045.)
+- **The chat panel remembers your conversation.** After an add-on update or a page reload the chat used to open empty even though the history was safely stored; it now restores the recent conversation on load. (The agent never actually lost its memory — history and the rolling summary live in the persistent `/data` store; only the in-panel view and the in-memory uptime/telemetry counters reset on a restart.) (HPA-046.)
+- Internal: `LlmChatCompletionRequestPolicy` is now always in the request pipeline; a neutral `IScheduledAgentBridge` (implemented in the Autonomous layer) backs the chat↔agents tools behind a new `AllowScheduledAgentRouting` policy axis; new endpoints `GET /api/dialogue/history`, `GET/DELETE /api/agents/{id}/inbox`, `GET /api/capabilities`. Sprint HPA-S6: HPA-043, HPA-044, HPA-045, HPA-046, HPA-047.
+
+
 ## 0.13.0
 
 - **Fix: the assistant failed with an "empty text content" error whenever it used a tool across more than one step.** This hit any multi-step tool turn (and became common now that web search exists). The assistant message that carries a tool call was being sent with an empty text field, which the model provider rejects; it is now sent correctly. (HPA-042.)

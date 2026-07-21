@@ -41,6 +41,7 @@ public sealed class AgentToolCatalog
     private readonly IMemoryMcpClient? _memoryMcpClient;
     private readonly IOptions<MemoryMcpOptions>? _memoryMcpOptions;
     private readonly IWebSearchProvider? _webSearchProvider;
+    private readonly IScheduledAgentBridge? _scheduledAgentBridge;
     private readonly ILogger<AgentToolCatalog> _logger;
 
     public AgentToolCatalog(
@@ -50,9 +51,11 @@ public sealed class AgentToolCatalog
         IConfirmationService? confirmationService = null,
         IMemoryMcpClient? memoryMcpClient = null,
         IOptions<MemoryMcpOptions>? memoryMcpOptions = null,
-        IWebSearchProvider? webSearchProvider = null)
+        IWebSearchProvider? webSearchProvider = null,
+        IScheduledAgentBridge? scheduledAgentBridge = null)
     {
         _webSearchProvider = webSearchProvider;
+        _scheduledAgentBridge = scheduledAgentBridge;
         _statusTool = statusTool ?? throw new ArgumentNullException(nameof(statusTool));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _homeAssistantMcpStatusTool = homeAssistantMcpStatusTool;
@@ -130,6 +133,14 @@ public sealed class AgentToolCatalog
             }
         }
 
+        // HPA-043/044: мост к плановым агентам — только для интерактивного агента (не для фоновых запусков).
+        if (_scheduledAgentBridge is not null && toolPolicy.AllowScheduledAgentRouting)
+        {
+            tools.Add(CreateListScheduledAgentsTool());
+            tools.Add(CreateNoteForScheduledAgentTool());
+            tools.Add(CreateScheduledAgentBriefingTool());
+        }
+
         return tools;
     }
 
@@ -201,6 +212,12 @@ public sealed class AgentToolCatalog
         if (_webSearchProvider is { IsConfigured: true } && context.EffectiveToolPolicy.AllowWebSearch)
         {
             instructions.AppendLine("Web search is available via web_search. It returns titles, urls and short snippets — NEVER full article text, so do not claim to have read a page. Cite the url behind any web-sourced claim; if the snippets do not actually support an answer, say that plainly instead of extrapolating from them.");
+        }
+
+        if (_scheduledAgentBridge is not null && context.EffectiveToolPolicy.AllowScheduledAgentRouting)
+        {
+            instructions.AppendLine();
+            instructions.AppendLine("Scheduled background agents: the user has agents that wake on a schedule to research a mission. When the user says something clearly relevant to such an agent's mission (a new idea, preference, constraint or fact), route a concise note to that agent so its NEXT run picks it up: call list_scheduled_agents to get the exact id, then note_for_scheduled_agent(agentId, note) — for several agents if it fits more than one. Never invent an agent id, only route when the relevance is clear (do not forward small talk), and briefly tell the user what you noted and for which agent. To answer 'what did agent X find / what is it waiting on', use get_scheduled_agent_briefing. These do not need approval.");
         }
 
         return instructions.ToString();
@@ -297,6 +314,101 @@ public sealed class AgentToolCatalog
                 + "Base every factual claim on what a snippet actually says and cite the url; if the snippets are too thin to answer, "
                 + "say so plainly and suggest what to check manually instead of guessing. Arguments: query (what to search), "
                 + "count (how many results, 1-20; use a small number unless you really need breadth). Read-only.",
+            serializerOptions: null);
+    }
+
+    private AIFunction CreateListScheduledAgentsTool()
+    {
+        async Task<string> ListScheduledAgentsAsync(CancellationToken cancellationToken)
+        {
+            var agents = await _scheduledAgentBridge!.ListAsync(cancellationToken);
+            return JsonSerializer.Serialize(
+                new
+                {
+                    count = agents.Count,
+                    agents = agents.Select(agent => new
+                    {
+                        id = agent.Id,
+                        name = agent.Name,
+                        mission = agent.Mission,
+                        status = agent.Status,
+                        nextRun = agent.NextRunUtc,
+                    }),
+                },
+                ToolJsonOptions);
+        }
+
+        return AIFunctionFactory.Create(
+            (Func<CancellationToken, Task<string>>)ListScheduledAgentsAsync,
+            name: "list_scheduled_agents",
+            description: "Lists the user's scheduled background agents (id, name, mission, status). Call this FIRST to see whether anything the user just said is relevant to a running agent's mission, and to get the exact agent id before routing a note. Read-only.",
+            serializerOptions: null);
+    }
+
+    private AIFunction CreateNoteForScheduledAgentTool()
+    {
+        async Task<string> NoteForScheduledAgentAsync(string agentId, string note, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(agentId) || string.IsNullOrWhiteSpace(note))
+            {
+                return JsonSerializer.Serialize(new { ok = false, reason = "agentId and note are both required." }, ToolJsonOptions);
+            }
+
+            var routed = await _scheduledAgentBridge!.RouteNoteAsync(agentId.Trim(), note.Trim(), cancellationToken);
+            _logger.LogInformation(
+                "Conversation agent routed a chat note to scheduled agent {AgentId}: success {Routed}.",
+                agentId,
+                routed);
+
+            return JsonSerializer.Serialize(
+                routed
+                    ? new { ok = true, reason = (string?)null }
+                    : new { ok = false, reason = (string?)"No scheduled agent with that id (call list_scheduled_agents first)." },
+                ToolJsonOptions);
+        }
+
+        return AIFunctionFactory.Create(
+            (Func<string, string, CancellationToken, Task<string>>)NoteForScheduledAgentAsync,
+            name: "note_for_scheduled_agent",
+            description: "Adds a short note to a scheduled agent's queue; it enters the context of that agent's NEXT scheduled run (it does NOT run the agent now). Use it when the user mentions something clearly relevant to an agent's mission (e.g. a new preference, constraint or idea). Arguments: agentId (from list_scheduled_agents — never invent it), note (a concise statement of the relevant fact/preference). You may call it for several agents if it fits more than one. After routing, briefly tell the user what you noted and for which agent. No approval needed.",
+            serializerOptions: null);
+    }
+
+    private AIFunction CreateScheduledAgentBriefingTool()
+    {
+        async Task<string> GetScheduledAgentBriefingAsync(string agentId, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(agentId))
+            {
+                return JsonSerializer.Serialize(new { available = false, reason = "agentId is required." }, ToolJsonOptions);
+            }
+
+            var briefing = await _scheduledAgentBridge!.GetBriefingAsync(agentId.Trim(), cancellationToken);
+            if (briefing is null)
+            {
+                return JsonSerializer.Serialize(new { available = false, reason = "No scheduled agent with that id." }, ToolJsonOptions);
+            }
+
+            return JsonSerializer.Serialize(
+                new
+                {
+                    available = true,
+                    id = briefing.Id,
+                    name = briefing.Name,
+                    hasRun = briefing.HasRun,
+                    lastSummary = briefing.LastSummary,
+                    openQuestions = briefing.OpenQuestions,
+                    focus = briefing.Focus,
+                    nextRun = briefing.NextRunUtc,
+                    lastRun = briefing.LastRunUtc,
+                },
+                ToolJsonOptions);
+        }
+
+        return AIFunctionFactory.Create(
+            (Func<string, CancellationToken, Task<string>>)GetScheduledAgentBriefingAsync,
+            name: "get_scheduled_agent_briefing",
+            description: "Returns a scheduled agent's latest state: last run summary, its open questions, current focus and next-run time. Use it when the user asks what an agent found or is waiting on. Report only what it returns; if hasRun is false, say the agent has not produced a briefing yet. Read-only.",
             serializerOptions: null);
     }
 

@@ -1,8 +1,10 @@
+using System.Net;
 using HaPersonalAgent.Agent;
 using HaPersonalAgent.Autonomous;
 using HaPersonalAgent.Configuration;
 using HaPersonalAgent.Search;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace HaPersonalAgent.Tests;
 
@@ -86,6 +88,42 @@ public class WebSearchTests
     }
 
     [Fact]
+    public async Task Brave_422_with_a_country_retries_once_without_the_country_filter()
+    {
+        // Регрессия из живого лога: q=Mestprom Minsk&country=BY -> 422 (BY не в списке стран Brave).
+        var handler = new SequenceHandler(
+            (HttpStatusCode.UnprocessableEntity, string.Empty),
+            (HttpStatusCode.OK, """{"web":{"results":[{"title":"t","url":"https://example.com","description":"d"}]}}"""));
+        var provider = new BraveWebSearchProvider(
+            new SingleClientFactory(new HttpClient(handler)),
+            Options.Create(new WebSearchOptions { ApiKey = "key", Country = "BY" }),
+            NullLogger<BraveWebSearchProvider>.Instance);
+
+        var response = await provider.SearchAsync("Mestprom Minsk", count: 5, CancellationToken.None);
+
+        Assert.True(response.IsAvailable);
+        Assert.Single(response.Results);
+        Assert.Equal(2, handler.Requests.Count);
+        Assert.Contains("country=BY", handler.Requests[0].Query, StringComparison.Ordinal);
+        Assert.DoesNotContain("country=", handler.Requests[1].Query, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Non_422_failure_is_not_retried()
+    {
+        var handler = new SequenceHandler((HttpStatusCode.Unauthorized, string.Empty));
+        var provider = new BraveWebSearchProvider(
+            new SingleClientFactory(new HttpClient(handler)),
+            Options.Create(new WebSearchOptions { ApiKey = "key", Country = "BY" }),
+            NullLogger<BraveWebSearchProvider>.Instance);
+
+        var response = await provider.SearchAsync("query", count: 5, CancellationToken.None);
+
+        Assert.False(response.IsAvailable);
+        Assert.Single(handler.Requests);
+    }
+
+    [Fact]
     public void Default_policy_allows_everything_and_research_policy_forbids_control_and_writes()
     {
         Assert.True(AgentToolPolicy.Default.AllowControlActions);
@@ -144,6 +182,38 @@ public class WebSearchTests
                 Microsoft.Extensions.Options.Options.Create(new MemoryMcpOptions()),
                 NullLogger<AutonomousAgentCapsuleWriter>.Instance),
             NullLogger<AutonomousAgentRunner>.Instance);
+
+    private sealed class SingleClientFactory : IHttpClientFactory
+    {
+        private readonly HttpClient _client;
+
+        public SingleClientFactory(HttpClient client) => _client = client;
+
+        public HttpClient CreateClient(string name) => _client;
+    }
+
+    /// <summary>Фейковый handler: отдаёт заранее заданную последовательность ответов и записывает URI запросов.</summary>
+    private sealed class SequenceHandler : HttpMessageHandler
+    {
+        private readonly Queue<(HttpStatusCode Status, string Body)> _responses;
+
+        public SequenceHandler(params (HttpStatusCode Status, string Body)[] responses) =>
+            _responses = new Queue<(HttpStatusCode, string)>(responses);
+
+        public List<Uri> Requests { get; } = new();
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Requests.Add(request.RequestUri!);
+            var (status, body) = _responses.Dequeue();
+            return Task.FromResult(new HttpResponseMessage(status)
+            {
+                Content = new StringContent(body),
+            });
+        }
+    }
 
     private sealed class CapturingAgentRuntime : IAgentRuntime
     {
@@ -255,6 +325,9 @@ public class WebSearchTests
             string consumedByRunId,
             DateTimeOffset consumedUtc,
             CancellationToken cancellationToken) => Task.CompletedTask;
+
+        public Task<bool> DeletePendingReplyAsync(string agentId, string entryId, CancellationToken cancellationToken) =>
+            Task.FromResult(false);
 
         public Task<AutonomousAgentContinuity?> GetContinuityAsync(string agentId, CancellationToken cancellationToken) =>
             Task.FromResult<AutonomousAgentContinuity?>(null);

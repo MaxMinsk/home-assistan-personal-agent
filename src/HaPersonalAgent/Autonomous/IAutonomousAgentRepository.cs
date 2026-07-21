@@ -62,6 +62,9 @@ public interface IAutonomousAgentRepository
         DateTimeOffset consumedUtc,
         CancellationToken cancellationToken);
 
+    /// <summary>Удаляет одну ещё не потреблённую запись inbox этого агента (пользователь убрал её до запуска). false — нет такой записи.</summary>
+    Task<bool> DeletePendingReplyAsync(string agentId, string entryId, CancellationToken cancellationToken);
+
     // --- Непрерывное состояние ---
 
     Task<AutonomousAgentContinuity?> GetContinuityAsync(string agentId, CancellationToken cancellationToken);

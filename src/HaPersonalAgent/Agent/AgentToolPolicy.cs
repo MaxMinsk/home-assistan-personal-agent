@@ -12,7 +12,8 @@ public sealed record AgentToolPolicy(
     bool AllowMemoryRead,
     bool AllowMemoryWrite,
     bool AllowWebSearch,
-    bool AllowHomeAssistantRead)
+    bool AllowHomeAssistantRead,
+    bool AllowScheduledAgentRouting)
 {
     /// <summary>Обычный интерактивный диалог: пользователь рядом и может подтвердить действие.</summary>
     public static AgentToolPolicy Default { get; } = new(
@@ -20,11 +21,13 @@ public sealed record AgentToolPolicy(
         AllowMemoryRead: true,
         AllowMemoryWrite: true,
         AllowWebSearch: true,
-        AllowHomeAssistantRead: true);
+        AllowHomeAssistantRead: true,
+        AllowScheduledAgentRouting: true);
 
     /// <summary>
     /// Фоновое исследование: никакого управления устройствами и никаких предложений записи через confirmation
-    /// (подтверждать некому). Остальные оси задаёт владелец агента.
+    /// (подтверждать некому). Роутинг контекста в плановых агентов — тоже нет: это capability интерактивного агента,
+    /// а фоновому агенту это открыло бы путь к петлям. Остальные оси задаёт владелец агента.
     /// </summary>
     public static AgentToolPolicy ReadOnlyResearch(
         bool allowWebSearch,
@@ -35,5 +38,6 @@ public sealed record AgentToolPolicy(
             AllowMemoryRead: allowMemoryRead,
             AllowMemoryWrite: false,
             AllowWebSearch: allowWebSearch,
-            AllowHomeAssistantRead: allowHomeAssistantRead);
+            AllowHomeAssistantRead: allowHomeAssistantRead,
+            AllowScheduledAgentRouting: false);
 }

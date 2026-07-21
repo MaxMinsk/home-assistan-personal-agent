@@ -66,10 +66,6 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
 
         patchKind = LlmRequestPatchKind.None;
         patchedJson = json;
-        if (!executionPlan.ShouldPatchChatCompletionRequest)
-        {
-            return false;
-        }
 
         JsonNode? rootNode;
         try
@@ -86,17 +82,23 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
             return false;
         }
 
-        var patched = TryApplyThinkingControl(root, executionPlan, out patchKind);
-        if (!patched
-            && TryApplyToolStepReasoningSafetyFallback(root, executionPlan))
+        var patched = false;
+
+        // Патчи thinking применяются только когда этого требует план исполнения (provider-default их не трогает).
+        if (executionPlan.ShouldPatchChatCompletionRequest)
         {
-            patched = true;
-            patchKind = LlmRequestPatchKind.AutoToolStepSafetyDisable;
+            patched = TryApplyThinkingControl(root, executionPlan, out patchKind);
+            if (!patched
+                && TryApplyToolStepReasoningSafetyFallback(root, executionPlan))
+            {
+                patched = true;
+                patchKind = LlmRequestPatchKind.AutoToolStepSafetyDisable;
+            }
         }
 
-        // Провайдерская особенность Moonshot: assistant-сообщение с tool_calls и content: ""
-        // отклоняется с "Invalid request: text content is empty". По спецификации OpenAI у такого
-        // сообщения content может быть null, поэтому нормализуем пустую строку в null.
+        // Провайдерская особенность Moonshot: assistant-сообщение с tool_calls и content: "" отклоняется с
+        // "Invalid request: text content is empty". Это корректность сериализации, НЕ зависящая от thinking-режима,
+        // поэтому нормализация выполняется ВСЕГДА — включая случаи, когда thinking-патчи выключены (provider-default).
         if (TryNormalizeEmptyToolCallContent(root))
         {
             patched = true;
@@ -146,9 +148,10 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
     }
 
     /// <summary>
-    /// Нормализует пустой content у assistant-сообщений, несущих tool_calls.
-    /// Такие сообщения легальны по спецификации OpenAI с content = null, но Moonshot отвергает
-    /// именно пустую СТРОКУ ("Invalid request: text content is empty"), что ломало любой tool-шаг.
+    /// Убирает пустой/null content у assistant-сообщений, несущих tool_calls.
+    /// При наличии tool_calls текстовый content по спецификации OpenAI необязателен, а Moonshot отвергает
+    /// и пустую строку, и null ("Invalid request: text content is empty"), ломая любой tool-шаг. Поэтому пустое
+    /// поле УДАЛЯЕТСЯ (а не выставляется в null) — это однозначно валидная форма без пустого текста.
     /// </summary>
     internal static bool TryNormalizeEmptyToolCallContent(JsonObject root)
     {
@@ -175,24 +178,77 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
                 continue;
             }
 
-            if (!IsEmptyContent(message["content"]))
+            // TryGetPropertyValue отличает отсутствующий ключ (трогать нечего) от присутствующего пустого/null.
+            if (message.TryGetPropertyValue("content", out var content) && IsEmptyContent(content))
             {
-                continue;
+                message.Remove("content");
+                changed = true;
             }
-
-            message["content"] = null;
-            changed = true;
         }
 
         return changed;
     }
 
+    /// <summary>
+    /// Что: privacy-safe описание состояния content каждого сообщения запроса (роль, наличие tool_calls, вид content).
+    /// Зачем: если провайдер всё ещё валит запрос по «text content is empty», лог точно укажет виновное сообщение вместо догадок.
+    /// Как: не логирует сам текст — только роль, флаг tool_calls и вид content (no-content/null/empty-string/empty-array/str[N]).
+    /// </summary>
+    internal static string DescribeMessageContent(JsonObject root)
+    {
+        if (root["messages"] is not JsonArray messages)
+        {
+            return "(no messages array)";
+        }
+
+        var parts = new List<string>(messages.Count);
+        foreach (var item in messages)
+        {
+            if (item is not JsonObject message)
+            {
+                parts.Add("?");
+                continue;
+            }
+
+            var role = message["role"]?.GetValue<string>() ?? "?";
+            var hasTools = message["tool_calls"] is JsonArray toolCalls && toolCalls.Count > 0;
+            parts.Add(hasTools ? $"{role}+tools:{DescribeContentState(message)}" : $"{role}:{DescribeContentState(message)}");
+        }
+
+        return string.Join(", ", parts);
+    }
+
+    private static string DescribeContentState(JsonObject message)
+    {
+        if (!message.TryGetPropertyValue("content", out var content))
+        {
+            return "no-content";
+        }
+
+        if (content is null)
+        {
+            return "null";
+        }
+
+        if (content is JsonArray array)
+        {
+            return array.Count == 0 ? "empty-array" : $"array[{array.Count}]";
+        }
+
+        if (content is JsonValue value && value.TryGetValue<string>(out var text))
+        {
+            return text.Length == 0 ? "empty-string" : $"str[{text.Length}]";
+        }
+
+        return "other";
+    }
+
     private static bool IsEmptyContent(JsonNode? contentNode)
     {
-        // null уже допустим — трогать нечего.
+        // Присутствующий, но пустой/null content: строка "", пустой массив частей или JSON null — всё убираем.
         if (contentNode is null)
         {
-            return false;
+            return true;
         }
 
         if (contentNode is JsonArray array)
@@ -314,6 +370,7 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         message.Request.Content.WriteTo(stream, cancellationToken);
         var json = Encoding.UTF8.GetString(stream.ToArray());
 
+        LogMessageContentDiagnostic(json);
         var patched = TryPatchRequestJson(json, _executionPlan, out var patchedJson, out var patchKind);
         _diagnostics?.RecordPolicyPatchDecision(patchKind);
 
@@ -338,6 +395,7 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
         await message.Request.Content.WriteToAsync(stream, cancellationToken);
         var json = Encoding.UTF8.GetString(stream.ToArray());
 
+        LogMessageContentDiagnostic(json);
         var patched = TryPatchRequestJson(json, _executionPlan, out var patchedJson, out var patchKind);
         _diagnostics?.RecordPolicyPatchDecision(patchKind);
 
@@ -389,6 +447,27 @@ public sealed class LlmChatCompletionRequestPolicy : PipelinePolicy
                 _logger.LogInformation(
                     "LLM request patch left request body unchanged for this call.");
                 break;
+        }
+    }
+
+    private void LogMessageContentDiagnostic(string json)
+    {
+        if (_logger is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (JsonNode.Parse(json) is JsonObject root)
+            {
+                _logger.LogInformation(
+                    "LLM request message content states: {ContentStates}",
+                    DescribeMessageContent(root));
+            }
+        }
+        catch (JsonException)
+        {
         }
     }
 

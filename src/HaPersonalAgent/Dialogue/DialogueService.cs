@@ -415,6 +415,22 @@ public sealed class DialogueService
             refreshedSummary);
     }
 
+    /// <summary>
+    /// Что: недавняя история диалога для восстановления в UI при загрузке.
+    /// Зачем: веб-чат стартует пустым, из-за чего после рестарта/апдейта казалось, что агент «забыл» — хотя история персистентна в SQLite.
+    /// Как: отдаёт то же окно сообщений, что используется для контекста рантайма, из store; порядок хронологический.
+    /// </summary>
+    public async Task<IReadOnlyList<AgentConversationMessage>> GetRecentMessagesAsync(
+        DialogueConversation conversation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(conversation);
+
+        var conversationKey = DialogueConversationKey.Create(conversation);
+        var maxMessages = GetMaxContextMessages();
+        return await _memoryStore.GetConversationMessagesAsync(conversationKey, maxMessages, cancellationToken);
+    }
+
     public async Task<DialogueContextSnapshot> GetContextSnapshotAsync(
         DialogueConversation conversation,
         CancellationToken cancellationToken)

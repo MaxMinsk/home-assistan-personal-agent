@@ -392,6 +392,13 @@ public class AutonomousAgentSchedulerTests
             return Task.CompletedTask;
         }
 
+        public Task<bool> DeletePendingReplyAsync(string agentId, string entryId, CancellationToken cancellationToken)
+        {
+            var removed = _inbox.RemoveAll(entry =>
+                entry.Id == entryId && entry.AgentId == agentId && entry.ConsumedUtc is null);
+            return Task.FromResult(removed > 0);
+        }
+
         public Task<AutonomousAgentContinuity?> GetContinuityAsync(string agentId, CancellationToken cancellationToken) =>
             Task.FromResult(_continuity.TryGetValue(agentId, out var continuity) ? continuity : null);
 

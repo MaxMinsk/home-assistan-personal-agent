@@ -24,6 +24,7 @@ public static class WebDialogueEndpoints
         endpoints.MapPost("/api/dialogue/turn", HandleTurnAsync);
         endpoints.MapPost("/api/dialogue/stream", HandleStreamAsync);
         endpoints.MapGet("/api/dialogue/context", HandleContextAsync);
+        endpoints.MapGet("/api/dialogue/history", HandleHistoryAsync);
         endpoints.MapGet("/api/dialogue/summary", HandleSummaryAsync);
         endpoints.MapPost("/api/dialogue/reset", HandleResetAsync);
 
@@ -129,6 +130,30 @@ public static class WebDialogueEndpoints
         var snapshot = await dialogue.GetContextSnapshotAsync(conversation, cancellationToken);
 
         return Results.Json(snapshot, JsonOptions);
+    }
+
+    private static async Task<IResult> HandleHistoryAsync(
+        string? conversationId,
+        string? participantId,
+        DialogueService dialogue,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(conversationId))
+        {
+            return Results.BadRequest(new { error = "conversationId is required." });
+        }
+
+        var conversation = WebDialogueTransport.CreateConversation(conversationId, participantId);
+        var messages = await dialogue.GetRecentMessagesAsync(conversation, cancellationToken);
+
+        var response = messages
+            .Select(message => new DialogueHistoryMessage(
+                message.Role == AgentConversationRole.User ? "user" : "assistant",
+                message.Text,
+                message.CreatedAtUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture)))
+            .ToList();
+
+        return Results.Json(response, JsonOptions);
     }
 
     private static async Task<IResult> HandleSummaryAsync(

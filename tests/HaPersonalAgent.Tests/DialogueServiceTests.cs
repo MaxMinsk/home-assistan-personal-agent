@@ -55,6 +55,40 @@ public class DialogueServiceTests
     }
 
     [Fact]
+    public async Task Recent_messages_are_restored_after_a_fresh_service_so_the_ui_can_rehydrate()
+    {
+        // Регрессия: после апдейта/перезагрузки веб-чат казался «забывшим», хотя история персистентна.
+        var databasePath = CreateTemporaryDatabasePath();
+
+        try
+        {
+            var conversation = DialogueConversation.Create("web", "session-1", "session-1");
+
+            var firstRepository = CreateRepository(databasePath);
+            await CreateService(firstRepository, new FakeAgentRuntime("привет обратно")).SendUserMessageAsync(
+                DialogueRequest.Create(conversation, "привет", "web-test"),
+                CancellationToken.None);
+
+            // Новый экземпляр сервиса поверх той же базы = как после рестарта контейнера.
+            var restored = await CreateService(CreateRepository(databasePath), new FakeAgentRuntime("unused"))
+                .GetRecentMessagesAsync(conversation, CancellationToken.None);
+
+            Assert.Equal(new[] { "привет", "привет обратно" }, restored.Select(message => message.Text));
+            Assert.Equal(AgentConversationRole.User, restored[0].Role);
+            Assert.Equal(AgentConversationRole.Assistant, restored[1].Role);
+
+            var emptyConversation = DialogueConversation.Create("web", "session-2", "session-2");
+            var noHistory = await CreateService(CreateRepository(databasePath), new FakeAgentRuntime("unused"))
+                .GetRecentMessagesAsync(emptyConversation, CancellationToken.None);
+            Assert.Empty(noHistory);
+        }
+        finally
+        {
+            DeleteTemporaryDatabaseDirectory(databasePath);
+        }
+    }
+
+    [Fact]
     public async Task Reset_clears_context_through_conversation_abstraction()
     {
         var databasePath = CreateTemporaryDatabasePath();

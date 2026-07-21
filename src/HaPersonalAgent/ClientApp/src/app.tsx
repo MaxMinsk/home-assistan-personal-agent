@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import {
   getContext,
   getHealth,
+  getHistory,
   getSummary,
   listAgents,
   pauseAllAgents,
@@ -84,6 +85,23 @@ export function App() {
   useEffect(() => {
     getHealth().then(setHealth).catch(() => setHealth(null));
   }, []);
+
+  // Восстанавливаем ленту чата из персистентной истории: после перезагрузки/апдейта разговор не должен выглядеть «забытым».
+  useEffect(() => {
+    getHistory(conversationId)
+      .then((history) => {
+        if (history.length > 0) {
+          setMessages(() =>
+            history.map((message) => ({
+              id: uid(),
+              role: message.role === 'user' ? 'user' : 'assistant',
+              text: message.text,
+            })),
+          );
+        }
+      })
+      .catch(() => undefined);
+  }, [conversationId]);
 
   const refreshAgents = useCallback(() => {
     listAgents()

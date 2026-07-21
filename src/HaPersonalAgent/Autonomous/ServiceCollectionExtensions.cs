@@ -18,6 +18,8 @@ public static class ServiceCollectionExtensions
             provider.GetRequiredService<SqliteAutonomousAgentRepository>());
         services.AddSingleton<AutonomousAgentService>();
         services.AddSingleton<AutonomousAgentCapsuleWriter>();
+        // Мост для conversation-агента (HPA-043/044): роутинг контекста из чата в плановых агентов.
+        services.AddSingleton<HaPersonalAgent.Agent.IScheduledAgentBridge, AutonomousScheduledAgentBridge>();
         services.AddSingleton<IAutonomousAgentRunner, AutonomousAgentRunner>();
         services.AddHostedService<AutonomousAgentScheduler>();
 

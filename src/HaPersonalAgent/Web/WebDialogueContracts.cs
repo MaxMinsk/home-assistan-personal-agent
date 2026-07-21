@@ -38,6 +38,16 @@ public sealed record DialogueResetRequest(
 public sealed record DialogueResetResponse(bool Ok);
 
 /// <summary>
+/// Что: одно сообщение истории диалога для восстановления ленты чата в Web UI.
+/// Зачем: чтобы после перезагрузки страницы (в т.ч. после апдейта add-on) чат показывал прошлый разговор, а не выглядел «забытым».
+/// Как: role = user|assistant, text и время создания; проекция AgentConversationMessage.
+/// </summary>
+public sealed record DialogueHistoryMessage(
+    string Role,
+    string Text,
+    string CreatedUtc);
+
+/// <summary>
 /// Что: persisted summary диалога для вкладки "Память" в Web UI.
 /// Зачем: UI показывает свёрнутую долговременную память чата (текст + версию), не раскрывая внутренние типы хранилища.
 /// Как: проекция ConversationSummaryMemory; при отсутствии summary present=false, остальные поля пустые.

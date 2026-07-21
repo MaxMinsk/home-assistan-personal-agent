@@ -61,6 +61,18 @@ export function getHealth(): Promise<HealthResponse> {
   return fetch('api/health', { headers: { Accept: 'application/json' } }).then(readJson<HealthResponse>);
 }
 
+export interface HistoryMessage {
+  role: string;
+  text: string;
+  createdUtc: string;
+}
+
+export function getHistory(conversationId: string): Promise<HistoryMessage[]> {
+  const query = new URLSearchParams({ conversationId });
+  return fetch(`api/dialogue/history?${query}`, { headers: { Accept: 'application/json' } })
+    .then(readJson<HistoryMessage[]>);
+}
+
 export function getContext(conversationId: string): Promise<ContextSnapshot> {
   const query = new URLSearchParams({ conversationId });
   return fetch(`api/dialogue/context?${query}`, { headers: { Accept: 'application/json' } })
@@ -147,6 +159,13 @@ export interface AgentRun {
   toolCallCount: number;
 }
 
+export interface AgentInboxEntry {
+  id: string;
+  source: string;
+  text: string;
+  receivedUtc: string;
+}
+
 export interface AgentUpsert {
   name: string;
   mission: string;
@@ -214,6 +233,18 @@ export function pauseAllAgents(): Promise<{ ok: boolean; paused: number }> {
 
 export function replyToAgent(agentId: string, text: string): Promise<{ ok: boolean }> {
   return jsonRequest<{ ok: boolean }>(`api/agents/${encodeURIComponent(agentId)}/reply`, 'POST', { text });
+}
+
+export function getAgentInbox(agentId: string): Promise<AgentInboxEntry[]> {
+  return fetch(`api/agents/${encodeURIComponent(agentId)}/inbox`, { headers: { Accept: 'application/json' } })
+    .then(readJson<AgentInboxEntry[]>);
+}
+
+export function deleteInboxEntry(agentId: string, entryId: string): Promise<{ ok: boolean }> {
+  return jsonRequest<{ ok: boolean }>(
+    `api/agents/${encodeURIComponent(agentId)}/inbox/${encodeURIComponent(entryId)}`,
+    'DELETE',
+  );
 }
 
 export interface StreamHandlers {

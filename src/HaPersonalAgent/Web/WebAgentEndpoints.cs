@@ -36,6 +36,8 @@ public static class WebAgentEndpoints
         endpoints.MapPost("/api/agents/{agentId}/status", HandleStatusAsync);
         endpoints.MapPost("/api/agents/{agentId}/run", HandleRunNowAsync);
         endpoints.MapGet("/api/agents/{agentId}/runs", HandleRunsAsync);
+        endpoints.MapGet("/api/agents/{agentId}/inbox", HandleInboxAsync);
+        endpoints.MapDelete("/api/agents/{agentId}/inbox/{entryId}", HandleDeleteInboxAsync);
         endpoints.MapPost("/api/agents/{agentId}/reply", HandleReplyAsync);
 
         return endpoints;
@@ -262,6 +264,42 @@ public static class WebAgentEndpoints
             .ToList();
 
         return Results.Json(responses, JsonOptions);
+    }
+
+    private static async Task<IResult> HandleInboxAsync(
+        string agentId,
+        AutonomousAgentService agents,
+        IAutonomousAgentRepository repository,
+        CancellationToken cancellationToken)
+    {
+        var definition = await agents.GetAsync(agentId, cancellationToken);
+        if (definition is null)
+        {
+            return Results.NotFound(new { error = "Agent not found." });
+        }
+
+        var pending = await repository.GetPendingRepliesAsync(agentId, cancellationToken);
+        var responses = pending
+            .Select(entry => new AgentInboxEntryResponse(
+                entry.Id,
+                entry.Source.ToString(),
+                entry.Text,
+                ToIso(entry.ReceivedUtc)!))
+            .ToList();
+
+        return Results.Json(responses, JsonOptions);
+    }
+
+    private static async Task<IResult> HandleDeleteInboxAsync(
+        string agentId,
+        string entryId,
+        AutonomousAgentService agents,
+        CancellationToken cancellationToken)
+    {
+        var deleted = await agents.DeleteInboxEntryAsync(agentId, entryId, cancellationToken);
+        return deleted
+            ? Results.Json(new { ok = true }, JsonOptions)
+            : Results.NotFound(new { error = "Queue entry not found." });
     }
 
     private static async Task<IResult> HandleReplyAsync(

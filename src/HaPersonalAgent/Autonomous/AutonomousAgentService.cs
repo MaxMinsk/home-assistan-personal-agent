@@ -170,6 +170,10 @@ public sealed class AutonomousAgentService
         CancellationToken cancellationToken) =>
         _repository.GetPendingRepliesAsync(agentId, cancellationToken);
 
+    /// <summary>Убирает одну ещё не потреблённую запись из очереди агента (пользователь отменил её до запуска, HPA-045).</summary>
+    public Task<bool> DeleteInboxEntryAsync(string agentId, string entryId, CancellationToken cancellationToken) =>
+        _repository.DeletePendingReplyAsync(agentId, entryId, cancellationToken);
+
     /// <summary>
     /// «Не актуально» из брифа: снимает открытые вопросы этой ветки, чтобы агент перестал их поднимать,
     /// и кладёт в очередь явную инструкцию двигаться дальше — она попадёт в контекст следующего запуска.
