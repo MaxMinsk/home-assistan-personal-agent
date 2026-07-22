@@ -28,6 +28,7 @@ public static class HomeAssistantAddOnOptionsMapper
             ["llm_replay_reasoning_to_wire"] = $"{LlmOptions.SectionName}:ReplayReasoningContentToWire",
             ["llm_router_mode"] = $"{LlmOptions.SectionName}:RouterMode",
             ["llm_router_small_model"] = $"{LlmOptions.SectionName}:RouterSmallModel",
+            ["llm_router_deep_model"] = $"{LlmOptions.SectionName}:RouterDeepModel",
             ["llm_router_max_input_chars_for_small"] = $"{LlmOptions.SectionName}:RouterMaxInputCharsForSmall",
             ["llm_router_max_history_messages_for_small"] = $"{LlmOptions.SectionName}:RouterMaxHistoryMessagesForSmall",
             ["llm_router_simple_max_input_chars"] = $"{LlmOptions.SectionName}:RouterSimpleMaxInputChars",

@@ -101,9 +101,21 @@ public sealed class AutonomousAgentScheduler : BackgroundService
 
         foreach (var definition in definitions)
         {
-            if (definition.Status != AutonomousAgentStatus.Active
-                || definition.ScheduleKind == AutonomousAgentScheduleKind.Manual)
+            if (definition.Status != AutonomousAgentStatus.Active)
             {
+                continue;
+            }
+
+            // Ручной агент сам не планируется, но кнопка «Выполнить» выставляет ему срок «сейчас» —
+            // такой явный запрос исполняем (после запуска ComputeNextRun(Manual)=null, повторов не будет).
+            // Без этого форс-запуск ручных агентов молча не срабатывал.
+            if (definition.ScheduleKind == AutonomousAgentScheduleKind.Manual)
+            {
+                if (definition.NextRunUtc is not null && definition.NextRunUtc.Value <= nowUtc)
+                {
+                    dueAgents.Add(definition);
+                }
+
                 continue;
             }
 

@@ -44,19 +44,41 @@ public class AutonomousAgentSchedulerTests
     }
 
     [Fact]
-    public async Task Paused_and_manual_agents_are_never_auto_run()
+    public async Task Paused_and_idle_manual_agents_are_never_auto_run()
     {
         var repository = new FakeAutonomousAgentRepository();
         var paused = await SeedAgentAsync(repository, AutonomousAgentScheduleKind.Daily, nextRun: Now.AddMinutes(-5));
         await repository.UpsertDefinitionAsync(
             paused with { Status = AutonomousAgentStatus.Paused },
             CancellationToken.None);
-        await SeedAgentAsync(repository, AutonomousAgentScheduleKind.Manual, nextRun: Now.AddMinutes(-5));
+        // Ручной агент без выставленного срока (кнопку «Выполнить» не нажимали) сам не просыпается.
+        await SeedAgentAsync(repository, AutonomousAgentScheduleKind.Manual, nextRun: null);
         var runner = new FakeAutonomousAgentRunner();
 
         await CreateScheduler(repository, runner).TickAsync(Now, CancellationToken.None);
 
         Assert.Empty(runner.RunAgentIds);
+    }
+
+    [Fact]
+    public async Task Manual_agent_with_a_due_next_run_is_force_run_once_then_resets_to_idle()
+    {
+        // Кнопка «Выполнить» выставляет ручному агенту срок «сейчас»; планировщик обязан его исполнить,
+        // а после — сбросить срок в null, чтобы повторов не было (регресс: раньше он молча пропускался).
+        var repository = new FakeAutonomousAgentRepository();
+        var agent = await SeedAgentAsync(repository, AutonomousAgentScheduleKind.Manual, nextRun: Now);
+        var runner = new FakeAutonomousAgentRunner();
+        var scheduler = CreateScheduler(repository, runner);
+
+        await scheduler.TickAsync(Now, CancellationToken.None);
+        Assert.Equal(new[] { agent.Id }, runner.RunAgentIds);
+
+        var afterRun = await repository.GetDefinitionAsync(agent.Id, CancellationToken.None);
+        Assert.Null(afterRun!.NextRunUtc);
+
+        // Следующий тик уже не должен запускать его снова.
+        await scheduler.TickAsync(Now.AddSeconds(30), CancellationToken.None);
+        Assert.Single(runner.RunAgentIds);
     }
 
     [Fact]

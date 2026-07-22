@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.15.1
+
+- **A "Выполнить" button on every background agent in the roster.** You can now force-run any scheduled agent straight from the left list (it shows ⏳ while a run is in flight and ✓ right after triggering) — no need to open its Обзор tab. The run starts on the scheduler's next tick (within ~30s). Also fixes a bug where forcing a run did nothing for agents whose schedule is "вручную"; a manual agent now runs once when you press it and then goes back to idle. (HPA-052.)
+- **Smarter, cheaper model routing — Kimi K3 only where it pays off.** Deep/complex requests now go to a dedicated, more capable model (a new `llm_router_deep_model` option, defaulting to `kimi-k3`), while everyday and simple requests stay on the cheaper `kimi-k2.6` — so you get the flagship's reasoning only when you actually ask for depth, not on "turn on the light". Simple short questions already ran on the small model with reasoning off; that small model was upgraded from `moonshot-v1-8k` to `kimi-k2.6`. Leave `llm_router_deep_model` empty to reuse your main model everywhere. Note: `kimi-k3` is a premium model (roughly 3–4× the price of `kimi-k2.6`) with always-on thinking; if you use deep reasoning together with tools, check that it behaves on your key, and clear the option to fall back. (HPA-053.)
+
+
 ## 0.15.0
 
 - **Background agents can now propose actions for you to approve.** A new per-agent switch, "Может предлагать действия" (off by default), lets a background run *propose* controlling Home Assistant or writing something durable to long-term memory. Nothing runs on its own — the proposal arrives with **Одобрить / Отклонить** buttons in Telegram and in a new **«Действия»** tab in the panel, and the action executes only after you approve. This keeps the core promise that an unattended agent never acts without your consent, while letting it be genuinely useful. (HPA-035.)

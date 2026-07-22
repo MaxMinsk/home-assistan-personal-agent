@@ -22,6 +22,7 @@ public sealed record LlmRoutingDecision(
 {
     public const string ModelTargetSmallContextFast = "small_context_fast";
     public const string ModelTargetDefault = "default_model";
+    public const string ModelTargetDeep = "deep_model";
 
     public const string ReasoningTargetDisabled = "disabled";
     public const string ReasoningTargetProviderDefault = "provider-default";

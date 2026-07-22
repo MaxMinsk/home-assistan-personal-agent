@@ -43,7 +43,10 @@ configuration:
     description: off disables adaptive routing; shadow logs routing decisions only; enforced applies model+reasoning routing per request.
   llm_router_small_model:
     name: LLM router small model
-    description: Fast/cheap model used by router for short operational requests in small-context budget.
+    description: Fast/cheap model used by router for short operational requests (thinking off). Defaults to kimi-k2.6.
+  llm_router_deep_model:
+    name: LLM router deep model
+    description: Model used only for deep/complex requests, so an expensive reasoning flagship (e.g. kimi-k3) runs only there while the small/default model stays cheaper. Leave empty to reuse the main model.
   llm_router_max_input_chars_for_small:
     name: LLM router input chars limit
     description: Maximum estimated input characters allowed for routing to the small model.

@@ -23,7 +23,8 @@ public class ConfigurationTests
         Assert.Equal("kimi-k2.6", llmOptions.Model);
         Assert.Equal(LlmThinkingModes.Auto, llmOptions.ThinkingMode);
         Assert.Equal(LlmRouterModes.Enforced, llmOptions.RouterMode);
-        Assert.Equal("moonshot-v1-8k", llmOptions.RouterSmallModel);
+        Assert.Equal("kimi-k2.6", llmOptions.RouterSmallModel);
+        Assert.Equal("kimi-k3", llmOptions.RouterDeepModel);
         Assert.Equal(1800, llmOptions.RouterMaxInputCharsForSmall);
         Assert.Equal(10, llmOptions.RouterMaxHistoryMessagesForSmall);
         Assert.Equal(6000, llmOptions.RouterSimpleMaxInputChars);
@@ -201,7 +202,7 @@ public class ConfigurationTests
         Assert.True(status.LlmApiKeyConfigured);
         Assert.Equal(LlmThinkingModes.Auto, status.LlmThinkingMode);
         Assert.Equal(LlmRouterModes.Enforced, status.LlmRouterMode);
-        Assert.Equal("moonshot-v1-8k", status.LlmRouterSmallModel);
+        Assert.Equal("kimi-k2.6", status.LlmRouterSmallModel);
         Assert.Equal(1800, status.LlmRouterMaxInputCharsForSmall);
         Assert.Equal(10, status.LlmRouterMaxHistoryMessagesForSmall);
         Assert.Equal(6000, status.LlmRouterSimpleMaxInputChars);

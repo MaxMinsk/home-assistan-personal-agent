@@ -29,7 +29,14 @@ public sealed class LlmOptions
 
     public string RouterMode { get; set; } = LlmRouterModes.Enforced;
 
-    public string RouterSmallModel { get; set; } = "moonshot-v1-8k";
+    /// <summary>Модель для простых/дешёвых запросов (thinking off). По умолчанию — недорогая k2.6.</summary>
+    public string RouterSmallModel { get; set; } = "kimi-k2.6";
+
+    /// <summary>
+    /// Модель для глубоких/сложных задач (deep-намерение). Позволяет ставить дорогой reasoning-флагман (напр. kimi-k3)
+    /// ТОЛЬКО на deep, оставляя основной/маленькой моделью что-то дешевле. Пусто => используется основная Model.
+    /// </summary>
+    public string RouterDeepModel { get; set; } = "kimi-k3";
 
     public int RouterMaxInputCharsForSmall { get; set; } = 1_800;
 

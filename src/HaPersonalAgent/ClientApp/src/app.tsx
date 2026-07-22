@@ -7,6 +7,7 @@ import {
   listAgents,
   pauseAllAgents,
   resetContext,
+  runAgentNow,
   streamTurn,
   type AgentSummary,
   type ContextSnapshot,
@@ -239,6 +240,67 @@ export function App() {
   );
 }
 
+function AgentRosterRow(props: {
+  agent: AgentSummary;
+  active: boolean;
+  onSelect: () => void;
+  onRan: () => void;
+}) {
+  const { agent, active, onSelect, onRan } = props;
+  const [running, setRunning] = useState(false);
+  const [done, setDone] = useState(false);
+  // Пока агент уже выполняется или на паузе — принудительный запуск не имеет смысла.
+  const canRun = agent.status !== 'Paused' && !agent.hasRunningRun && !running;
+
+  const run = async (event: Event) => {
+    // Клик по кнопке не должен ещё и выбирать агента в списке.
+    event.stopPropagation();
+    if (!canRun) {
+      return;
+    }
+    setRunning(true);
+    setDone(false);
+    try {
+      await runAgentNow(agent.id);
+      setDone(true);
+      onRan();
+      setTimeout(() => setDone(false), 2500);
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div class={active ? 'agent-row is-active' : 'agent-row'}>
+      <button class={active ? 'agent is-active' : 'agent'} type="button" onClick={onSelect}>
+        <StatusDot kind={agentDot(agent)} />
+        <span class="agent__body">
+          <span class="agent__name">{agent.name}</span>
+          <span class="agent__meta">
+            {agent.status === 'Paused' ? 'пауза' : formatDateTime(agent.nextRunUtc)}
+            {agent.openQuestionCount > 0 ? ` · ${agent.openQuestionCount} ?` : ''}
+          </span>
+        </span>
+      </button>
+      <button
+        class="agent-run"
+        type="button"
+        title={
+          agent.status === 'Paused'
+            ? 'Агент на паузе'
+            : agent.hasRunningRun
+              ? 'Уже выполняется'
+              : 'Выполнить сейчас'
+        }
+        disabled={!canRun}
+        onClick={run}
+      >
+        {done ? '✓' : running || agent.hasRunningRun ? '⏳' : '▶'}
+      </button>
+    </div>
+  );
+}
+
 function agentDot(agent: AgentSummary | undefined): DotKind {
   if (!agent) {
     return 'idle';
@@ -331,21 +393,13 @@ function Sidebar(props: {
           </div>
         ) : (
           props.agents.map((agent) => (
-            <button
+            <AgentRosterRow
               key={agent.id}
-              class={selection.kind === 'agent' && selection.id === agent.id ? 'agent is-active' : 'agent'}
-              type="button"
-              onClick={() => props.onSelect({ kind: 'agent', id: agent.id })}
-            >
-              <StatusDot kind={agentDot(agent)} />
-              <span class="agent__body">
-                <span class="agent__name">{agent.name}</span>
-                <span class="agent__meta">
-                  {agent.status === 'Paused' ? 'пауза' : formatDateTime(agent.nextRunUtc)}
-                  {agent.openQuestionCount > 0 ? ` · ${agent.openQuestionCount} ?` : ''}
-                </span>
-              </span>
-            </button>
+              agent={agent}
+              active={selection.kind === 'agent' && selection.id === agent.id}
+              onSelect={() => props.onSelect({ kind: 'agent', id: agent.id })}
+              onRan={props.onAgentsChanged}
+            />
           ))
         )}
         <button

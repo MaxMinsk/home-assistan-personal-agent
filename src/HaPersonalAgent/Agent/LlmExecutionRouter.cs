@@ -88,6 +88,8 @@ public sealed class LlmExecutionRouter
         var routerMode = LlmRouterModes.Normalize(options.RouterMode);
         var normalizedDefaultModel = NormalizeModel(options.Model, fallback: "unknown-model");
         var normalizedSmallModel = NormalizeModel(options.RouterSmallModel, normalizedDefaultModel);
+        // HPA-053: отдельная модель для deep-намерения (дорогой reasoning-флагман только там); пусто => основная модель.
+        var normalizedDeepModel = NormalizeModel(options.RouterDeepModel, normalizedDefaultModel);
         var normalizedMessage = userMessage.Trim();
         var simpleMaxChars = Math.Clamp(options.RouterSimpleMaxInputChars, 400, 24_000);
         var simpleMaxHistory = Math.Clamp(options.RouterSimpleMaxHistoryMessages, 2, 64);
@@ -108,6 +110,7 @@ public sealed class LlmExecutionRouter
         var candidateDecision = SelectCandidateDecision(
             normalizedDefaultModel,
             normalizedSmallModel,
+            normalizedDeepModel,
             intentClass,
             isSimplePromptShape,
             fitsSimplePackedContext,
@@ -147,6 +150,7 @@ public sealed class LlmExecutionRouter
     private static LlmRoutingDecision SelectCandidateDecision(
         string defaultModel,
         string smallModel,
+        string deepModel,
         string intentClass,
         bool isSimplePromptShape,
         bool fitsSimplePackedContext,
@@ -156,11 +160,15 @@ public sealed class LlmExecutionRouter
     {
         if (string.Equals(intentClass, LlmRoutingDecision.IntentClassDeepReasoning, StringComparison.Ordinal))
         {
+            // HPA-053: deep-намерение уходит на выделенную deep-модель (напр. kimi-k3), если она задана.
+            var deepMarker = string.Equals(deepModel, defaultModel, StringComparison.Ordinal)
+                ? LlmRoutingDecision.ModelTargetDefault
+                : LlmRoutingDecision.ModelTargetDeep;
             return new LlmRoutingDecision(
                 RouterMode: LlmRouterModes.Off,
                 IsApplied: false,
-                ModelTarget: LlmRoutingDecision.ModelTargetDefault,
-                SelectedModel: defaultModel,
+                ModelTarget: deepMarker,
+                SelectedModel: deepModel,
                 ReasoningTarget: LlmRoutingDecision.ReasoningTargetDeep,
                 ThinkingModeOverride: LlmThinkingModes.Enabled,
                 DecisionBucket: LlmRoutingDecision.DecisionBucketDefaultDeep,

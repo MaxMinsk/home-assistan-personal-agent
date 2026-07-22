@@ -387,6 +387,50 @@ public class AgentRuntimeTests
     }
 
     [Fact]
+    public void Router_uses_the_dedicated_deep_model_for_deep_intent()
+    {
+        // HPA-053: дорогой reasoning-флагман (kimi-k3) едет ТОЛЬКО на deep, не на основную/маленькую.
+        var router = new LlmExecutionRouter();
+        var decision = router.Decide(
+            new LlmOptions
+            {
+                Model = "kimi-k2.6",
+                RouterMode = LlmRouterModes.Enforced,
+                RouterSmallModel = "kimi-k2.6",
+                RouterDeepModel = "kimi-k3",
+            },
+            AgentContext.Create(),
+            userMessage: "разбери пошагово всю архитектуру и обоснуй каждый шаг",
+            profile: LlmExecutionProfile.DeepReasoning);
+
+        Assert.True(decision.IsApplied);
+        Assert.Equal(LlmRoutingDecision.IntentClassDeepReasoning, decision.IntentClass);
+        Assert.Equal("kimi-k3", decision.SelectedModel);
+        Assert.Equal(LlmRoutingDecision.ModelTargetDeep, decision.ModelTarget);
+        Assert.Equal(LlmThinkingModes.Enabled, decision.ThinkingModeOverride);
+    }
+
+    [Fact]
+    public void Router_falls_back_to_the_main_model_for_deep_when_no_deep_model_is_configured()
+    {
+        var router = new LlmExecutionRouter();
+        var decision = router.Decide(
+            new LlmOptions
+            {
+                Model = "kimi-k2.6",
+                RouterMode = LlmRouterModes.Enforced,
+                RouterDeepModel = "",
+            },
+            AgentContext.Create(),
+            userMessage: "step-by-step deep reasoning, please justify every step",
+            profile: LlmExecutionProfile.DeepReasoning);
+
+        Assert.Equal(LlmRoutingDecision.IntentClassDeepReasoning, decision.IntentClass);
+        Assert.Equal("kimi-k2.6", decision.SelectedModel);
+        Assert.Equal(LlmRoutingDecision.ModelTargetDefault, decision.ModelTarget);
+    }
+
+    [Fact]
     public void Router_keeps_default_model_for_tool_heavy_prompt_even_in_enforced_mode()
     {
         var router = new LlmExecutionRouter();
@@ -519,6 +563,9 @@ public class AgentRuntimeTests
                 Model = "kimi-k2.5",
                 RouterMode = LlmRouterModes.Enforced,
                 RouterDeepKeywords = "глубоко,подумай глубже",
+                // Этот тест про срабатывание deep по ключевому слову, не про отдельную deep-модель:
+                // приравниваем её к основной, чтобы проверять именно маршрут.
+                RouterDeepModel = "kimi-k2.5",
             },
             AgentContext.Create(),
             userMessage: "подумай глубже и распиши план по шагам",
